@@ -1,11 +1,14 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
 struct BookItem {
   std::string name;
   std::string path;
+  std::string real_path;
+  std::filesystem::path native_fs_path;
   bool is_dir = false;
 };
 

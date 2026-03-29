@@ -15,7 +15,7 @@ enum class BootPhase { CountBooks, ScanBooks, GenerateCovers, Finalize, Done };
 struct BootRuntimeState {
   float timer = 0.0f;
   BootPhase phase = BootPhase::CountBooks;
-  std::vector<std::string> supported_paths;
+  std::vector<BookItem> scanned_books;
   size_t scan_index = 0;
   std::vector<std::string> cover_generate_queue;
   size_t cover_generate_index = 0;
@@ -33,9 +33,9 @@ struct BootRuntimeTickDeps {
   size_t scan_batch_entries = 0;
   size_t cover_generate_batch_entries = 0;
   std::function<std::string(const std::string &)> get_lower_ext;
-  std::function<bool()> pdf_backend_available;
+  std::function<bool(const std::string &)> doc_cover_backend_available;
   std::function<bool(const BookItem &)> has_manual_cover_exact_or_fuzzy;
-  std::function<bool(const std::string &)> has_cached_pdf_cover_on_disk;
+  std::function<bool(const std::string &)> has_cached_doc_cover_on_disk;
   std::function<SDL_Texture *(const std::string &)> create_doc_first_page_cover_texture;
   std::function<void(SDL_Texture *)> destroy_generated_cover_texture;
   std::function<void(size_t, size_t)> on_finish;

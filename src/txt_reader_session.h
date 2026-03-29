@@ -17,10 +17,10 @@ struct TxtReaderSessionDeps {
   std::function<int()> reader_font_height;
   std::function<SDL_Rect()> get_text_viewport_bounds;
   std::function<std::string(const std::string &, const SDL_Rect &, int, uintmax_t, long long)> make_layout_cache_key;
-  std::function<bool(const std::string &, TxtLayoutCacheEntry &)> load_layout_cache_from_disk;
-  std::function<void(const std::string &, const TxtLayoutCacheEntry &)> save_layout_cache_to_disk;
-  std::function<bool(const std::string &, TxtResumeCacheEntry &)> load_resume_cache_from_disk;
-  std::function<void(const std::string &, const TxtReaderState &)> save_resume_cache_to_disk;
+  std::function<bool(const std::string &, const std::string &, TxtLayoutCacheEntry &)> load_layout_cache_from_disk;
+  std::function<void(const std::string &, const std::string &, const TxtLayoutCacheEntry &)> save_layout_cache_to_disk;
+  std::function<bool(const std::string &, const std::string &, TxtResumeCacheEntry &)> load_resume_cache_from_disk;
+  std::function<void(const std::string &, const std::string &, const TxtReaderState &)> save_resume_cache_to_disk;
   std::function<void()> prune_layout_cache;
   std::function<bool(const std::string &, std::string &)> decode_text_bytes_to_utf8;
   std::function<bool(TxtReaderState &, const std::string &)> append_wrapped_text_line;

@@ -1,4 +1,4 @@
-#include <SDL.h>
+﻿#include <SDL.h>
 #ifdef HAVE_SDL2_IMAGE
 #include <SDL_image.h>
 #endif
@@ -187,6 +187,7 @@ constexpr uint32_t kIdleFlushOnlyWaitMs = 250;
 constexpr size_t kBootCountBatchEntries = 96;
 constexpr size_t kBootScanBatchEntries = 48;
 constexpr size_t kBootCoverGenerateBatchEntries = 1;
+constexpr uint32_t kTransientMessageDurationMs = 1800;
 constexpr uint32_t kReaderFastFlipThresholdMs = 200;
 constexpr uint32_t kReaderPageFlipDebounceMs = 150;
 constexpr int kTxtLineSpacing = 8;
@@ -697,22 +698,31 @@ int main(int, char **) {
     std::cout << "[native_h700] ui root: " << ui_assets_load_result.ui_root_hit.string() << "\n";
   }
 
-  const std::vector<std::string> books_roots = storage_paths::DetectBooksRoots();
-  const std::vector<std::string> cover_roots = storage_paths::DetectCoverRoots();
-  const std::vector<std::string> rocreader_roots = storage_paths::DetectRocreaderRoots();
+  std::vector<std::string> books_roots = storage_paths::DetectBooksRoots();
+  std::vector<std::string> cover_roots = storage_paths::DetectCoverRoots();
   std::filesystem::path txt_layout_cache_dir =
-      !rocreader_roots.empty() ? (std::filesystem::path(rocreader_roots.front()) / "cache" / "txt_layouts")
-                               : (exe_path / ".." / "cache" / "txt_layouts");
+      std::filesystem::path("/mnt/mmc/cache/txt_layouts");
+  std::filesystem::path removable_txt_layout_cache_dir =
+      std::filesystem::path("/mnt/sdcard/cache/txt_layouts");
   std::filesystem::path cover_thumb_cache_dir =
-      !rocreader_roots.empty() ? (std::filesystem::path(rocreader_roots.front()) / "cache" / "cover_thumbs")
-                               : (exe_path / ".." / "cache" / "cover_thumbs");
+      std::filesystem::path("/mnt/mmc/cache/cover_thumbs");
+  std::filesystem::path removable_cover_thumb_cache_dir =
+      std::filesystem::path("/mnt/sdcard/cache/cover_thumbs");
   {
     std::error_code ec;
     std::filesystem::create_directories(txt_layout_cache_dir, ec);
   }
   {
     std::error_code ec;
+    std::filesystem::create_directories(removable_txt_layout_cache_dir, ec);
+  }
+  {
+    std::error_code ec;
     std::filesystem::create_directories(cover_thumb_cache_dir, ec);
+  }
+  {
+    std::error_code ec;
+    std::filesystem::create_directories(removable_cover_thumb_cache_dir, ec);
   }
   std::cout << "[native_h700] books roots:";
   for (const auto &r : books_roots) std::cout << " " << r;
@@ -720,6 +730,14 @@ int main(int, char **) {
   std::cout << "[native_h700] cover roots:";
   for (const auto &r : cover_roots) std::cout << " " << r;
   std::cout << "\n";
+  std::cout << "[native_h700] cover thumb cache dir: "
+            << cover_thumb_cache_dir.lexically_normal().string() << "\n";
+  std::cout << "[native_h700] removable cover thumb cache dir: "
+            << removable_cover_thumb_cache_dir.lexically_normal().string() << "\n";
+  std::cout << "[native_h700] txt layout cache dir: "
+            << txt_layout_cache_dir.lexically_normal().string() << "\n";
+  std::cout << "[native_h700] removable txt layout cache dir: "
+            << removable_txt_layout_cache_dir.lexically_normal().string() << "\n";
 
   const std::filesystem::path keymap_path = resolve_runtime_file("native_keymap.ini");
 #if defined(__arm__) || defined(__aarch64__)
@@ -849,10 +867,34 @@ int main(int, char **) {
   auto current_category = [&]() -> ShelfCategory {
     return ClampShelfCategory(nav_selected_index);
   };
+  auto file_exists_fs = [&](const std::filesystem::path &path) -> bool {
+    std::error_code ec;
+    return !path.empty() && std::filesystem::exists(path, ec) && !ec;
+  };
+  auto file_exists = [&](const std::string &path) -> bool {
+    return !path.empty() && file_exists_fs(std::filesystem::path(path));
+  };
+  auto item_real_path = [&](const BookItem &item) -> const std::string & {
+    return item.real_path.empty() ? item.path : item.real_path;
+  };
+  auto item_fs_path = [&](const BookItem &item) -> std::filesystem::path {
+    if (!item.native_fs_path.empty()) return item.native_fs_path;
+    const std::string &real_path = item_real_path(item);
+    return real_path.empty() ? std::filesystem::path(item.path) : std::filesystem::path(real_path);
+  };
+  auto get_compatible_progress = [&](const BookItem &item) -> ReaderProgress {
+    const std::string &real_path = item_real_path(item);
+    if (progress.Has(real_path)) return progress.Get(real_path);
+    if (!item.path.empty() && item.path != real_path && progress.Has(item.path)) {
+      return progress.Get(item.path);
+    }
+    return ReaderProgress{};
+  };
   auto make_shelf_runtime_deps = [&]() {
     return ShelfRuntimeDeps{
         NormalizePathKey,
         GetLowerExt,
+        [&]() { return boot_runtime.scanned_books; },
         [&](const std::string &path) { return favorites_store.Contains(path); },
         [&](const std::string &path) { return history_store.Contains(path); },
         [&]() { return favorites_store.OrderedPaths(); },
@@ -864,6 +906,13 @@ int main(int, char **) {
 
   auto rebuild_shelf_items = [&]() {
     RebuildShelfItems(shelf_runtime, current_category(), current_folder, books_roots, make_shelf_runtime_deps());
+  };
+  std::string transient_message;
+  uint32_t transient_message_until = 0;
+  auto show_transient_message = [&](const std::string &message,
+                                    uint32_t duration_ms = kTransientMessageDurationMs) {
+    transient_message = message;
+    transient_message_until = SDL_GetTicks() + duration_ms;
   };
 
   auto prune_cover_cache = [&]() {
@@ -896,7 +945,6 @@ int main(int, char **) {
     cover_textures.clear();
     ++shelf_content_version;
   };
-
   auto clear_directory_files = [&](const std::filesystem::path &dir_path) {
     std::error_code ec;
     if (!std::filesystem::exists(dir_path, ec) || ec) return;
@@ -918,6 +966,7 @@ int main(int, char **) {
         Layout().cover_h,
         kCoverAspect,
         cover_thumb_cache_dir,
+        removable_cover_thumb_cache_dir,
         cover_roots,
         ui_assets.book_cover_txt,
         ui_assets.book_cover_pdf,
@@ -936,34 +985,51 @@ int main(int, char **) {
     return HasManualCoverExactOrFuzzy(item, deps);
   };
 
-  auto has_cached_pdf_cover_on_disk = [&](const std::string &doc_path) -> bool {
+  auto has_cached_doc_cover_on_disk = [&](const std::string &doc_path) -> bool {
     CoverServiceDeps deps = make_cover_service_deps();
-    return HasCachedPdfCoverOnDisk(doc_path, deps);
+    return HasCachedDocCoverOnDisk(doc_path, deps);
   };
 
   auto create_doc_first_page_cover_texture = [&](const std::string &doc_path) -> SDL_Texture * {
     CoverServiceDeps deps = make_cover_service_deps();
-    return CreatePdfFirstPageCoverTexture(doc_path, deps);
+    const std::string ext = GetLowerExt(doc_path);
+    SDL_Texture *texture = nullptr;
+    if (ext == ".pdf") texture = CreatePdfFirstPageCoverTexture(doc_path, deps);
+    else if (ext == ".epub") texture = CreateEpubFirstImageCoverTextureLocal(doc_path, deps);
+    if (texture) return texture;
+    return nullptr;
   };
 
   auto get_cover_texture = [&](const BookItem &item) -> SDL_Texture * {
-    auto it = cover_textures.find(item.path);
+    const std::string &real_path = item_real_path(item);
+    auto it = cover_textures.find(real_path);
     if (it != cover_textures.end()) {
       it->second.last_use = SDL_GetTicks();
       return it->second.texture;
     }
 
     CoverServiceDeps deps = make_cover_service_deps();
-    SDL_Texture *tex = ResolveBookCoverTexture(item, current_category(), deps);
+    BookItem resolved_item = item;
+    resolved_item.path = real_path;
+    resolved_item.real_path = real_path;
+    resolved_item.native_fs_path = item_fs_path(item);
+    SDL_Texture *tex = ResolveBookCoverTexture(resolved_item, current_category(), deps);
 
     const bool shared_ui_cover = (tex == ui_assets.book_cover_txt ||
                                   tex == ui_assets.book_cover_pdf);
+    const std::string ext = item.is_dir ? std::string{} : GetLowerExt(real_path);
+    const bool retryable_fallback =
+        shared_ui_cover &&
+        (item.is_dir || ext == ".pdf" || ext == ".epub");
+    if (retryable_fallback) {
+      return tex;
+    }
     const bool owned = (tex != nullptr && !shared_ui_cover);
     int tw = 0;
     int th = 0;
     if (tex) get_texture_size(tex, tw, th);
     const size_t tex_bytes = (owned && tw > 0 && th > 0) ? (static_cast<size_t>(tw) * static_cast<size_t>(th) * 4u) : 0u;
-    cover_textures[item.path] = CoverCacheEntry{tex, tw, th, tex_bytes, SDL_GetTicks(), owned};
+    cover_textures[real_path] = CoverCacheEntry{tex, tw, th, tex_bytes, SDL_GetTicks(), owned};
     prune_cover_cache();
     return tex;
   };
@@ -974,6 +1040,7 @@ int main(int, char **) {
   TxtTextServiceState txt_text_service{
       {},
       txt_layout_cache_dir,
+      removable_txt_layout_cache_dir,
       kTxtLayoutCacheMaxEntries,
       kTxtMaxWrappedLines,
   };
@@ -1035,12 +1102,14 @@ int main(int, char **) {
   auto clear_runtime_cache_files = [&]() {
     clear_cover_cache();
     clear_directory_files(cover_thumb_cache_dir);
+    clear_directory_files(removable_cover_thumb_cache_dir);
 #ifdef HAVE_SDL2_TTF
     ClearTxtLayoutCache(txt_text_service);
     clear_text_cache();
 #endif
     clear_directory_files(txt_layout_cache_dir);
-    std::cout << "[native_h700] runtime caches cleared: cover thumbs + txt layouts/resume\n";
+    clear_directory_files(removable_txt_layout_cache_dir);
+    std::cout << "[native_h700] runtime caches cleared: both cards cover thumbs + txt layouts/resume\n";
   };
 
   auto collect_scanned_txt_files = [&]() {
@@ -1157,7 +1226,7 @@ int main(int, char **) {
   };
 
 #ifdef HAVE_SDL2_TTF
-  const std::string kTxtParagraphIndent = u8"銆€銆€";
+  const std::string kTxtParagraphIndent = u8"閵嗏偓閵嗏偓";
   const std::string kTxtParagraphIndentAscii = "  ";
 
 #endif
@@ -1189,17 +1258,17 @@ int main(int, char **) {
         [&](const std::string &path, const SDL_Rect &bounds, int line_h, uintmax_t file_size, long long file_mtime) {
           return MakeTxtLayoutCacheKey(path, bounds, line_h, file_size, file_mtime, NormalizePathKey);
         },
-        [&](const std::string &cache_key, TxtLayoutCacheEntry &entry) {
-          return LoadTxtLayoutCacheFromDisk(txt_text_service, cache_key, entry);
+        [&](const std::string &cache_key, const std::string &book_path, TxtLayoutCacheEntry &entry) {
+          return LoadTxtLayoutCacheFromDisk(txt_text_service, cache_key, book_path, entry);
         },
-        [&](const std::string &cache_key, const TxtLayoutCacheEntry &entry) {
-          SaveTxtLayoutCacheToDisk(txt_text_service, cache_key, entry);
+        [&](const std::string &cache_key, const std::string &book_path, const TxtLayoutCacheEntry &entry) {
+          SaveTxtLayoutCacheToDisk(txt_text_service, cache_key, book_path, entry);
         },
-        [&](const std::string &cache_key, TxtResumeCacheEntry &entry) {
-          return LoadTxtResumeCacheFromDisk(txt_text_service, cache_key, entry);
+        [&](const std::string &cache_key, const std::string &book_path, TxtResumeCacheEntry &entry) {
+          return LoadTxtResumeCacheFromDisk(txt_text_service, cache_key, book_path, entry);
         },
-        [&](const std::string &cache_key, const TxtReaderState &state) {
-          SaveTxtResumeCacheToDisk(txt_text_service, cache_key, state);
+        [&](const std::string &cache_key, const std::string &book_path, const TxtReaderState &state) {
+          SaveTxtResumeCacheToDisk(txt_text_service, cache_key, book_path, state);
         },
         [&]() { PruneTxtLayoutCache(txt_text_service); },
         [&](const std::string &raw, std::string &out) { return DecodeTextBytesToUtf8(raw, out); },
@@ -1363,9 +1432,14 @@ int main(int, char **) {
           kBootScanBatchEntries,
           kBootCoverGenerateBatchEntries,
           GetLowerExt,
-          [&]() { return pdf_runtime.HasRealRenderer(); },
+          [&](const std::string &doc_path) {
+            const std::string ext = GetLowerExt(doc_path);
+            if (ext == ".pdf") return pdf_runtime.HasRealRenderer();
+            if (ext == ".epub") return epub_runtime.HasRealRenderer();
+            return false;
+          },
           has_manual_cover_exact_or_fuzzy,
-          has_cached_pdf_cover_on_disk,
+          has_cached_doc_cover_on_disk,
           create_doc_first_page_cover_texture,
           [&](SDL_Texture *generated) {
             forget_texture_size(generated);
@@ -1387,12 +1461,6 @@ int main(int, char **) {
             std::cout << "[native_h700] boot scan complete: books=" << total_books
                       << " cover_generate=" << cover_generate_count << "\n";
             state = State::Shelf;
-            std::cout << "[native_h700] shelf items: " << shelf_items.size() << "\n";
-            for (size_t i = 0; i < shelf_items.size() && i < 12; ++i) {
-              std::cout << "[native_h700] item[" << i << "] "
-                        << (shelf_items[i].is_dir ? "[DIR] " : "[BOOK] ")
-                        << shelf_items[i].name << " | " << shelf_items[i].path << "\n";
-            }
           },
       };
       TickBootRuntime(boot_runtime, dt, boot_tick_deps);
@@ -1429,10 +1497,11 @@ int main(int, char **) {
           [&](const std::string &path) { favorites_store.Remove(path); },
           current_category,
           [&](const BookItem &item) {
-            history_store.Add(item.path);
-            reader = progress.Get(item.path);
-            const std::string ext = GetLowerExt(item.path);
-            std::cout << "[reader] open request: " << item.path << " ext=" << ext << "\n";
+            const std::string &real_path = item_real_path(item);
+            const std::filesystem::path real_fs_path = item_fs_path(item);
+            const std::string ext = GetLowerExt(real_path);
+            const std::string open_path = real_fs_path.empty() ? real_path : real_fs_path.native();
+            reader = get_compatible_progress(item);
             ReaderOpenDeps open_deps{
                 renderer,
                 Layout().screen_w,
@@ -1442,12 +1511,18 @@ int main(int, char **) {
                 epub_runtime,
                 open_text_book,
                 close_text_reader,
+                file_exists,
             };
-            const bool opened = OpenReaderSession(item.path, ext, open_deps);
+            const bool opened = OpenReaderSession(open_path, ext, open_deps);
             if (opened) {
+              history_store.Add(open_path);
+              reader_ui.current_book = open_path;
               state = State::Reader;
               scene_flash.Snap(kSceneFadeFlashAlpha);
               scene_flash.AnimateTo(0.0f, kSceneFadeFlashDurationSec, animation::Ease::OutCubic);
+            } else {
+              show_transient_message(u8"鏈壘鍒版枃浠?");
+              state = State::Shelf;
             }
             return opened;
           },
@@ -1967,6 +2042,26 @@ int main(int, char **) {
         DrawSettingsRuntime(settings_render_deps);
         draw_system_status_overlay();
       }
+
+#ifdef HAVE_SDL2_TTF
+      if (!transient_message.empty() && now < transient_message_until) {
+        const SDL_Color text_color{245, 245, 245, 255};
+        if (TextCacheEntry *te = get_text_texture(transient_message, text_color); te && te->texture) {
+          const int pad_x = 24;
+          const int pad_y = 12;
+          const int box_w = te->w + pad_x * 2;
+          const int box_h = te->h + pad_y * 2;
+          const int box_x = std::max(0, (Layout().screen_w - box_w) / 2);
+          const int box_y = std::max(0, Layout().screen_h - box_h - 72);
+          DrawRect(renderer, box_x, box_y, box_w, box_h, SDL_Color{0, 0, 0, 210});
+          DrawRect(renderer, box_x, box_y, box_w, box_h, SDL_Color{255, 255, 255, 40}, false);
+          SDL_Rect td{box_x + pad_x, box_y + pad_y, te->w, te->h};
+          SDL_RenderCopy(renderer, te->texture, nullptr, &td);
+        }
+      } else if (now >= transient_message_until) {
+        transient_message.clear();
+      }
+#endif
     }
 
     const float flash = scene_flash.Value();

@@ -22,3 +22,4 @@ struct EpubCoverTextureDeps {
 
 SDL_Texture *CreateEpubFirstImageCoverTexture(const std::string &doc_path,
                                               EpubCoverTextureDeps &deps);
+bool HasCachedEpubCoverOnDisk(const std::string &doc_path, EpubCoverTextureDeps &deps);

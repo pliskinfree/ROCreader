@@ -17,6 +17,7 @@ struct CoverServiceDeps {
   int cover_h = 0;
   float cover_aspect = 0.0f;
   std::filesystem::path cover_thumb_cache_dir;
+  std::filesystem::path removable_cover_thumb_cache_dir;
   std::vector<std::string> cover_roots;
   SDL_Texture *shared_txt_cover = nullptr;
   SDL_Texture *shared_pdf_cover = nullptr;
@@ -30,6 +31,7 @@ struct CoverServiceDeps {
 };
 
 bool HasManualCoverExactOrFuzzy(const BookItem &item, const CoverServiceDeps &deps);
-bool HasCachedPdfCoverOnDisk(const std::string &doc_path, const CoverServiceDeps &deps);
+bool HasCachedDocCoverOnDisk(const std::string &doc_path, const CoverServiceDeps &deps);
 SDL_Texture *CreatePdfFirstPageCoverTexture(const std::string &doc_path, CoverServiceDeps &deps);
+SDL_Texture *CreateEpubFirstImageCoverTextureLocal(const std::string &doc_path, CoverServiceDeps &deps);
 SDL_Texture *ResolveBookCoverTexture(const BookItem &item, ShelfCategory category, CoverServiceDeps &deps);

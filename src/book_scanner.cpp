@@ -1,4 +1,5 @@
 #include "book_scanner.h"
+#include "path_adapter.h"
 
 #include <algorithm>
 #include <cctype>
@@ -54,7 +55,10 @@ std::vector<BookItem> BookScanner::ScanPath(const std::string &path, bool allow_
 
     BookItem item;
     item.name = entry.path().filename().string();
-    item.path = entry.path().string();
+    item.path = is_dir ? path_adapter::ResolveReadableDirPath(entry.path())
+                       : path_adapter::ResolveReadableFilePath(entry);
+    item.real_path = item.path;
+    item.native_fs_path = entry.path();
     item.is_dir = is_dir;
 
     if (item.is_dir || HasSupportedExt(entry.path())) {

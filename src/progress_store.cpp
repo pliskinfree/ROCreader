@@ -10,6 +10,10 @@
 
 ProgressStore::ProgressStore(std::string path) : path_(std::move(path)) { Load(); }
 
+bool ProgressStore::Has(const std::string &book) const {
+  return map_.find(book) != map_.end();
+}
+
 ReaderProgress ProgressStore::Get(const std::string &book) const {
   auto it = map_.find(book);
   return it == map_.end() ? ReaderProgress{} : it->second;

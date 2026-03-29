@@ -2,6 +2,7 @@
 
 #include "cover_resolver.h"
 #include "epub_cover_cache.h"
+#include "path_adapter.h"
 #include "pdf_reader.h"
 
 #include <algorithm>
@@ -14,6 +15,14 @@
 namespace {
 int ClampIntLocal(int value, int lo, int hi) {
   return std::max(lo, std::min(hi, value));
+}
+
+std::filesystem::path SelectCoverCacheDir(const std::string &doc_path, const CoverServiceDeps &deps) {
+  if (!deps.removable_cover_thumb_cache_dir.empty() &&
+      (doc_path == "/mnt/sdcard" || doc_path.rfind("/mnt/sdcard/", 0) == 0)) {
+    return deps.removable_cover_thumb_cache_dir;
+  }
+  return deps.cover_thumb_cache_dir;
 }
 
 std::string MakePdfCoverCacheKey(const std::string &doc_path, const CoverServiceDeps &deps) {
@@ -30,7 +39,7 @@ std::filesystem::path GetPdfCoverCacheFile(const std::string &doc_path, const Co
   const size_t hash_value = std::hash<std::string>{}(MakePdfCoverCacheKey(doc_path, deps));
   std::ostringstream oss;
   oss << std::hex << hash_value << ".bmp";
-  return deps.cover_thumb_cache_dir / oss.str();
+  return SelectCoverCacheDir(doc_path, deps) / oss.str();
 }
 
 SDL_Texture *LoadCachedPdfCoverTexture(const std::string &doc_path, CoverServiceDeps &deps) {
@@ -53,7 +62,8 @@ void SavePdfCoverCacheToDisk(const std::string &doc_path, const std::vector<unsi
                              const CoverServiceDeps &deps) {
   if (cover_rgba.size() != static_cast<size_t>(deps.cover_w * deps.cover_h * 4)) return;
   std::error_code ec;
-  std::filesystem::create_directories(deps.cover_thumb_cache_dir, ec);
+  const std::filesystem::path cache_dir = SelectCoverCacheDir(doc_path, deps);
+  std::filesystem::create_directories(cache_dir, ec);
   SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormatFrom(
       const_cast<unsigned char *>(cover_rgba.data()), deps.cover_w, deps.cover_h, 32, deps.cover_w * 4,
       SDL_PIXELFORMAT_RGBA32);
@@ -89,26 +99,6 @@ SDL_Texture *LoadManualCoverExactThenFuzzy(const BookItem &item, CoverServiceDep
   return nullptr;
 }
 
-std::string DetectComicFolderType(const std::string &folder_path, const CoverServiceDeps &deps) {
-  std::error_code ec;
-  const std::filesystem::path root(folder_path);
-  if (!std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec)) return {};
-  const auto opts = std::filesystem::directory_options::skip_permission_denied;
-  bool has_pdf = false;
-  bool has_epub = false;
-  for (std::filesystem::recursive_directory_iterator it(root, opts, ec), end; it != end; it.increment(ec)) {
-    if (ec) continue;
-    const auto &entry = *it;
-    if (!entry.is_regular_file(ec)) continue;
-    const std::string ext = deps.get_lower_ext(entry.path().string());
-    if (ext == ".pdf") has_pdf = true;
-    else if (ext == ".epub") has_epub = true;
-  }
-  if (has_pdf) return ".pdf";
-  if (has_epub) return ".epub";
-  return {};
-}
-
 std::string FindFirstDocInFolder(const std::string &folder_path, const std::string &wanted_ext,
                                  const CoverServiceDeps &deps) {
   std::error_code ec;
@@ -121,18 +111,28 @@ std::string FindFirstDocInFolder(const std::string &folder_path, const std::stri
     const auto &entry = *it;
     if (!entry.is_regular_file(ec)) continue;
     if (deps.get_lower_ext(entry.path().string()) != wanted_ext) continue;
-    matches.push_back(entry.path().string());
+    matches.push_back(path_adapter::ResolveReadableFilePath(entry));
   }
   std::sort(matches.begin(), matches.end());
   return matches.empty() ? std::string{} : matches.front();
 }
 
-SDL_Texture *CreateEpubFirstImageCoverTextureLocal(const std::string &doc_path, CoverServiceDeps &deps) {
+std::string FindPreferredFolderCoverDoc(const std::string &folder_path,
+                                        const CoverServiceDeps &deps) {
+  // Match the existing card1 behavior:
+  // 1. Prefer the first PDF found under the folder.
+  // 2. If no PDF exists, fallback to the first EPUB found.
+  const std::string first_pdf = FindFirstDocInFolder(folder_path, ".pdf", deps);
+  if (!first_pdf.empty()) return first_pdf;
+  return FindFirstDocInFolder(folder_path, ".epub", deps);
+}
+
+SDL_Texture *CreateEpubFirstImageCoverTextureLocalImpl(const std::string &doc_path, CoverServiceDeps &deps) {
   EpubCoverTextureDeps cover_deps{
       deps.renderer,
       deps.cover_w,
       deps.cover_h,
-      deps.cover_thumb_cache_dir,
+      SelectCoverCacheDir(doc_path, deps),
       deps.normalize_path_key,
       deps.load_surface_from_file,
       deps.load_surface_from_memory,
@@ -144,6 +144,10 @@ SDL_Texture *CreateEpubFirstImageCoverTextureLocal(const std::string &doc_path, 
 }
 }
 
+SDL_Texture *CreateEpubFirstImageCoverTextureLocal(const std::string &doc_path, CoverServiceDeps &deps) {
+  return CreateEpubFirstImageCoverTextureLocalImpl(doc_path, deps);
+}
+
 bool HasManualCoverExactOrFuzzy(const BookItem &item, const CoverServiceDeps &deps) {
   const std::string exact_cover_path =
       cover_resolver::ResolveCoverPathExact(item.path, item.is_dir, deps.cover_roots);
@@ -153,9 +157,28 @@ bool HasManualCoverExactOrFuzzy(const BookItem &item, const CoverServiceDeps &de
   return !fuzzy_cover_path.empty();
 }
 
-bool HasCachedPdfCoverOnDisk(const std::string &doc_path, const CoverServiceDeps &deps) {
+bool HasCachedDocCoverOnDisk(const std::string &doc_path, const CoverServiceDeps &deps) {
+  const std::string ext = deps.get_lower_ext ? deps.get_lower_ext(doc_path) : std::string{};
   std::error_code ec;
-  return std::filesystem::exists(GetPdfCoverCacheFile(doc_path, deps), ec) && !ec;
+  if (ext == ".pdf") {
+    return std::filesystem::exists(GetPdfCoverCacheFile(doc_path, deps), ec) && !ec;
+  }
+  if (ext == ".epub") {
+    EpubCoverTextureDeps cover_deps{
+        deps.renderer,
+        deps.cover_w,
+        deps.cover_h,
+        SelectCoverCacheDir(doc_path, deps),
+        deps.normalize_path_key,
+        deps.load_surface_from_file,
+        deps.load_surface_from_memory,
+        deps.create_normalized_cover_texture,
+        deps.create_texture_from_surface,
+        deps.remember_texture_size,
+    };
+    return HasCachedEpubCoverOnDisk(doc_path, cover_deps);
+  }
+  return false;
 }
 
 SDL_Texture *CreatePdfFirstPageCoverTexture(const std::string &doc_path, CoverServiceDeps &deps) {
@@ -234,16 +257,13 @@ SDL_Texture *ResolveBookCoverTexture(const BookItem &item, ShelfCategory categor
 
   if (item.is_dir) {
     if (SDL_Texture *texture = LoadManualCoverExactThenFuzzy(item, deps)) return texture;
-    const std::string kind = DetectComicFolderType(item.path, deps);
-    if (kind == ".pdf") {
-      const std::string pdf_path = FindFirstDocInFolder(item.path, ".pdf", deps);
-      if (!pdf_path.empty()) {
-        if (SDL_Texture *texture = CreatePdfFirstPageCoverTexture(pdf_path, deps)) return texture;
-      }
-    } else if (kind == ".epub") {
-      const std::string epub_path = FindFirstDocInFolder(item.path, ".epub", deps);
-      if (!epub_path.empty()) {
-        if (SDL_Texture *texture = CreateEpubFirstImageCoverTextureLocal(epub_path, deps)) return texture;
+    const std::string preferred_doc = FindPreferredFolderCoverDoc(item.path, deps);
+    if (!preferred_doc.empty()) {
+      const std::string ext = deps.get_lower_ext(preferred_doc);
+      if (ext == ".pdf") {
+        if (SDL_Texture *texture = CreatePdfFirstPageCoverTexture(preferred_doc, deps)) return texture;
+      } else if (ext == ".epub") {
+        if (SDL_Texture *texture = CreateEpubFirstImageCoverTextureLocal(preferred_doc, deps)) return texture;
       }
     }
     return deps.shared_pdf_cover ? deps.shared_pdf_cover : deps.shared_txt_cover;

@@ -38,7 +38,7 @@ void FinalizeTextReaderLoading(TxtReaderState &state, const std::string *cache_k
     entry.limit_hit = state.limit_hit;
     entry.last_use = SDL_GetTicks();
     deps.layout_cache[*cache_key] = std::move(entry);
-    deps.save_layout_cache_to_disk(*cache_key, deps.layout_cache[*cache_key]);
+    deps.save_layout_cache_to_disk(*cache_key, deps.ui.current_book, deps.layout_cache[*cache_key]);
     deps.prune_layout_cache();
   }
 }
@@ -154,7 +154,7 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
   }
 
   TxtLayoutCacheEntry disk_cache_entry;
-  if (deps.load_layout_cache_from_disk(next.cache_key, disk_cache_entry)) {
+  if (deps.load_layout_cache_from_disk(next.cache_key, path, disk_cache_entry)) {
     disk_cache_entry.last_use = SDL_GetTicks();
     deps.layout_cache[next.cache_key] = disk_cache_entry;
     deps.prune_layout_cache();
@@ -175,7 +175,7 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
   }
 
   TxtResumeCacheEntry resume_cache_entry;
-  if (deps.load_resume_cache_from_disk(next.cache_key, resume_cache_entry)) {
+  if (deps.load_resume_cache_from_disk(next.cache_key, path, resume_cache_entry)) {
     const int restored_scroll_px =
         std::max(std::max(0, deps.ui.progress.scroll_y), std::max(0, resume_cache_entry.scroll_px));
     next.lines = std::move(resume_cache_entry.lines);
@@ -283,7 +283,7 @@ void PersistCurrentTxtResumeSnapshot(const std::string &book_path, bool force, T
     snapshot.cache_key = deps.make_layout_cache_key(book_path, bounds, snapshot.line_h, ec ? 0 : file_size, file_mtime);
   }
   if (snapshot.cache_key.empty()) return;
-  deps.save_resume_cache_to_disk(snapshot.cache_key, snapshot);
+  deps.save_resume_cache_to_disk(snapshot.cache_key, book_path, snapshot);
   deps.ui.txt_reader.last_resume_cache_save = now;
   deps.ui.txt_reader.resume_cache_dirty = false;
 }

@@ -45,52 +45,7 @@ make REQUIRE_MUPDF="$REQUIRE_MUPDF"
     cp "$SELF_DIR/native_config.ini" "$OUT_DIR/"
   fi
 
-  cat > "$LAUNCHER" <<'EOF'
-#!/bin/sh
-set -eu
-SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_DIR="$SELF_DIR/ROCreader"
-BIN="$APP_DIR/rocreader_sdl"
-LOG_FILE="${ROC_NATIVE_RUNTIME_LOG:-$SELF_DIR/ROCreader.log}"
-
-{
-  echo "===== $(date '+%F %T') ====="
-  echo "[launcher] start"
-  if command -v ldd >/dev/null 2>&1; then
-    ldd "$BIN" || true
-  fi
-} >>"$LOG_FILE" 2>&1
-
-export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-alsa}"
-export SDL_NOMOUSE="${SDL_NOMOUSE:-1}"
-if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
-  export XDG_RUNTIME_DIR="/tmp/rocreader-xdg"
-fi
-mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
-
-run_with_driver() {
-  drv="$1"
-  echo "[launcher] try driver=$drv" >>"$LOG_FILE"
-  SDL_VIDEODRIVER="$drv" "$BIN" >>"$LOG_FILE" 2>&1
-}
-
-if [ -n "${SDL_VIDEODRIVER:-}" ]; then
-  run_with_driver "$SDL_VIDEODRIVER"
-  exit $?
-fi
-
-for drv in wayland x11 kmsdrm fbcon directfb; do
-  if run_with_driver "$drv"; then
-    echo "[launcher] success driver=$drv" >>"$LOG_FILE"
-    exit 0
-  fi
-  code=$?
-  echo "[launcher] failed driver=$drv code=$code" >>"$LOG_FILE"
-done
-
-echo "[launcher] all drivers failed" >>"$LOG_FILE"
-exit 1
-EOF
+  cp "$SELF_DIR/ROCreader.sh" "$LAUNCHER"
 
   chmod +x "$OUT_DIR/rocreader_sdl"
   chmod +x "$LAUNCHER"

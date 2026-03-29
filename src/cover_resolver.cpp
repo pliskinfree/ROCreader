@@ -1,4 +1,5 @@
 #include "cover_resolver.h"
+#include "path_adapter.h"
 
 #include <array>
 #include <filesystem>
@@ -17,7 +18,7 @@ std::string FirstExistingWithBase(const std::vector<std::string> &roots, const s
   for (const auto &root : roots) {
     for (const char *ext : kCoverExts) {
       fs::path p = fs::path(root) / (base + ext);
-      if (fs::exists(p) && fs::is_regular_file(p)) return p.string();
+      if (fs::exists(p) && fs::is_regular_file(p)) return path_adapter::StorePathString(p);
     }
   }
   return {};
@@ -85,7 +86,7 @@ std::string ResolveCoverPathExact(const std::string &item_path,
   if (is_dir) {
     for (const char *name : kFolderCoverNames) {
       fs::path candidate = p / name;
-      if (fs::exists(candidate) && fs::is_regular_file(candidate)) return candidate.string();
+      if (fs::exists(candidate) && fs::is_regular_file(candidate)) return path_adapter::StorePathString(candidate);
     }
   }
 
@@ -119,7 +120,7 @@ std::string ResolveCoverPathFuzzy(const std::string &item_path,
     if (!parent.empty()) {
       for (const char *name : kFolderCoverNames) {
         fs::path candidate = parent / name;
-        if (fs::exists(candidate) && fs::is_regular_file(candidate)) return candidate.string();
+        if (fs::exists(candidate) && fs::is_regular_file(candidate)) return path_adapter::StorePathString(candidate);
       }
       const std::string parent_base = parent.filename().string();
       if (!parent_base.empty()) {

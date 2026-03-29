@@ -10,20 +10,30 @@
 namespace {
 constexpr char kTxtParagraphIndentAscii[] = "  ";
 
+std::filesystem::path SelectTxtCacheDir(const TxtTextServiceState &state, const std::string &book_path) {
+  if (!state.removable_cache_dir.empty() &&
+      (book_path == "/mnt/sdcard" || book_path.rfind("/mnt/sdcard/", 0) == 0)) {
+    return state.removable_cache_dir;
+  }
+  return state.cache_dir;
+}
+
 std::filesystem::path GetTxtLayoutCacheFile(const TxtTextServiceState &state,
-                                            const std::string &cache_key) {
+                                            const std::string &cache_key,
+                                            const std::string &book_path) {
   const size_t hash_value = std::hash<std::string>{}(cache_key + "|layout");
   std::ostringstream oss;
   oss << std::hex << hash_value << ".bin";
-  return state.cache_dir / oss.str();
+  return SelectTxtCacheDir(state, book_path) / oss.str();
 }
 
 std::filesystem::path GetTxtResumeCacheFile(const TxtTextServiceState &state,
-                                            const std::string &cache_key) {
+                                            const std::string &cache_key,
+                                            const std::string &book_path) {
   const size_t hash_value = std::hash<std::string>{}(cache_key + "|resume");
   std::ostringstream oss;
   oss << std::hex << hash_value << ".resume";
-  return state.cache_dir / oss.str();
+  return SelectTxtCacheDir(state, book_path) / oss.str();
 }
 
 size_t Utf8CharLen(unsigned char c) {
@@ -193,8 +203,8 @@ void ClearTxtLayoutCache(TxtTextServiceState &state) {
 }
 
 bool LoadTxtLayoutCacheFromDisk(TxtTextServiceState &state, const std::string &cache_key,
-                                TxtLayoutCacheEntry &entry) {
-  std::ifstream in(GetTxtLayoutCacheFile(state, cache_key), std::ios::binary);
+                                const std::string &book_path, TxtLayoutCacheEntry &entry) {
+  std::ifstream in(GetTxtLayoutCacheFile(state, cache_key, book_path), std::ios::binary);
   if (!in) return false;
   auto read_u32 = [&](uint32_t &v) -> bool {
     in.read(reinterpret_cast<char *>(&v), sizeof(v));
@@ -228,10 +238,11 @@ bool LoadTxtLayoutCacheFromDisk(TxtTextServiceState &state, const std::string &c
 }
 
 void SaveTxtLayoutCacheToDisk(TxtTextServiceState &state, const std::string &cache_key,
+                              const std::string &book_path,
                               const TxtLayoutCacheEntry &entry) {
   std::error_code ec;
-  std::filesystem::create_directories(state.cache_dir, ec);
-  std::ofstream out(GetTxtLayoutCacheFile(state, cache_key), std::ios::binary | std::ios::trunc);
+  std::filesystem::create_directories(SelectTxtCacheDir(state, book_path), ec);
+  std::ofstream out(GetTxtLayoutCacheFile(state, cache_key, book_path), std::ios::binary | std::ios::trunc);
   if (!out) return;
   auto write_u32 = [&](uint32_t v) { out.write(reinterpret_cast<const char *>(&v), sizeof(v)); };
   auto write_i32 = [&](int v) { out.write(reinterpret_cast<const char *>(&v), sizeof(v)); };
@@ -249,8 +260,8 @@ void SaveTxtLayoutCacheToDisk(TxtTextServiceState &state, const std::string &cac
 }
 
 bool LoadTxtResumeCacheFromDisk(TxtTextServiceState &state, const std::string &cache_key,
-                                TxtResumeCacheEntry &entry) {
-  std::ifstream in(GetTxtResumeCacheFile(state, cache_key), std::ios::binary);
+                                const std::string &book_path, TxtResumeCacheEntry &entry) {
+  std::ifstream in(GetTxtResumeCacheFile(state, cache_key, book_path), std::ios::binary);
   if (!in) return false;
   auto read_u32 = [&](uint32_t &v) -> bool {
     in.read(reinterpret_cast<char *>(&v), sizeof(v));
@@ -297,10 +308,11 @@ bool LoadTxtResumeCacheFromDisk(TxtTextServiceState &state, const std::string &c
 }
 
 void SaveTxtResumeCacheToDisk(TxtTextServiceState &state, const std::string &cache_key,
+                              const std::string &book_path,
                               const TxtReaderState &state_to_save) {
   std::error_code ec;
-  std::filesystem::create_directories(state.cache_dir, ec);
-  std::ofstream out(GetTxtResumeCacheFile(state, cache_key), std::ios::binary | std::ios::trunc);
+  std::filesystem::create_directories(SelectTxtCacheDir(state, book_path), ec);
+  std::ofstream out(GetTxtResumeCacheFile(state, cache_key, book_path), std::ios::binary | std::ios::trunc);
   if (!out) return;
   auto write_u32 = [&](uint32_t v) { out.write(reinterpret_cast<const char *>(&v), sizeof(v)); };
   auto write_u64 = [&](uint64_t v) { out.write(reinterpret_cast<const char *>(&v), sizeof(v)); };

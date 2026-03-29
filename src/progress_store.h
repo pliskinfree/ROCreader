@@ -9,6 +9,7 @@ class ProgressStore {
 public:
   explicit ProgressStore(std::string path);
 
+  bool Has(const std::string &book) const;
   ReaderProgress Get(const std::string &book) const;
   void Set(const std::string &book, const ReaderProgress &p);
   bool IsDirty() const;

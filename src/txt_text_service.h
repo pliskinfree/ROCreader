@@ -17,6 +17,7 @@
 struct TxtTextServiceState {
   std::unordered_map<std::string, TxtLayoutCacheEntry> layout_cache;
   std::filesystem::path cache_dir;
+  std::filesystem::path removable_cache_dir;
   size_t max_cache_entries = 0;
   size_t max_wrapped_lines = 0;
 };
@@ -29,12 +30,14 @@ std::string MakeTxtLayoutCacheKey(const std::string &path, const SDL_Rect &bound
 void PruneTxtLayoutCache(TxtTextServiceState &state);
 void ClearTxtLayoutCache(TxtTextServiceState &state);
 bool LoadTxtLayoutCacheFromDisk(TxtTextServiceState &state, const std::string &cache_key,
-                                TxtLayoutCacheEntry &entry);
+                                const std::string &book_path, TxtLayoutCacheEntry &entry);
 void SaveTxtLayoutCacheToDisk(TxtTextServiceState &state, const std::string &cache_key,
+                              const std::string &book_path,
                               const TxtLayoutCacheEntry &entry);
 bool LoadTxtResumeCacheFromDisk(TxtTextServiceState &state, const std::string &cache_key,
-                                TxtResumeCacheEntry &entry);
+                                const std::string &book_path, TxtResumeCacheEntry &entry);
 void SaveTxtResumeCacheToDisk(TxtTextServiceState &state, const std::string &cache_key,
+                              const std::string &book_path,
                               const TxtReaderState &state_to_save);
 SDL_Rect GetTxtViewportBounds(SDL_Renderer *renderer, int screen_w, int screen_h,
                               int margin_x, int margin_y);

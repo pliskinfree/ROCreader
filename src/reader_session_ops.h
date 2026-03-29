@@ -19,6 +19,7 @@ struct ReaderOpenDeps {
   EpubRuntime &epub_runtime;
   std::function<bool(const std::string &)> open_text_book;
   std::function<void()> close_text_reader;
+  std::function<bool(const std::string &)> file_exists;
 };
 
 struct ReaderCloseDeps {

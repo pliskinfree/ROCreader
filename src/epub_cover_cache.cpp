@@ -84,3 +84,15 @@ SDL_Texture *CreateEpubFirstImageCoverTexture(const std::string &doc_path,
   SDL_FreeSurface(cover_surface);
   return normalized;
 }
+
+bool HasCachedEpubCoverOnDisk(const std::string &doc_path, EpubCoverTextureDeps &deps) {
+  EpubReader epub;
+  EpubReader::CoverImage cover_image;
+  std::string error;
+  if (!epub.ExtractCoverImage(doc_path, cover_image, error)) return false;
+
+  std::error_code ec;
+  const std::filesystem::path cache_file =
+      GetEpubCoverCacheFile(doc_path, cover_image.logical_size, cover_image.logical_mtime, deps);
+  return std::filesystem::exists(cache_file, ec) && !ec;
+}

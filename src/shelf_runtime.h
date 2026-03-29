@@ -109,6 +109,7 @@ struct GridItemAnim {
 struct ShelfRuntimeDeps {
   std::function<std::string(const std::string &)> normalize_path_key;
   std::function<std::string(const std::string &)> get_lower_ext;
+  std::function<std::vector<BookItem>()> all_scanned_books;
   std::function<bool(const std::string &)> favorites_contains;
   std::function<bool(const std::string &)> history_contains;
   std::function<std::vector<std::string>()> favorites_ordered_paths;

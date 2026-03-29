@@ -1,5 +1,6 @@
 #include "reader_session_ops.h"
 
+#include <filesystem>
 #include <iostream>
 
 bool OpenReaderSession(const std::string &book_path, const std::string &ext, ReaderOpenDeps &deps) {

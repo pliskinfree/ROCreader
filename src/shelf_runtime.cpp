@@ -3,29 +3,113 @@
 #include <algorithm>
 #include <filesystem>
 #include <array>
+#include <set>
 #include <sstream>
 #include <unordered_map>
 
 namespace {
-bool IsPureExtFolder(const std::string &folder_path, const std::string &wanted_ext,
-                     const ShelfRuntimeDeps &deps) {
-  std::error_code ec;
-  const std::filesystem::path root(folder_path);
-  if (!std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec)) return false;
-  const auto opts = std::filesystem::directory_options::skip_permission_denied;
-  bool has_match = false;
-  for (std::filesystem::recursive_directory_iterator it(root, opts, ec), end; it != end; it.increment(ec)) {
-    if (ec) continue;
-    const auto &entry = *it;
-    if (!entry.is_regular_file(ec)) continue;
-    const std::string ext = deps.get_lower_ext(entry.path().string());
-    if (ext == wanted_ext) {
-      has_match = true;
-      continue;
-    }
-    return false;
+void SortShelfItems(std::vector<BookItem> &items);
+
+bool PathMatchesAnyExt(const std::string &path, const std::vector<std::string> &wanted_exts,
+                      const ShelfRuntimeDeps &deps) {
+  const std::string ext = deps.get_lower_ext(path);
+  for (const auto &wanted_ext : wanted_exts) {
+    if (ext == wanted_ext) return true;
   }
-  return has_match;
+  return false;
+}
+
+bool IsUnderRoot(const std::filesystem::path &path, const std::filesystem::path &root) {
+  auto pit = path.begin();
+  auto rit = root.begin();
+  for (; rit != root.end(); ++rit, ++pit) {
+    if (pit == path.end() || *pit != *rit) return false;
+  }
+  return true;
+}
+
+std::filesystem::path AncestorFromRawDocPath(const std::filesystem::path &raw_doc_path,
+                                             size_t levels_up) {
+  std::filesystem::path out = raw_doc_path;
+  while (levels_up > 0 && !out.empty()) {
+    out = out.parent_path();
+    --levels_up;
+  }
+  return out;
+}
+
+std::vector<BookItem> BuildItemsFromScannedPaths(ShelfCategory category,
+                                                 const std::string &current_folder,
+                                                 const std::vector<std::string> &books_roots,
+                                                 const ShelfRuntimeDeps &deps) {
+  const std::vector<std::string> wanted_exts =
+      (category == ShelfCategory::AllBooks)
+          ? std::vector<std::string>{".txt"}
+          : std::vector<std::string>{".pdf", ".epub"};
+  std::vector<BookItem> out;
+  std::set<std::string> seen_files;
+  std::set<std::string> seen_dirs;
+  const std::vector<BookItem> scanned_books =
+      deps.all_scanned_books ? deps.all_scanned_books() : std::vector<BookItem>{};
+
+  auto add_file = [&](const BookItem &item) {
+    const std::string key_path = item.real_path.empty() ? item.path : item.real_path;
+    const std::string normalized = deps.normalize_path_key(key_path);
+    if (!seen_files.insert(normalized).second) return;
+    out.push_back(item);
+  };
+  auto add_dir = [&](const std::filesystem::path &p) {
+    const std::string dir_path = p.string();
+    const std::string normalized = deps.normalize_path_key(dir_path);
+    if (!seen_dirs.insert(normalized).second) return;
+    BookItem item;
+    item.name = p.filename().string();
+    item.path = dir_path;
+    item.real_path = dir_path;
+    item.native_fs_path = p;
+    item.is_dir = true;
+    out.push_back(std::move(item));
+  };
+
+  for (const auto &book : scanned_books) {
+    const std::string source_path = book.real_path.empty() ? book.path : book.real_path;
+    if (!PathMatchesAnyExt(source_path, wanted_exts, deps)) continue;
+    const std::filesystem::path raw_doc_path = std::filesystem::path(source_path).lexically_normal();
+
+    if (current_folder.empty()) {
+      for (const auto &root_raw : books_roots) {
+        const std::filesystem::path raw_root_path = std::filesystem::path(root_raw).lexically_normal();
+        if (!IsUnderRoot(raw_doc_path, raw_root_path) || raw_doc_path == raw_root_path) continue;
+
+        std::filesystem::path rel = raw_doc_path.lexically_relative(raw_root_path);
+        if (rel.empty()) continue;
+        const size_t rel_count = static_cast<size_t>(std::distance(rel.begin(), rel.end()));
+        if (rel_count == 0) continue;
+        if (rel_count == 1) {
+          add_file(book);
+        } else {
+          add_dir(AncestorFromRawDocPath(raw_doc_path, rel_count - 1));
+        }
+        break;
+      }
+    } else {
+      const std::filesystem::path raw_folder_path = std::filesystem::path(current_folder).lexically_normal();
+      if (!IsUnderRoot(raw_doc_path, raw_folder_path) || raw_doc_path == raw_folder_path) continue;
+
+      std::filesystem::path rel = raw_doc_path.lexically_relative(raw_folder_path);
+      if (rel.empty()) continue;
+      const size_t rel_count = static_cast<size_t>(std::distance(rel.begin(), rel.end()));
+      if (rel_count == 0) continue;
+      if (rel_count == 1) {
+        add_file(book);
+      } else {
+        add_dir(AncestorFromRawDocPath(raw_doc_path, rel_count - 1));
+      }
+    }
+  }
+
+  SortShelfItems(out);
+  return out;
 }
 
 void SortShelfItems(std::vector<BookItem> &items) {
@@ -98,73 +182,18 @@ std::vector<BookItem> ScanShelfBaseItems(ShelfRuntimeState &state, ShelfCategory
   };
 
   if (category == ShelfCategory::AllComics || category == ShelfCategory::AllBooks) {
-    const std::string wanted_ext = (category == ShelfCategory::AllBooks) ? ".txt" : "";
-    std::vector<BookItem> out;
-    if (current_folder.empty()) {
-      for (const auto &root : books_roots) {
-        std::error_code ec;
-        const std::filesystem::path root_path(root);
-        if (!std::filesystem::exists(root_path, ec) || !std::filesystem::is_directory(root_path, ec)) continue;
-        const auto opts = std::filesystem::directory_options::skip_permission_denied;
-        for (std::filesystem::directory_iterator it(root_path, opts, ec), end; it != end; it.increment(ec)) {
-          if (ec) continue;
-          const auto &entry = *it;
-          if (entry.is_regular_file(ec)) {
-            const std::string ext = deps.get_lower_ext(entry.path().string());
-            const bool matched = (category == ShelfCategory::AllBooks) ? (ext == ".txt")
-                                                                       : (ext == ".pdf" || ext == ".epub");
-            if (!matched) continue;
-            out.push_back(BookItem{entry.path().filename().string(), entry.path().string(), false});
-          } else if (entry.is_directory(ec)) {
-            bool matched = false;
-            if (category == ShelfCategory::AllBooks) {
-              matched = IsPureExtFolder(entry.path().string(), wanted_ext, deps);
-            } else {
-              matched = IsPureExtFolder(entry.path().string(), ".pdf", deps) ||
-                        IsPureExtFolder(entry.path().string(), ".epub", deps);
-            }
-            if (!matched) continue;
-            out.push_back(BookItem{entry.path().filename().string(), entry.path().string(), true});
-          }
-        }
-      }
-    } else {
-      std::error_code ec;
-      const std::filesystem::path root_path(current_folder);
-      if (std::filesystem::exists(root_path, ec) && std::filesystem::is_directory(root_path, ec)) {
-        const auto opts = std::filesystem::directory_options::skip_permission_denied;
-        for (std::filesystem::directory_iterator it(root_path, opts, ec), end; it != end; it.increment(ec)) {
-          if (ec) continue;
-          const auto &entry = *it;
-          if (!entry.is_regular_file(ec)) continue;
-          const std::string ext = deps.get_lower_ext(entry.path().string());
-          const bool matched = (category == ShelfCategory::AllBooks) ? (ext == ".txt")
-                                                                     : (ext == ".pdf" || ext == ".epub");
-          if (!matched) continue;
-          out.push_back(BookItem{entry.path().filename().string(), entry.path().string(), false});
-        }
-      }
-    }
-    SortShelfItems(out);
-    return save_and_return(std::move(out));
+    return save_and_return(BuildItemsFromScannedPaths(category, current_folder, books_roots, deps));
   }
 
   if (current_folder.empty() && category == ShelfCategory::Collections) {
     std::unordered_map<std::string, BookItem> found;
-    for (const auto &root : books_roots) {
-      std::error_code ec;
-      const std::filesystem::path root_path(root);
-      if (!std::filesystem::exists(root_path, ec) || !std::filesystem::is_directory(root_path, ec)) continue;
-      const auto opts = std::filesystem::directory_options::skip_permission_denied;
-      for (std::filesystem::recursive_directory_iterator it(root_path, opts, ec), end; it != end; it.increment(ec)) {
-        if (ec) continue;
-        const auto &entry = *it;
-        if (!entry.is_regular_file(ec)) continue;
-        const std::string ext = deps.get_lower_ext(entry.path().string());
-        if (ext != ".pdf" && ext != ".txt" && ext != ".epub") continue;
-        found.emplace(deps.normalize_path_key(entry.path().string()),
-                      BookItem{entry.path().filename().string(), entry.path().string(), false});
-      }
+    const std::vector<BookItem> scanned_books =
+        deps.all_scanned_books ? deps.all_scanned_books() : std::vector<BookItem>{};
+    for (const auto &item : scanned_books) {
+      const std::string key_path = item.real_path.empty() ? item.path : item.real_path;
+      const std::string ext = deps.get_lower_ext(key_path);
+      if (ext != ".pdf" && ext != ".txt" && ext != ".epub") continue;
+      found.emplace(deps.normalize_path_key(key_path), item);
     }
     std::vector<BookItem> out;
     for (const auto &path_key : deps.favorites_ordered_paths()) {
@@ -176,20 +205,13 @@ std::vector<BookItem> ScanShelfBaseItems(ShelfRuntimeState &state, ShelfCategory
 
   if (current_folder.empty() && category == ShelfCategory::History) {
     std::unordered_map<std::string, BookItem> found;
-    for (const auto &root : books_roots) {
-      std::error_code ec;
-      const std::filesystem::path root_path(root);
-      if (!std::filesystem::exists(root_path, ec) || !std::filesystem::is_directory(root_path, ec)) continue;
-      const auto opts = std::filesystem::directory_options::skip_permission_denied;
-      for (std::filesystem::recursive_directory_iterator it(root_path, opts, ec), end; it != end; it.increment(ec)) {
-        if (ec) continue;
-        const auto &entry = *it;
-        if (!entry.is_regular_file(ec)) continue;
-        const std::string ext = deps.get_lower_ext(entry.path().string());
-        if (ext != ".pdf" && ext != ".txt" && ext != ".epub") continue;
-        found.emplace(deps.normalize_path_key(entry.path().string()),
-                      BookItem{entry.path().filename().string(), entry.path().string(), false});
-      }
+    const std::vector<BookItem> scanned_books =
+        deps.all_scanned_books ? deps.all_scanned_books() : std::vector<BookItem>{};
+    for (const auto &item : scanned_books) {
+      const std::string key_path = item.real_path.empty() ? item.path : item.real_path;
+      const std::string ext = deps.get_lower_ext(key_path);
+      if (ext != ".pdf" && ext != ".txt" && ext != ".epub") continue;
+      found.emplace(deps.normalize_path_key(key_path), item);
     }
     std::vector<BookItem> out;
     for (const auto &path_key : deps.history_ordered_paths()) {
@@ -199,9 +221,7 @@ std::vector<BookItem> ScanShelfBaseItems(ShelfRuntimeState &state, ShelfCategory
     return save_and_return(std::move(out));
   }
 
-  std::vector<BookItem> out =
-      current_folder.empty() ? BookScanner::ScanRoots(books_roots) : BookScanner::ScanPath(current_folder, false);
-  return save_and_return(std::move(out));
+  return save_and_return({});
 }
 
 void RebuildShelfItems(ShelfRuntimeState &state, ShelfCategory category, const std::string &current_folder,
@@ -332,7 +352,7 @@ void HandleShelfInput(ShelfRuntimeInputDeps &deps) {
   } else if (deps.input.IsJustPressed(Button::X) && !deps.shelf_runtime.items.empty()) {
     const BookItem &item = deps.shelf_runtime.items[deps.focus_index];
     if (!item.is_dir) {
-      if (deps.add_favorite) deps.add_favorite(item.path);
+      if (deps.add_favorite) deps.add_favorite(item.real_path.empty() ? item.path : item.real_path);
       if (deps.current_category && deps.current_category() == ShelfCategory::Collections) {
         if (deps.rebuild_shelf_items) deps.rebuild_shelf_items();
         reset_grid_page_state();
@@ -342,7 +362,7 @@ void HandleShelfInput(ShelfRuntimeInputDeps &deps) {
   } else if (deps.input.IsJustPressed(Button::Y) && !deps.shelf_runtime.items.empty()) {
     const BookItem &item = deps.shelf_runtime.items[deps.focus_index];
     if (!item.is_dir) {
-      if (deps.remove_favorite) deps.remove_favorite(item.path);
+      if (deps.remove_favorite) deps.remove_favorite(item.real_path.empty() ? item.path : item.real_path);
       if (deps.current_category && deps.current_category() == ShelfCategory::Collections) {
         if (deps.rebuild_shelf_items) deps.rebuild_shelf_items();
         reset_grid_page_state();
@@ -353,7 +373,7 @@ void HandleShelfInput(ShelfRuntimeInputDeps &deps) {
     const BookItem &item = deps.shelf_runtime.items[deps.focus_index];
     if (item.is_dir && deps.current_folder.empty()) {
       deps.folder_focus[deps.current_folder] = deps.focus_index;
-      deps.current_folder = item.path;
+      deps.current_folder = item.real_path.empty() ? item.path : item.real_path;
       if (deps.clear_cover_cache) deps.clear_cover_cache();
       if (deps.rebuild_shelf_items) deps.rebuild_shelf_items();
       deps.focus_index = 0;

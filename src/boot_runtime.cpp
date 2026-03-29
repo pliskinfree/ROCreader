@@ -1,4 +1,5 @@
 #include "boot_runtime.h"
+#include "path_adapter.h"
 
 #include <algorithm>
 #include <cmath>
@@ -72,15 +73,27 @@ void TickBootRuntime(BootRuntimeState &state, float dt, const BootRuntimeTickDep
       state.count_it.increment(ec);
       ++processed;
       if (ec || !entry.is_regular_file(ec)) continue;
-      const std::string ext = deps.get_lower_ext ? deps.get_lower_ext(entry.path().string()) : std::string{};
-      if (ext == ".pdf" || ext == ".txt") {
-        state.supported_paths.push_back(entry.path().string());
+      const std::string readable_path = path_adapter::ResolveReadableFilePath(entry);
+      const std::string ext = deps.get_lower_ext ? deps.get_lower_ext(readable_path) : std::string{};
+      if (ext == ".pdf" || ext == ".txt" || ext == ".epub") {
+        BookItem item;
+        item.name = entry.path().filename().string();
+        item.path = readable_path;
+        item.real_path = readable_path;
+        item.native_fs_path = entry.path();
+        item.is_dir = false;
+        state.scanned_books.push_back(std::move(item));
       }
     }
     state.status_text = MakeBootScanText(0, 0);
     if (!state.count_iterator_active && state.count_root_index >= deps.books_roots.size()) {
-      std::sort(state.supported_paths.begin(), state.supported_paths.end());
-      state.total_books = state.supported_paths.size();
+      std::sort(state.scanned_books.begin(), state.scanned_books.end(),
+                [](const BookItem &a, const BookItem &b) {
+                  if (a.is_dir != b.is_dir) return a.is_dir > b.is_dir;
+                  if (a.path != b.path) return a.path < b.path;
+                  return a.name < b.name;
+                });
+      state.total_books = state.scanned_books.size();
       state.scan_index = 0;
       state.cover_generate_queue.clear();
       state.phase = BootPhase::ScanBooks;
@@ -88,18 +101,17 @@ void TickBootRuntime(BootRuntimeState &state, float dt, const BootRuntimeTickDep
     }
   } else if (state.phase == BootPhase::ScanBooks) {
     size_t processed = 0;
-    while (processed < deps.scan_batch_entries && state.scan_index < state.supported_paths.size()) {
-      const std::string &book_path = state.supported_paths[state.scan_index];
+    while (processed < deps.scan_batch_entries && state.scan_index < state.scanned_books.size()) {
+      const std::string &book_path = state.scanned_books[state.scan_index].real_path.empty()
+                                         ? state.scanned_books[state.scan_index].path
+                                         : state.scanned_books[state.scan_index].real_path;
       const std::string ext = deps.get_lower_ext ? deps.get_lower_ext(book_path) : std::string{};
-      if (ext == ".pdf") {
-        BookItem item;
-        item.name = std::filesystem::path(book_path).filename().string();
-        item.path = book_path;
-        item.is_dir = false;
+      if (ext == ".pdf" || ext == ".epub") {
+        const BookItem &item = state.scanned_books[state.scan_index];
         const bool manual = deps.has_manual_cover_exact_or_fuzzy && deps.has_manual_cover_exact_or_fuzzy(item);
-        const bool cached = deps.has_cached_pdf_cover_on_disk && deps.has_cached_pdf_cover_on_disk(book_path);
-        const bool can_render = deps.pdf_backend_available && deps.pdf_backend_available();
-        if (!manual && !cached && can_render) {
+        const bool cached = deps.has_cached_doc_cover_on_disk && deps.has_cached_doc_cover_on_disk(book_path);
+        const bool can_render = deps.doc_cover_backend_available && deps.doc_cover_backend_available(book_path);
+        if (!manual && can_render && !cached) {
           state.cover_generate_queue.push_back(book_path);
         }
       }
@@ -107,7 +119,7 @@ void TickBootRuntime(BootRuntimeState &state, float dt, const BootRuntimeTickDep
       ++processed;
     }
     state.status_text = MakeBootScanText(state.scan_index, state.total_books);
-    if (state.scan_index >= state.supported_paths.size()) {
+    if (state.scan_index >= state.scanned_books.size()) {
       state.cover_generate_index = 0;
       state.phase = BootPhase::GenerateCovers;
       state.status_text = MakeBootCoverText(0, state.cover_generate_queue.size());
