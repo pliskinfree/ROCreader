@@ -149,6 +149,7 @@ UiAssetsLoadResult LoadUiAssets(UiAssets &assets, UiAssetsLoaderDeps &deps) {
   LoadUiAsset(assets.settings_preview_animations, "settings_preview_animations.png", packed_ui_assets, ui_roots,
               deps, result);
   LoadUiAsset(assets.settings_preview_audio, "settings_preview_audio.png", packed_ui_assets, ui_roots, deps, result);
+  LoadUiAsset(assets.settings_preview_default, "Menu_Default.png", packed_ui_assets, ui_roots, deps, result);
   LoadUiAsset(assets.settings_preview_keyguide, "Menu_Button Instructions.png", packed_ui_assets, ui_roots, deps,
               result);
   LoadUiAsset(assets.settings_preview_contact, "Menu_Contact Me.png", packed_ui_assets, ui_roots, deps, result);

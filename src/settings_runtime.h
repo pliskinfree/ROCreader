@@ -2,6 +2,7 @@
 
 #include "app_stores.h"
 #include "animation.h"
+#include "contributor_avatar_runtime.h"
 #include "input_manager.h"
 #include "reader_session_state.h"
 #include "ui_assets.h"
@@ -13,7 +14,7 @@
 #include <string>
 #include <vector>
 
-enum class SettingId { KeyGuide, ClearHistory, CleanCache, TxtToUtf8, ContactMe, ExitApp };
+enum class SettingId { KeyGuide, ClearHistory, CleanCache, TxtToUtf8, ContributorAvatars, ContactMe, ExitApp };
 
 struct SettingsRuntimeInputDeps {
   const InputManager &input;
@@ -25,6 +26,9 @@ struct SettingsRuntimeInputDeps {
   int &menu_selected;
   const std::vector<SettingId> &menu_items;
   animation::TweenFloat &menu_anim;
+  ContributorAvatarState &contributor_avatar_state;
+  size_t contributor_avatar_count = 0;
+  std::function<void(int)> on_contributor_avatar_confirm;
   bool menu_toggle_request = false;
   std::function<void()> on_close;
   std::function<void()> on_exit_app;
@@ -54,6 +58,8 @@ struct SettingsRuntimeRenderDeps {
   animation::TweenFloat &menu_anim;
   int sidebar_mask_max_alpha = 0;
   const TxtTranscodeJob &txt_transcode_job;
+  const std::vector<ContributorAvatarEntry> &contributor_avatar_entries;
+  const ContributorAvatarState &contributor_avatar_state;
   SettingsRuntimeLayout layout;
   std::function<void(int, int, int, int, SDL_Color, bool)> draw_rect;
   std::function<void(SDL_Texture *, int &, int &)> get_texture_size;

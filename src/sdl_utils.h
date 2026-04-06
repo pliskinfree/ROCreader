@@ -11,4 +11,5 @@ SDL_Surface *LoadSurfaceFromMemory(const void *data, size_t size);
 SDL_Texture *CreateNormalizedCoverTexture(SDL_Renderer *renderer, SDL_Surface *src_surface, int cover_w,
                                           int cover_h, float cover_aspect);
 SDL_Texture *CreateTextureFromSurface(SDL_Renderer *renderer, SDL_Surface *surface);
+SDL_Texture *CreateScaledTextureCache(SDL_Renderer *renderer, SDL_Texture *source, int width, int height);
 void DrawRect(SDL_Renderer *renderer, int x, int y, int w, int h, SDL_Color color, bool fill = true);

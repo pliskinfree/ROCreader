@@ -69,6 +69,30 @@ SDL_Texture *CreateTextureFromSurface(SDL_Renderer *renderer, SDL_Surface *surfa
   return SDL_CreateTextureFromSurface(renderer, surface);
 }
 
+SDL_Texture *CreateScaledTextureCache(SDL_Renderer *renderer, SDL_Texture *source, int width, int height) {
+  if (!renderer || !source || width <= 0 || height <= 0) return nullptr;
+
+  SDL_Texture *target = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, width, height);
+  if (!target) return nullptr;
+
+  SDL_SetTextureBlendMode(target, SDL_BLENDMODE_BLEND);
+  SDL_Texture *previous_target = SDL_GetRenderTarget(renderer);
+  if (SDL_SetRenderTarget(renderer, target) != 0) {
+    SDL_DestroyTexture(target);
+    return nullptr;
+  }
+
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+  SDL_RenderClear(renderer);
+
+  SDL_Rect dst{0, 0, width, height};
+  SDL_RenderCopy(renderer, source, nullptr, &dst);
+
+  SDL_SetRenderTarget(renderer, previous_target);
+  return target;
+}
+
 void DrawRect(SDL_Renderer *renderer, int x, int y, int w, int h, SDL_Color color, bool fill) {
   SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
   SDL_Rect rc{x, y, w, h};

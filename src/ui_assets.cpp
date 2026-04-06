@@ -24,6 +24,7 @@ void DestroyUiAssets(UiAssets &assets, const BeforeDestroyTextureFn &before_dest
   DestroyTexture(assets.settings_preview_theme, before_destroy);
   DestroyTexture(assets.settings_preview_animations, before_destroy);
   DestroyTexture(assets.settings_preview_audio, before_destroy);
+  DestroyTexture(assets.settings_preview_default, before_destroy);
   DestroyTexture(assets.settings_preview_keyguide, before_destroy);
   DestroyTexture(assets.settings_preview_contact, before_destroy);
   DestroyTexture(assets.settings_preview_clean_history, before_destroy);

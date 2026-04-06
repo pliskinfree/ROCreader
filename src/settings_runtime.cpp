@@ -1,17 +1,20 @@
 #include "settings_runtime.h"
+#include "contributor_avatar_runtime.h"
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 namespace {
 std::string SettingLabel(SettingId id) {
   switch (id) {
-  case SettingId::KeyGuide: return std::string(u8"按键说明");
-  case SettingId::ClearHistory: return std::string(u8"清除历史");
-  case SettingId::CleanCache: return std::string(u8"清除缓存");
-  case SettingId::TxtToUtf8: return std::string(u8"TXT转码");
-  case SettingId::ContactMe: return std::string(u8"联系我");
-  case SettingId::ExitApp: return std::string(u8"退出");
+  case SettingId::KeyGuide: return std::string(u8"\u6309\u952e\u8bf4\u660e");
+  case SettingId::ClearHistory: return std::string(u8"\u6e05\u9664\u5386\u53f2");
+  case SettingId::CleanCache: return std::string(u8"\u6e05\u9664\u7f13\u5b58");
+  case SettingId::TxtToUtf8: return std::string(u8"TXT\u8f6c\u7801");
+  case SettingId::ContributorAvatars: return std::string(u8"\u8d21\u732e\u8005\u5934\u50cf");
+  case SettingId::ContactMe: return std::string(u8"\u8054\u7cfb\u6211");
+  case SettingId::ExitApp: return std::string(u8"\u9000\u51fa");
   }
   return {};
 }
@@ -22,10 +25,11 @@ SDL_Texture *SelectedPreviewTexture(const UiAssets &ui_assets, SettingId id) {
   case SettingId::ClearHistory: return ui_assets.settings_preview_clean_history;
   case SettingId::CleanCache: return ui_assets.settings_preview_clean_cache;
   case SettingId::TxtToUtf8: return ui_assets.settings_preview_txt_to_utf8;
+  case SettingId::ContributorAvatars: return ui_assets.settings_preview_default;
   case SettingId::ContactMe: return ui_assets.settings_preview_contact;
   case SettingId::ExitApp: return ui_assets.settings_preview_exit;
   }
-  return nullptr;
+  return ui_assets.settings_preview_default;
 }
 }
 
@@ -45,7 +49,13 @@ void HandleSettingsInput(SettingsRuntimeInputDeps &deps) {
     if (!any_toggle_held) deps.settings_close_armed = true;
   }
 
-  if (deps.settings_close_armed && deps.settings_toggle_guard <= 0.0f && !deps.menu_closing &&
+  const int menu_count = static_cast<int>(deps.menu_items.size());
+  const SettingId current_id =
+      menu_count > 0 ? deps.menu_items[std::clamp(deps.menu_selected, 0, menu_count - 1)] : SettingId::KeyGuide;
+  const bool avatar_grid_active =
+      current_id == SettingId::ContributorAvatars && deps.contributor_avatar_state.grid_active;
+
+  if (!avatar_grid_active && deps.settings_close_armed && deps.settings_toggle_guard <= 0.0f && !deps.menu_closing &&
       (deps.input.IsJustPressed(Button::B) || deps.menu_toggle_request)) {
     if (deps.ui_cfg.animations) deps.menu_anim.AnimateTo(0.0f, 0.16f, animation::Ease::InOutCubic);
     else deps.menu_anim.Snap(0.0f);
@@ -55,12 +65,20 @@ void HandleSettingsInput(SettingsRuntimeInputDeps &deps) {
 
   if (deps.menu_closing) return;
 
+  if (menu_count <= 0) return;
+
+  const SettingId id = current_id;
+  if (id == SettingId::ContributorAvatars &&
+      HandleContributorAvatarInput(deps.input, deps.dt, deps.contributor_avatar_state, deps.contributor_avatar_count,
+                                   deps.on_contributor_avatar_confirm)) {
+    return;
+  }
+
   if (deps.input.IsJustPressed(Button::Up) || deps.input.IsRepeated(Button::Up)) {
-    deps.menu_selected = std::clamp(deps.menu_selected - 1, 0, static_cast<int>(deps.menu_items.size()) - 1);
+    deps.menu_selected = (deps.menu_selected - 1 + menu_count) % menu_count;
   } else if (deps.input.IsJustPressed(Button::Down) || deps.input.IsRepeated(Button::Down)) {
-    deps.menu_selected = std::clamp(deps.menu_selected + 1, 0, static_cast<int>(deps.menu_items.size()) - 1);
+    deps.menu_selected = (deps.menu_selected + 1) % menu_count;
   } else if (deps.input.IsJustPressed(Button::A) || deps.input.IsJustPressed(Button::Right)) {
-    const SettingId id = deps.menu_items[deps.menu_selected];
     if (id == SettingId::ExitApp) {
       if (deps.on_exit_app) deps.on_exit_app();
     } else if (id == SettingId::ClearHistory) {
@@ -88,6 +106,7 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
   const int preview_x = x + menu_width;
   const int preview_w = std::max(0, deps.layout.screen_w - preview_x);
   int preview_center_x = preview_x + preview_w / 2;
+  SDL_Rect preview_rect{preview_x, menu_y, preview_w, menu_h};
   if (preview_w > 0) {
     const SettingId selected =
         deps.menu_items[std::clamp(deps.menu_selected, 0, static_cast<int>(deps.menu_items.size()) - 1)];
@@ -98,17 +117,18 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
       deps.get_texture_size(preview_tex, pw, ph);
       SDL_Rect pd{preview_x, menu_y, pw, ph};
       SDL_RenderCopy(deps.renderer, preview_tex, nullptr, &pd);
+      preview_rect = pd;
       preview_center_x = pd.x + pd.w / 2;
     }
   }
 
-  deps.draw_rect(x, menu_y, menu_width, menu_h, SDL_Color{24, 34, 46, 236}, true);
+  deps.draw_rect(x, menu_y, menu_width, menu_h, SDL_Color{24, 34, 46, 255}, true);
   deps.draw_rect(x + menu_width - 1, menu_y, 1, menu_h, SDL_Color{82, 125, 158, 255}, true);
 
   int text_left = x + 32;
   int y = menu_y + 84 + deps.layout.settings_content_offset_y;
 #ifdef HAVE_SDL2_TTF
-  const std::string menu_title = std::string(u8"ROC全能漫画阅读器");
+  const std::string menu_title = std::string(u8"ROC\u5168\u80fd\u6f2b\u753b\u9605\u8bfb\u5668");
   const SDL_Color title_color{240, 246, 255, 255};
   const SDL_Color item_color{230, 236, 248, 255};
   TextCacheEntry *title_tex = deps.get_title_text_texture ? deps.get_title_text_texture(menu_title, title_color) : nullptr;
@@ -154,6 +174,17 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
 
   const SettingId selected =
       deps.menu_items[std::clamp(deps.menu_selected, 0, static_cast<int>(deps.menu_items.size()) - 1)];
+  if (selected == SettingId::ContributorAvatars && !deps.contributor_avatar_entries.empty()) {
+    DrawContributorAvatarPreview(ContributorAvatarRenderDeps{
+        deps.renderer,
+        preview_rect,
+        deps.contributor_avatar_entries,
+        deps.contributor_avatar_state,
+        deps.draw_rect,
+        deps.get_text_texture,
+    });
+  }
+
   if (selected == SettingId::TxtToUtf8 && deps.txt_transcode_job.active) {
     const int bar_w = std::min(260, std::max(160, preview_w - 36));
     const int bar_h = 14;
@@ -171,9 +202,10 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
 #ifdef HAVE_SDL2_TTF
     if (deps.get_text_texture) {
       const int pct = std::clamp(static_cast<int>(std::lround(progress * 100.0f)), 0, 100);
-      const std::string progress_text = std::string(u8"转码中 ") + std::to_string(deps.txt_transcode_job.processed) +
-                                        "/" + std::to_string(deps.txt_transcode_job.total) + "  (" +
-                                        std::to_string(pct) + "%)";
+      const std::string progress_text = std::string(u8"\u8f6c\u7801\u4e2d ") +
+                                        std::to_string(deps.txt_transcode_job.processed) + "/" +
+                                        std::to_string(deps.txt_transcode_job.total) + "  (" + std::to_string(pct) +
+                                        "%)";
       TextCacheEntry *progress_tex = deps.get_text_texture(progress_text, SDL_Color{245, 248, 252, 255});
       if (progress_tex && progress_tex->texture) {
         SDL_Rect pd{preview_center_x - progress_tex->w / 2, bar_y + bar_h + 10, progress_tex->w, progress_tex->h};

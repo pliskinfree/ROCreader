@@ -19,6 +19,7 @@ struct UiAssets {
   SDL_Texture *settings_preview_theme = nullptr;
   SDL_Texture *settings_preview_animations = nullptr;
   SDL_Texture *settings_preview_audio = nullptr;
+  SDL_Texture *settings_preview_default = nullptr;
   SDL_Texture *settings_preview_keyguide = nullptr;
   SDL_Texture *settings_preview_contact = nullptr;
   SDL_Texture *settings_preview_clean_history = nullptr;

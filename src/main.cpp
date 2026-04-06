@@ -42,6 +42,7 @@
 #include "audio_runtime.h"
 #include "book_scanner.h"
 #include "boot_runtime.h"
+#include "contributor_avatar_runtime.h"
 #include "cover_service.h"
 #include "epub_runtime.h"
 #include "epub_reader.h"
@@ -704,6 +705,50 @@ int main(int, char **) {
     std::cout << "[native_h700] ui root: " << ui_assets_load_result.ui_root_hit.string() << "\n";
   }
 
+  std::vector<ContributorAvatarEntry> contributor_avatar_entries;
+  auto resolve_ui_root = [&]() -> std::filesystem::path {
+    if (!ui_assets_load_result.ui_root_hit.empty()) return ui_assets_load_result.ui_root_hit;
+    const std::vector<std::filesystem::path> candidates = {
+        exe_path / "ui",
+        exe_path / ".." / "ui",
+        std::filesystem::current_path() / "ui",
+    };
+    for (const auto &candidate : candidates) {
+      if (std::filesystem::exists(candidate)) return candidate.lexically_normal();
+    }
+    return {};
+  };
+  LoadContributorAvatarEntries(contributor_avatar_entries, resolve_ui_root(), exe_path, renderer,
+                               LoadSurfaceFromMemory, remember_texture_size, forget_texture_size);
+  SDL_Texture *selected_avatar_badge_texture = nullptr;
+  auto destroy_selected_avatar_badge_texture = [&]() {
+    if (!selected_avatar_badge_texture) return;
+    forget_texture_size(selected_avatar_badge_texture);
+    SDL_DestroyTexture(selected_avatar_badge_texture);
+    selected_avatar_badge_texture = nullptr;
+  };
+  auto update_selected_avatar_badge_texture = [&](int selected_index) {
+    destroy_selected_avatar_badge_texture();
+    if (selected_index < 0 || selected_index >= static_cast<int>(contributor_avatar_entries.size())) return;
+    SDL_Texture *source = contributor_avatar_entries[selected_index].texture;
+    if (!source) return;
+    selected_avatar_badge_texture = CreateScaledTextureCache(renderer, source, 28, 28);
+    if (!selected_avatar_badge_texture) return;
+    remember_texture_size(selected_avatar_badge_texture, 28, 28);
+  };
+  auto initialize_selected_avatar_badge_texture = [&]() {
+    if (contributor_avatar_entries.empty()) return;
+    int default_index = 0;
+    for (size_t i = 0; i < contributor_avatar_entries.size(); ++i) {
+      if (contributor_avatar_entries[i].label.find(u8"贡献值MAX") != std::string::npos) {
+        default_index = static_cast<int>(i);
+        break;
+      }
+    }
+    update_selected_avatar_badge_texture(default_index);
+  };
+  initialize_selected_avatar_badge_texture();
+
   std::vector<std::string> books_roots = storage_paths::DetectBooksRoots();
   std::vector<std::string> cover_roots = storage_paths::DetectCoverRoots();
   std::filesystem::path txt_layout_cache_dir =
@@ -855,9 +900,11 @@ int main(int, char **) {
       SettingId::ClearHistory,
       SettingId::CleanCache,
       SettingId::TxtToUtf8,
+      SettingId::ContributorAvatars,
       SettingId::ContactMe,
       SettingId::ExitApp};
   int menu_selected = 0;
+  ContributorAvatarState contributor_avatar_state{};
   TxtTranscodeJob txt_transcode_job{};
   ReaderUiState reader_ui{};
   std::string &current_book = reader_ui.current_book;
@@ -1622,6 +1669,7 @@ int main(int, char **) {
       HandleShelfInput(shelf_input_deps);
     } else if (state == State::Settings) {
       const NativeConfig &ui_cfg = config.Get();
+      SyncContributorAvatarState(contributor_avatar_state, contributor_avatar_entries.size());
       SettingsRuntimeInputDeps settings_input_deps{
           input,
           ui_cfg,
@@ -1632,6 +1680,9 @@ int main(int, char **) {
           menu_selected,
           menu_items,
           menu_anim,
+          contributor_avatar_state,
+          contributor_avatar_entries.size(),
+          [&](int selected_index) { update_selected_avatar_badge_texture(selected_index); },
           false,
           [&]() { state = settings_return_state; },
           [&]() { running = false; },
@@ -1898,7 +1949,7 @@ int main(int, char **) {
           SDL_RenderCopy(renderer, te->texture, nullptr, &td);
 #endif
         };
-        draw_system_status_overlay = [&]() {
+          draw_system_status_overlay = [&]() {
 #ifdef HAVE_SDL2_TTF
           const SystemStatusSnapshot &status = system_status.Snapshot();
           SDL_Color text_color{238, 242, 250, 255};
@@ -1927,6 +1978,18 @@ int main(int, char **) {
               SDL_Rect td{clock_x, clock_y, clock_tex->w, clock_tex->h};
               SDL_RenderCopy(renderer, clock_tex->texture, nullptr, &td);
             }
+          }
+
+          const int avatar_badge_size = 28;
+          const int avatar_badge_x = Layout().screen_w - 12 - avatar_badge_size;
+          const int avatar_badge_y = 4;
+          DrawRect(renderer, avatar_badge_x, avatar_badge_y, avatar_badge_size, avatar_badge_size,
+                   SDL_Color{26, 32, 42, 220}, true);
+          DrawRect(renderer, avatar_badge_x, avatar_badge_y, avatar_badge_size, avatar_badge_size,
+                   SDL_Color{152, 185, 210, 235}, false);
+          if (selected_avatar_badge_texture) {
+            SDL_Rect avatar_dst{avatar_badge_x, avatar_badge_y, avatar_badge_size, avatar_badge_size};
+            SDL_RenderCopy(renderer, selected_avatar_badge_texture, nullptr, &avatar_dst);
           }
 
           if (status.battery_available) {
@@ -2148,6 +2211,8 @@ int main(int, char **) {
             menu_anim,
             kSidebarMaskMaxAlpha,
             txt_transcode_job,
+            contributor_avatar_entries,
+            contributor_avatar_state,
             SettingsRuntimeLayout{
                 Layout().screen_w,
                 Layout().screen_h,
@@ -2239,6 +2304,8 @@ int main(int, char **) {
   }
   flush_deferred_writes(true);
   clear_cover_cache();
+  destroy_selected_avatar_badge_texture();
+  DestroyContributorAvatarEntries(contributor_avatar_entries, forget_texture_size);
   DestroyUiAssets(ui_assets, forget_texture_size);
 #ifdef HAVE_SDL2_TTF
   ShutdownUiTextCache(ui_text_cache, forget_texture_size);
