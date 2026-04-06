@@ -209,7 +209,15 @@ std::vector<std::string> DetectBooksRoots() {
   AddNamedDirsRecursively(out, card1, "books");
   AddNamedDirsRecursively(out, card2, "books");
 #ifdef _WIN32
-  // Local dev fallback (Windows only).
+  // Local dev fallbacks (Windows only).
+  std::error_code ec;
+  const fs::path cwd = fs::current_path(ec);
+  if (!ec) {
+    AddIfDirExists(out, cwd / "books");
+    AddIfDirExists(out, cwd / "ROCreader" / "books");
+    AddIfDirExists(out, cwd.parent_path() / "books");
+    AddIfDirExists(out, cwd.parent_path() / "ROCreader" / "books");
+  }
   AddIfDirExists(out, fs::path("../books"));
 #endif
   return out;
@@ -223,7 +231,15 @@ std::vector<std::string> DetectCoverRoots() {
   AddNamedDirsRecursively(out, card1, "book_covers");
   AddNamedDirsRecursively(out, card2, "book_covers");
 #ifdef _WIN32
-  // Local dev fallback (Windows only).
+  // Local dev fallbacks (Windows only).
+  std::error_code ec;
+  const fs::path cwd = fs::current_path(ec);
+  if (!ec) {
+    AddIfDirExists(out, cwd / "book_covers");
+    AddIfDirExists(out, cwd / "ROCreader" / "book_covers");
+    AddIfDirExists(out, cwd.parent_path() / "book_covers");
+    AddIfDirExists(out, cwd.parent_path() / "ROCreader" / "book_covers");
+  }
   AddIfDirExists(out, fs::path("../book_covers"));
 #endif
   return out;

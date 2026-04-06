@@ -275,8 +275,23 @@ struct EpubRuntime::Impl {
     return (rotation == 90 || rotation == 270) ? screen_w : screen_h;
   }
 
+  bool HasPrevPage(const EpubState &state) const { return state.location.page_num > 0; }
+
+  bool HasNextPage(const EpubState &state) const {
+    return state.location.page_num + 1 < std::max(1, reader.PageCount());
+  }
+
   int MaxYOffset(const EpubState &state) const {
     return std::max(0, RenderedFlowExtent(state) - ViewportFlowExtent(state));
+  }
+
+  int TransitionStartYOffset(const EpubState &state) const { return MaxYOffset(state); }
+
+  int NormalizeCarryPrev(const EpubState &state) const {
+    EpubState prev = state;
+    --prev.location.page_num;
+    prev.location.y_offset = 0;
+    return RenderedFlowExtent(prev);
   }
 
   void ClampYOffsetCurrentPage(EpubState &state) const {
@@ -286,21 +301,24 @@ struct EpubRuntime::Impl {
 
   void NormalizeState(EpubState &state) const {
     ClampPage(state.location);
-    const int page_count = std::max(1, reader.PageCount());
-
-    while (state.location.y_offset < 0 && state.location.page_num > 0) {
+    while (state.location.y_offset < 0 && HasPrevPage(state)) {
+      state.location.y_offset += NormalizeCarryPrev(state);
       --state.location.page_num;
-      state.location.y_offset = MaxYOffset(state);
     }
 
-    while (state.location.page_num + 1 < page_count) {
-      const int current_max = MaxYOffset(state);
-      if (state.location.y_offset <= current_max) break;
+    while (HasNextPage(state)) {
+      const int current_extent = RenderedFlowExtent(state);
+      if (state.location.y_offset < current_extent) break;
+      state.location.y_offset -= current_extent;
       ++state.location.page_num;
+    }
+
+    if (!HasPrevPage(state) && state.location.y_offset < 0) {
       state.location.y_offset = 0;
     }
-
-    state.location.y_offset = std::clamp(state.location.y_offset, 0, MaxYOffset(state));
+    if (!HasNextPage(state)) {
+      state.location.y_offset = std::clamp(state.location.y_offset, 0, MaxYOffset(state));
+    }
   }
 
   void RecenterAfterVisualChange(EpubState &state, const ViewState &old_view, int old_y_offset) const {
@@ -390,6 +408,23 @@ struct EpubRuntime::Impl {
   bool HasVisualTextureForState(const EpubState &state) const {
     if (visible_source.valid && visible_source.state.SameVisualState(state)) return true;
     return FindCacheEntryForVisual(state) >= 0;
+  }
+
+  VisibleContentSource LookupSourceForState(const EpubState &state) const {
+    if (visible_source.valid && visible_source.texture && visible_source.state.SameVisualState(state)) {
+      return visible_source;
+    }
+    const int cache_index = FindCacheEntryForVisual(state);
+    if (cache_index < 0) return {};
+    const CachedTextureEntry &entry = texture_cache[cache_index];
+    if (!entry.valid || !entry.texture) return {};
+    VisibleContentSource source;
+    source.texture = entry.texture;
+    source.texture_w = entry.texture_w;
+    source.texture_h = entry.texture_h;
+    source.state = entry.state;
+    source.valid = true;
+    return source;
   }
 
   bool ShouldCacheState(const EpubState &state) const {
@@ -497,6 +532,28 @@ struct EpubRuntime::Impl {
     SchedulePrefetchLocked();
     SDL_UnlockMutex(mutex);
     return true;
+  }
+
+  bool ShouldPrimeAdjacentPage(const EpubState &state, int dir) const {
+    if (dir >= 0) {
+      if (!HasNextPage(state)) return false;
+      const int warmup_start = std::max(0, TransitionStartYOffset(state) - ViewportFlowExtent(state));
+      return state.location.y_offset >= warmup_start;
+    }
+    if (!HasPrevPage(state)) return false;
+    return state.location.y_offset <= ViewportFlowExtent(state);
+  }
+
+  void QueueAdjacentPrefetchLocked(int dir) {
+    EpubState candidate = target_state;
+    candidate.location.page_num += (dir >= 0) ? 1 : -1;
+    candidate.location.y_offset = 0;
+    if (candidate.location.page_num < 0 || candidate.location.page_num >= reader.PageCount()) return;
+    ClampPage(candidate.location);
+    if (HasVisualTextureForState(candidate)) return;
+    prefetched_state = candidate;
+    prefetch_active = true;
+    SDL_CondSignal(cond);
   }
 
   void MarkInteraction() { last_interaction_ticks = SDL_GetTicks(); }
@@ -727,6 +784,84 @@ struct EpubRuntime::Impl {
     if (!layout.valid) return;
     SDL_RenderCopy(renderer, source.texture, &layout.src, &layout.dst);
   }
+
+  bool DrawContinuousNextPage(SDL_Renderer *renderer, const EpubState &state) const {
+    if (!renderer) return false;
+    if (!HasNextPage(state)) return false;
+
+    const int rotation = NormalizeRotation(state.view.rotation);
+    const int transition_start = TransitionStartYOffset(state);
+    if (state.location.y_offset <= transition_start) return false;
+
+    const VisibleContentSource current_source = LookupSourceForState(state);
+    if (!current_source.valid || !current_source.texture) return false;
+
+    EpubState next_state = state;
+    ++next_state.location.page_num;
+    next_state.location.y_offset = 0;
+    const VisibleContentSource next_source = LookupSourceForState(next_state);
+    if (!next_source.valid || !next_source.texture) return false;
+
+    const bool horizontal_flow = (rotation == 90 || rotation == 270);
+    const bool positive_flow = (rotation == 0 || rotation == 270);
+    const int viewport_extent = ViewportFlowExtent(state);
+    const int overflow = std::clamp(state.location.y_offset - transition_start, 0, viewport_extent);
+    if (overflow <= 0) return false;
+    const int current_visible = std::max(0, viewport_extent - overflow);
+
+    if (current_visible > 0) {
+      ViewportLayout current_layout =
+          ComputeViewportLayout(state, current_source.texture_w, current_source.texture_h);
+      if (current_layout.valid) {
+        if (horizontal_flow) {
+          const int src_start = positive_flow
+                                    ? std::clamp(state.location.y_offset, 0,
+                                                 std::max(0, current_source.texture_w - current_visible))
+                                    : std::clamp(current_source.texture_w - state.location.y_offset - current_visible,
+                                                 0, std::max(0, current_source.texture_w - current_visible));
+          current_layout.src.x = src_start;
+          current_layout.src.w = std::min(current_visible, current_source.texture_w - current_layout.src.x);
+          current_layout.dst.x = positive_flow ? 0 : overflow;
+          current_layout.dst.w = current_layout.src.w;
+        } else {
+          const int src_start = positive_flow
+                                    ? std::clamp(state.location.y_offset, 0,
+                                                 std::max(0, current_source.texture_h - current_visible))
+                                    : std::clamp(current_source.texture_h - state.location.y_offset - current_visible,
+                                                 0, std::max(0, current_source.texture_h - current_visible));
+          current_layout.src.y = src_start;
+          current_layout.src.h = std::min(current_visible, current_source.texture_h - current_layout.src.y);
+          current_layout.dst.y = positive_flow ? 0 : overflow;
+          current_layout.dst.h = current_layout.src.h;
+        }
+        if (current_layout.src.w > 0 && current_layout.src.h > 0 &&
+            current_layout.dst.w > 0 && current_layout.dst.h > 0) {
+          SDL_RenderCopy(renderer, current_source.texture, &current_layout.src, &current_layout.dst);
+        }
+      }
+    }
+
+    ViewportLayout next_layout = ComputeViewportLayout(next_state, next_source.texture_w, next_source.texture_h);
+    if (!next_layout.valid) return true;
+    if (horizontal_flow) {
+      const int src_start = positive_flow ? 0 : std::max(0, next_source.texture_w - overflow);
+      next_layout.src.x = src_start;
+      next_layout.src.w = std::min(overflow, next_source.texture_w - next_layout.src.x);
+      next_layout.dst.x = positive_flow ? current_visible : 0;
+      next_layout.dst.w = next_layout.src.w;
+    } else {
+      const int src_start = positive_flow ? 0 : std::max(0, next_source.texture_h - overflow);
+      next_layout.src.y = src_start;
+      next_layout.src.h = std::min(overflow, next_source.texture_h - next_layout.src.y);
+      next_layout.dst.y = positive_flow ? current_visible : 0;
+      next_layout.dst.h = next_layout.src.h;
+    }
+    if (next_layout.src.w > 0 && next_layout.src.h > 0 &&
+        next_layout.dst.w > 0 && next_layout.dst.h > 0) {
+      SDL_RenderCopy(renderer, next_source.texture, &next_layout.src, &next_layout.dst);
+    }
+    return true;
+  }
 };
 
 EpubRuntime::EpubRuntime() : impl_(new Impl()) {}
@@ -909,6 +1044,7 @@ void EpubRuntime::Draw(SDL_Renderer *renderer) const {
   if (exact) {
     EpubState draw_state = impl_->display_state;
     draw_state.location.y_offset = impl_->target_state.location.y_offset;
+    if (impl_->DrawContinuousNextPage(renderer, draw_state)) return;
     impl_->DrawVisibleSource(renderer, impl_->visible_source, draw_state);
     return;
   }
@@ -999,6 +1135,13 @@ void EpubRuntime::ScrollByPixels(int delta_px) {
     SDL_LockMutex(impl_->mutex);
     impl_->RequestRenderLocked();
     SDL_UnlockMutex(impl_->mutex);
+    return;
+  }
+
+  if (impl_->ShouldPrimeAdjacentPage(impl_->target_state, impl_->preferred_prefetch_dir)) {
+    SDL_LockMutex(impl_->mutex);
+    impl_->QueueAdjacentPrefetchLocked(impl_->preferred_prefetch_dir);
+    SDL_UnlockMutex(impl_->mutex);
   }
 }
 
@@ -1013,6 +1156,13 @@ void EpubRuntime::JumpByScreen(int direction) {
     if (impl_->TryUseCachedTarget()) return;
     SDL_LockMutex(impl_->mutex);
     impl_->RequestRenderLocked();
+    SDL_UnlockMutex(impl_->mutex);
+    return;
+  }
+
+  if (impl_->ShouldPrimeAdjacentPage(impl_->target_state, impl_->preferred_prefetch_dir)) {
+    SDL_LockMutex(impl_->mutex);
+    impl_->QueueAdjacentPrefetchLocked(impl_->preferred_prefetch_dir);
     SDL_UnlockMutex(impl_->mutex);
   }
 }

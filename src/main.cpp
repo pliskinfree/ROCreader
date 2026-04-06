@@ -1500,7 +1500,7 @@ int main(int, char **) {
             const std::string &real_path = item_real_path(item);
             const std::filesystem::path real_fs_path = item_fs_path(item);
             const std::string ext = GetLowerExt(real_path);
-            const std::string open_path = real_fs_path.empty() ? real_path : real_fs_path.native();
+            const std::string open_path = real_fs_path.empty() ? real_path : real_fs_path.string();
             reader = get_compatible_progress(item);
             ReaderOpenDeps open_deps{
                 renderer,
