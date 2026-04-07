@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <unordered_set>
 #include <unordered_map>
 #include <vector>
 
@@ -175,7 +176,7 @@ std::vector<PackedUiAsset> LoadPackedAvatarAssets(const std::filesystem::path &e
       }
 
       const bool is_avatar = name.rfind("avatar_", 0) == 0;
-      const bool is_rank_frame = ParseRankFrameOrderName(name) >= 1;
+      const bool is_rank_frame = ParseRankFrameOrderName(name) >= 0;
       if (is_avatar || is_rank_frame) {
         packed_assets.push_back(PackedUiAsset{name, std::move(payload)});
       }
@@ -222,12 +223,13 @@ float ComputeEffectiveMarqueeDt(float dt, ContributorAvatarState &state) {
 
 void DestroyContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entries,
                                      const std::function<void(SDL_Texture *)> &before_destroy) {
+  std::unordered_set<SDL_Texture *> destroyed_rank_frames;
   for (ContributorAvatarEntry &entry : entries) {
-    if (entry.rank_frame) {
+    if (entry.rank_frame && destroyed_rank_frames.insert(entry.rank_frame).second) {
       if (before_destroy) before_destroy(entry.rank_frame);
       SDL_DestroyTexture(entry.rank_frame);
-      entry.rank_frame = nullptr;
     }
+    entry.rank_frame = nullptr;
     if (!entry.texture) continue;
     if (before_destroy) before_destroy(entry.texture);
     SDL_DestroyTexture(entry.texture);
@@ -267,7 +269,7 @@ void LoadContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entries, 
       }
 
       const int rank_order = ParseRankFrameOrderName(asset.name);
-      if (rank_order < 1 || rank_order > 3 || rank_frames.count(rank_order) > 0) continue;
+      if (rank_order < 0 || rank_order > 3 || rank_frames.count(rank_order) > 0) continue;
       SDL_Surface *surface = load_surface_from_memory(asset.payload.data(), asset.payload.size());
       if (!surface) continue;
       SDL_Texture *rank_frame = CreateTextureFromSurface(renderer, surface);
@@ -289,7 +291,7 @@ void LoadContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entries, 
     for (const auto &entry : std::filesystem::directory_iterator(ui_root)) {
       if (!entry.is_regular_file()) continue;
       const int rank_order = ParseRankFrameOrder(entry.path());
-      if (rank_order < 1 || rank_order > 3 || rank_frames.count(rank_order) > 0) continue;
+      if (rank_order < 0 || rank_order > 3 || rank_frames.count(rank_order) > 0) continue;
 
       SDL_Texture *rank_frame = LoadTextureFromFile(renderer, entry.path().string());
       if (!rank_frame) continue;
@@ -327,6 +329,7 @@ void LoadContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entries, 
   candidates.insert(candidates.end(), ranked_candidates.begin(), ranked_candidates.begin() + insert_pos);
   candidates.insert(candidates.end(), max_candidates.begin(), max_candidates.end());
   candidates.insert(candidates.end(), ranked_candidates.begin() + insert_pos, ranked_candidates.end());
+  const bool has_max_candidates = !max_candidates.empty();
 
   for (size_t i = 0; i < candidates.size(); ++i) {
     const AvatarCandidate &candidate = candidates[i];
@@ -349,13 +352,25 @@ void LoadContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entries, 
     SDL_QueryTexture(texture, nullptr, nullptr, &width, &height);
     if (remember_texture_size) remember_texture_size(texture, width, height);
     SDL_Texture *rank_frame = nullptr;
-    const int rank_order = static_cast<int>(i) + 1;
-    auto rank_it = rank_frames.find(rank_order);
-    if (rank_order <= 3 && rank_it != rank_frames.end()) {
-      rank_frame = rank_it->second;
-      rank_frames.erase(rank_it);
+    if (candidate.contribution_is_max) {
+      auto max_frame_it = rank_frames.find(0);
+      if (max_frame_it != rank_frames.end()) rank_frame = max_frame_it->second;
+    } else {
+      const int rank_order = static_cast<int>(i) + 1;
+      auto rank_it = rank_frames.find(rank_order);
+      if (rank_order <= 3 && rank_it != rank_frames.end()) {
+        rank_frame = rank_it->second;
+        rank_frames.erase(rank_it);
+      }
     }
     entries.push_back(ContributorAvatarEntry{texture, rank_frame, candidate.label});
+  }
+
+  if (has_max_candidates) {
+    auto max_frame_it = rank_frames.find(0);
+    if (max_frame_it != rank_frames.end()) {
+      rank_frames.erase(max_frame_it);
+    }
   }
 
   for (const auto &rank_pair : rank_frames) {
