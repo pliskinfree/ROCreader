@@ -23,6 +23,7 @@ struct ContributorAvatarState {
   int marquee_focus_index = -1;
   float marquee_wait = 0.0f;
   float marquee_offset = 0.0f;
+  uint32_t marquee_last_tick_ms = 0;
 };
 
 struct ContributorAvatarRenderDeps {

@@ -203,9 +203,21 @@ void EnsureFocusedVisible(ContributorAvatarState &state, size_t entry_count) {
   state.scroll_row = std::clamp(state.scroll_row, 0, max_scroll_row);
 }
 
-constexpr float kAvatarNameMarqueePauseSec = 0.08f;
-constexpr float kAvatarNameMarqueeSpeedPx = 72.0f;
-constexpr float kAvatarNameMarqueeGapPx = 8.0f;
+constexpr float kAvatarNameMarqueePauseSec = 0.0f;
+constexpr float kAvatarNameMarqueeSpeedPx = 84.0f;
+constexpr float kAvatarNameMarqueeGapPx = 4.0f;
+
+float ComputeEffectiveMarqueeDt(float dt, ContributorAvatarState &state) {
+  const uint32_t now = SDL_GetTicks();
+  float effective_dt = dt;
+  if (state.marquee_last_tick_ms != 0) {
+    const float tick_dt =
+        static_cast<float>(now - state.marquee_last_tick_ms) / 1000.0f;
+    if (tick_dt > 0.0f) effective_dt = tick_dt;
+  }
+  state.marquee_last_tick_ms = now;
+  return std::clamp(effective_dt, 0.0f, 0.05f);
+}
 }
 
 void DestroyContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entries,
@@ -362,6 +374,7 @@ void SyncContributorAvatarState(ContributorAvatarState &state, size_t entry_coun
     state.marquee_focus_index = -1;
     state.marquee_wait = 0.0f;
     state.marquee_offset = 0.0f;
+    state.marquee_last_tick_ms = 0;
     return;
   }
   state.focus_index = std::clamp(state.focus_index, 0, static_cast<int>(entry_count) - 1);
@@ -377,6 +390,7 @@ bool HandleContributorAvatarInput(const InputManager &input, float dt, Contribut
     state.marquee_focus_index = -1;
     state.marquee_wait = 0.0f;
     state.marquee_offset = 0.0f;
+    state.marquee_last_tick_ms = 0;
     return false;
   }
 
@@ -385,11 +399,14 @@ bool HandleContributorAvatarInput(const InputManager &input, float dt, Contribut
     state.marquee_focus_index = state.focus_index;
     state.marquee_wait = kAvatarNameMarqueePauseSec;
     state.marquee_offset = 0.0f;
+    state.marquee_last_tick_ms = SDL_GetTicks();
   } else {
+    const float effective_dt = ComputeEffectiveMarqueeDt(dt, state);
     if (state.marquee_wait > 0.0f) {
-      state.marquee_wait = std::max(0.0f, state.marquee_wait - dt);
-    } else {
-      state.marquee_offset += kAvatarNameMarqueeSpeedPx * dt;
+      state.marquee_wait = std::max(0.0f, state.marquee_wait - effective_dt);
+    }
+    if (state.marquee_wait <= 0.0f) {
+      state.marquee_offset += kAvatarNameMarqueeSpeedPx * effective_dt;
       if (state.marquee_offset > 8192.0f) {
         state.marquee_offset = std::fmod(state.marquee_offset, 8192.0f);
       }
@@ -401,6 +418,7 @@ bool HandleContributorAvatarInput(const InputManager &input, float dt, Contribut
       state.marquee_focus_index = state.focus_index;
       state.marquee_wait = kAvatarNameMarqueePauseSec;
       state.marquee_offset = 0.0f;
+      state.marquee_last_tick_ms = SDL_GetTicks();
       return true;
     }
     return false;
@@ -413,6 +431,7 @@ bool HandleContributorAvatarInput(const InputManager &input, float dt, Contribut
 
   if (input.IsJustPressed(Button::B)) {
     state.grid_active = false;
+    state.marquee_last_tick_ms = SDL_GetTicks();
     return true;
   }
   if (input.IsJustPressed(Button::A)) {
@@ -437,6 +456,7 @@ bool HandleContributorAvatarInput(const InputManager &input, float dt, Contribut
     state.marquee_focus_index = state.focus_index;
     state.marquee_wait = kAvatarNameMarqueePauseSec;
     state.marquee_offset = 0.0f;
+    state.marquee_last_tick_ms = SDL_GetTicks();
   }
   return true;
 }
@@ -480,6 +500,8 @@ void DrawContributorAvatarPreview(const ContributorAvatarRenderDeps &deps) {
     const int draw_image_size = static_cast<int>(std::lround(image_size * scale));
     const int image_x = tile_x + (tile_w - draw_image_size) / 2;
     const int image_y = tile_y;
+    const int label_w = image_size;
+    const int label_x = tile_x + (tile_w - label_w) / 2;
     const int label_y = tile_y + draw_image_size + name_gap;
 
     if (label_y + name_h < safe_top || image_y > safe_bottom) continue;
@@ -501,22 +523,22 @@ void DrawContributorAvatarPreview(const ContributorAvatarRenderDeps &deps) {
     if (deps.get_text_texture && !deps.entries[i].label.empty()) {
       TextCacheEntry *label_tex = deps.get_text_texture(deps.entries[i].label, SDL_Color{235, 241, 248, 255});
       if (label_tex && label_tex->texture) {
-        SDL_Rect label_clip{tile_x, label_y, tile_w, name_h};
+        SDL_Rect label_clip{label_x, label_y, label_w, name_h};
         SDL_RenderSetClipRect(deps.renderer, &label_clip);
         const int draw_y = label_y + std::max(0, (name_h - label_tex->h) / 2);
-        if (label_tex->w <= tile_w) {
-          const int centered_x = tile_x + std::max(0, (tile_w - label_tex->w) / 2);
+        if (label_tex->w <= label_w) {
+          const int centered_x = label_x + std::max(0, (label_w - label_tex->w) / 2);
           SDL_Rect td{centered_x, draw_y, label_tex->w, label_tex->h};
           SDL_RenderCopy(deps.renderer, label_tex->texture, nullptr, &td);
         } else if (focused) {
           const float span = static_cast<float>(label_tex->w) + kAvatarNameMarqueeGapPx;
           const float xoff = span > 0.0f ? std::fmod(deps.state.marquee_offset, span) : 0.0f;
-          SDL_Rect td1{tile_x - static_cast<int>(std::round(xoff)), draw_y, label_tex->w, label_tex->h};
+          SDL_Rect td1{label_x - static_cast<int>(std::round(xoff)), draw_y, label_tex->w, label_tex->h};
           SDL_Rect td2{td1.x + static_cast<int>(std::round(span)), draw_y, label_tex->w, label_tex->h};
           SDL_RenderCopy(deps.renderer, label_tex->texture, nullptr, &td1);
           SDL_RenderCopy(deps.renderer, label_tex->texture, nullptr, &td2);
         } else {
-          SDL_Rect td{tile_x, draw_y, label_tex->w, label_tex->h};
+          SDL_Rect td{label_x, draw_y, label_tex->w, label_tex->h};
           SDL_RenderCopy(deps.renderer, label_tex->texture, nullptr, &td);
         }
         SDL_RenderSetClipRect(deps.renderer, &viewport);

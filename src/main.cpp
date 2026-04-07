@@ -166,6 +166,7 @@ constexpr float kSceneFadeFlashAlpha = 0.82f;
 constexpr float kSceneFadeFlashDurationSec = 0.18f;
 constexpr int kIdleWaitMs = 100;
 constexpr uint32_t kActiveFrameBudgetMs = 33;
+constexpr uint32_t kAvatarMarqueeFrameBudgetMs = 16;
 constexpr uint32_t kPeriodicTickFrameBudgetMs = 50;
 constexpr float kCardLerpSpeed = 18.0f;
 constexpr float kCardMoveLinearSpeedX = 860.0f;  // px/s for center move transition
@@ -736,16 +737,24 @@ int main(int, char **) {
     if (!selected_avatar_badge_texture) return;
     remember_texture_size(selected_avatar_badge_texture, 28, 28);
   };
-  auto initialize_selected_avatar_badge_texture = [&]() {
-    if (contributor_avatar_entries.empty()) return;
+  auto find_default_contributor_avatar_index = [&]() -> int {
+    if (contributor_avatar_entries.empty()) return 0;
     int default_index = 0;
     for (size_t i = 0; i < contributor_avatar_entries.size(); ++i) {
-      if (contributor_avatar_entries[i].label.find(u8"贡献值MAX") != std::string::npos) {
-        default_index = static_cast<int>(i);
-        break;
+      if (contributor_avatar_entries[i].label == u8"BloodROC_贡献值MAX") {
+        return static_cast<int>(i);
       }
     }
-    update_selected_avatar_badge_texture(default_index);
+    for (size_t i = 0; i < contributor_avatar_entries.size(); ++i) {
+      if (contributor_avatar_entries[i].label.find(u8"贡献值MAX") != std::string::npos) {
+        return static_cast<int>(i);
+      }
+    }
+    return default_index;
+  };
+  auto initialize_selected_avatar_badge_texture = [&]() {
+    if (contributor_avatar_entries.empty()) return;
+    update_selected_avatar_badge_texture(find_default_contributor_avatar_index());
   };
   initialize_selected_avatar_badge_texture();
 
@@ -1461,10 +1470,17 @@ int main(int, char **) {
     input.BeginFrame(dt);
     SDL_Event e;
     const bool animate_enabled = config.Get().animations;
+    const bool contributor_marquee_active =
+        state == State::Settings &&
+        !menu_items.empty() &&
+        menu_items[std::clamp(menu_selected, 0, static_cast<int>(menu_items.size()) - 1)] ==
+            SettingId::ContributorAvatars &&
+        !contributor_avatar_entries.empty();
     const bool has_active_animation =
         state == State::Boot || input.AnyPressed() ||
         txt_transcode_job.active ||
         (reader_mode == ReaderMode::Txt && txt_reader.open && txt_reader.loading) ||
+        contributor_marquee_active ||
         (animate_enabled && (menu_anim.IsAnimating() || scene_flash.IsAnimating() || page_animating || any_grid_animating));
     const bool needs_periodic_tick =
         (state == State::Shelf && title_marquee_active) ||
@@ -1962,7 +1978,6 @@ int main(int, char **) {
           }
 
           const int center_y = Layout().top_bar_y + Layout().top_bar_h / 2;
-          const int battery_shift_x = 20;
           const int battery_shift_y = 3;
           const int battery_icon_x = 552;
           const int battery_text_x = 587;
@@ -2265,7 +2280,8 @@ int main(int, char **) {
     SDL_RenderPresent(renderer);
 
     uint32_t frame_budget_ms = 0;
-    if (has_active_animation) frame_budget_ms = kActiveFrameBudgetMs;
+    if (contributor_marquee_active) frame_budget_ms = kAvatarMarqueeFrameBudgetMs;
+    else if (has_active_animation) frame_budget_ms = kActiveFrameBudgetMs;
     else if (needs_periodic_tick) frame_budget_ms = kPeriodicTickFrameBudgetMs;
     if (frame_budget_ms > 0) {
       const uint32_t frame_elapsed = SDL_GetTicks() - frame_begin_ticks;
