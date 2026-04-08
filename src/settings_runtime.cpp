@@ -1,6 +1,7 @@
 #include "settings_runtime.h"
 #include "contributor_avatar_runtime.h"
 #include "system_settings_runtime.h"
+#include "txt_settings_runtime.h"
 
 #include <algorithm>
 #include <cmath>
@@ -13,7 +14,7 @@ std::string SettingLabel(SettingId id) {
   case SettingId::KeyGuide: return std::string(u8"\u6309\u952e\u8bf4\u660e");
   case SettingId::ClearHistory: return std::string(u8"\u6e05\u9664\u5386\u53f2");
   case SettingId::CleanCache: return std::string(u8"\u6e05\u9664\u7f13\u5b58");
-  case SettingId::TxtToUtf8: return std::string(u8"TXT\u8f6c\u7801");
+  case SettingId::TxtToUtf8: return std::string(u8"TXT\u8bbe\u7f6e");
   case SettingId::ContributorAvatars: return std::string(u8"\u8d21\u732e\u8005\u5934\u50cf");
   case SettingId::ContactMe: return std::string(u8"\u8054\u7cfb\u6211");
   case SettingId::ExitApp: return std::string(u8"\u9000\u51fa");
@@ -27,7 +28,7 @@ SDL_Texture *SelectedPreviewTexture(const UiAssets &ui_assets, SettingId id) {
   case SettingId::KeyGuide: return ui_assets.settings_preview_keyguide;
   case SettingId::ClearHistory: return ui_assets.settings_preview_clean_history;
   case SettingId::CleanCache: return ui_assets.settings_preview_clean_cache;
-  case SettingId::TxtToUtf8: return ui_assets.settings_preview_txt_to_utf8;
+  case SettingId::TxtToUtf8: return ui_assets.settings_preview_default;
   case SettingId::ContributorAvatars: return ui_assets.settings_preview_default;
   case SettingId::ContactMe: return ui_assets.settings_preview_contact;
   case SettingId::ExitApp: return ui_assets.settings_preview_exit;
@@ -57,10 +58,13 @@ void HandleSettingsInput(SettingsRuntimeInputDeps &deps) {
       menu_count > 0 ? deps.menu_items[std::clamp(deps.menu_selected, 0, menu_count - 1)] : SettingId::KeyGuide;
   const bool system_settings_active =
       current_id == SettingId::SystemControls && deps.system_settings_state.panel_active;
+  const bool txt_settings_active =
+      current_id == SettingId::TxtToUtf8 && deps.txt_settings_state.panel_active;
   const bool avatar_grid_active =
       current_id == SettingId::ContributorAvatars && deps.contributor_avatar_state.grid_active;
 
-  if (!system_settings_active && !avatar_grid_active && deps.settings_close_armed && deps.settings_toggle_guard <= 0.0f &&
+  if (!system_settings_active && !txt_settings_active && !avatar_grid_active &&
+      deps.settings_close_armed && deps.settings_toggle_guard <= 0.0f &&
       !deps.menu_closing &&
       (deps.input.IsJustPressed(Button::B) || deps.menu_toggle_request)) {
     if (deps.ui_cfg.animations) deps.menu_anim.AnimateTo(0.0f, 0.16f, animation::Ease::InOutCubic);
@@ -76,6 +80,10 @@ void HandleSettingsInput(SettingsRuntimeInputDeps &deps) {
   const SettingId id = current_id;
   if (id == SettingId::SystemControls &&
       HandleSystemSettingsInput(deps.input, deps.system_settings_state, deps.system_settings_callbacks)) {
+    return;
+  }
+  if (id == SettingId::TxtToUtf8 &&
+      HandleTxtSettingsInput(deps.input, deps.txt_settings_state, deps.txt_settings_callbacks)) {
     return;
   }
   if (id == SettingId::ContributorAvatars &&
@@ -95,8 +103,6 @@ void HandleSettingsInput(SettingsRuntimeInputDeps &deps) {
       if (deps.on_clear_history) deps.on_clear_history();
     } else if (id == SettingId::CleanCache) {
       if (deps.on_clean_cache) deps.on_clean_cache();
-    } else if (id == SettingId::TxtToUtf8) {
-      if (deps.on_txt_to_utf8) deps.on_txt_to_utf8();
     }
   }
 }
@@ -115,7 +121,6 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
 
   const int preview_x = x + menu_width;
   const int preview_w = std::max(0, deps.layout.screen_w - preview_x);
-  int preview_center_x = preview_x + preview_w / 2;
   SDL_Rect preview_rect{preview_x, menu_y, preview_w, menu_h};
   if (preview_w > 0) {
     const SettingId selected =
@@ -128,7 +133,6 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
       SDL_Rect pd{preview_x, menu_y, pw, ph};
       SDL_RenderCopy(deps.renderer, preview_tex, nullptr, &pd);
       preview_rect = pd;
-      preview_center_x = pd.x + pd.w / 2;
     }
   }
 
@@ -200,6 +204,22 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
         deps.get_title_text_texture,
     });
   }
+  if (selected == SettingId::TxtToUtf8) {
+    DrawTxtSettingsPreview(TxtSettingsRenderDeps{
+        deps.renderer,
+        preview_rect,
+        deps.txt_settings_state,
+        deps.txt_transcode_job,
+        deps.cfg.theme != 0,
+        first_menu_item_y,
+        42,
+        30,
+        deps.draw_rect,
+        deps.get_text_texture,
+        deps.get_title_text_texture,
+        deps.utf8_ellipsize,
+    });
+  }
   if (selected == SettingId::ContributorAvatars && !deps.contributor_avatar_entries.empty()) {
     DrawContributorAvatarPreview(ContributorAvatarRenderDeps{
         deps.renderer,
@@ -209,44 +229,6 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
         deps.draw_rect,
         deps.get_text_texture,
     });
-  }
-
-  if (selected == SettingId::TxtToUtf8 && deps.txt_transcode_job.active) {
-    const int bar_w = std::min(260, std::max(160, preview_w - 36));
-    const int bar_h = 14;
-    const int bar_x = std::clamp(preview_center_x - bar_w / 2, preview_x + 8,
-                                 preview_x + std::max(8, preview_w - bar_w - 8));
-    const int bar_y = 308;
-    const float progress =
-        (deps.txt_transcode_job.total > 0)
-            ? static_cast<float>(deps.txt_transcode_job.processed) / static_cast<float>(deps.txt_transcode_job.total)
-            : 0.0f;
-    const int fill_w = std::clamp(static_cast<int>(std::lround(bar_w * progress)), 0, bar_w);
-    deps.draw_rect(bar_x, bar_y, bar_w, bar_h, SDL_Color{46, 52, 62, 224}, true);
-    deps.draw_rect(bar_x, bar_y, fill_w, bar_h, SDL_Color{63, 119, 158, 255}, true);
-    deps.draw_rect(bar_x, bar_y, bar_w, bar_h, SDL_Color{255, 255, 255, 210}, false);
-#ifdef HAVE_SDL2_TTF
-    if (deps.get_text_texture) {
-      const int pct = std::clamp(static_cast<int>(std::lround(progress * 100.0f)), 0, 100);
-      const std::string progress_text = std::string(u8"\u8f6c\u7801\u4e2d ") +
-                                        std::to_string(deps.txt_transcode_job.processed) + "/" +
-                                        std::to_string(deps.txt_transcode_job.total) + "  (" + std::to_string(pct) +
-                                        "%)";
-      TextCacheEntry *progress_tex = deps.get_text_texture(progress_text, SDL_Color{245, 248, 252, 255});
-      if (progress_tex && progress_tex->texture) {
-        SDL_Rect pd{preview_center_x - progress_tex->w / 2, bar_y + bar_h + 10, progress_tex->w, progress_tex->h};
-        SDL_RenderCopy(deps.renderer, progress_tex->texture, nullptr, &pd);
-      }
-      if (!deps.txt_transcode_job.current_file.empty() && deps.utf8_ellipsize) {
-        const std::string file_text = deps.utf8_ellipsize(deps.txt_transcode_job.current_file, 24);
-        TextCacheEntry *file_tex = deps.get_text_texture(file_text, SDL_Color{184, 197, 212, 255});
-        if (file_tex && file_tex->texture) {
-          SDL_Rect fd{preview_center_x - file_tex->w / 2, bar_y + bar_h + 32, file_tex->w, file_tex->h};
-          SDL_RenderCopy(deps.renderer, file_tex->texture, nullptr, &fd);
-        }
-      }
-    }
-#endif
   }
 
   auto draw_native_topmost = [&](SDL_Texture *tex, int px, int py) {

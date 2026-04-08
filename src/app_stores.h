@@ -15,6 +15,9 @@ struct NativeConfig {
   int system_volume_percent = 50;
   int screen_brightness_level = 8;
   bool lid_close_screen_off = true;
+  int txt_background_color = 4;
+  int txt_font_color = 0;
+  int txt_font_size_level = 2;
 };
 
 class ConfigStore {

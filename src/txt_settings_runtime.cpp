@@ -1,0 +1,295 @@
+#include "txt_settings_runtime.h"
+
+#include <algorithm>
+#include <array>
+#include <string>
+
+namespace {
+constexpr int kColorOptionCount = 5;
+constexpr int kSelectableRowCount = 4;
+constexpr int kTranscodeRow = 3;
+
+constexpr std::array<SDL_Color, kColorOptionCount> kBackgroundColors = {{
+    {248, 246, 239, 255},
+    {239, 226, 198, 255},
+    {200, 210, 220, 255},
+    {88, 102, 118, 255},
+    {22, 26, 32, 255},
+}};
+
+constexpr std::array<SDL_Color, kColorOptionCount> kFontColors = {{
+    {242, 244, 248, 255},
+    {214, 219, 224, 255},
+    {124, 134, 145, 255},
+    {70, 78, 88, 255},
+    {18, 20, 24, 255},
+}};
+
+constexpr std::array<int, 5> kFontPointSizes = {{18, 20, 22, 24, 26}};
+} // namespace
+
+int ClampTxtColorIndex(int value) { return std::clamp(value, 0, kColorOptionCount - 1); }
+
+int ClampTxtFontSizeLevel(int value) {
+  return std::clamp(value, 0, static_cast<int>(kFontPointSizes.size()) - 1);
+}
+
+int TxtFontPointSizeForLevel(int level) {
+  return kFontPointSizes[static_cast<size_t>(ClampTxtFontSizeLevel(level))];
+}
+
+SDL_Color GetTxtBackgroundColor(int index) {
+  return kBackgroundColors[static_cast<size_t>(ClampTxtColorIndex(index))];
+}
+
+SDL_Color GetTxtFontColor(int index) {
+  return kFontColors[static_cast<size_t>(ClampTxtColorIndex(index))];
+}
+
+bool HandleTxtSettingsInput(const InputManager &input, TxtSettingsState &state,
+                            const TxtSettingsCallbacks &callbacks) {
+  if (!state.panel_active) {
+    if (input.IsJustPressed(Button::A) || input.IsJustPressed(Button::Right)) {
+      state.panel_active = true;
+      state.selected_row = std::clamp(state.selected_row, 0, kSelectableRowCount - 1);
+      state.selected_option = std::clamp(state.selected_option, 0, kColorOptionCount - 1);
+      if (callbacks.refresh_state) callbacks.refresh_state(state);
+      return true;
+    }
+    return false;
+  }
+
+  if (input.IsJustPressed(Button::B)) {
+    state.panel_active = false;
+    return true;
+  }
+
+  if (input.IsJustPressed(Button::Up) || input.IsRepeated(Button::Up)) {
+    state.selected_row = (state.selected_row - 1 + kSelectableRowCount) % kSelectableRowCount;
+    if (state.selected_row == kTranscodeRow) state.selected_option = 0;
+    return true;
+  }
+
+  if (input.IsJustPressed(Button::Down) || input.IsRepeated(Button::Down)) {
+    state.selected_row = (state.selected_row + 1) % kSelectableRowCount;
+    if (state.selected_row == kTranscodeRow) state.selected_option = 0;
+    return true;
+  }
+
+  if (state.selected_row == 0 || state.selected_row == 1) {
+    if (input.IsJustPressed(Button::Left) || input.IsRepeated(Button::Left)) {
+      state.selected_option = ClampTxtColorIndex(state.selected_option - 1);
+      if (state.selected_row == 0 && callbacks.set_background_color) {
+        return callbacks.set_background_color(state.selected_option, state);
+      }
+      if (state.selected_row == 1 && callbacks.set_font_color) {
+        return callbacks.set_font_color(state.selected_option, state);
+      }
+      return true;
+    }
+    if (input.IsJustPressed(Button::Right) || input.IsRepeated(Button::Right)) {
+      state.selected_option = ClampTxtColorIndex(state.selected_option + 1);
+      if (state.selected_row == 0 && callbacks.set_background_color) {
+        return callbacks.set_background_color(state.selected_option, state);
+      }
+      if (state.selected_row == 1 && callbacks.set_font_color) {
+        return callbacks.set_font_color(state.selected_option, state);
+      }
+      return true;
+    }
+    if (input.IsJustPressed(Button::A)) {
+      if (state.selected_row == 0 && callbacks.set_background_color) {
+        return callbacks.set_background_color(state.selected_option, state);
+      }
+      if (state.selected_row == 1 && callbacks.set_font_color) {
+        return callbacks.set_font_color(state.selected_option, state);
+      }
+    }
+    return false;
+  }
+
+  if (state.selected_row == 2) {
+    if (input.IsJustPressed(Button::Left)) {
+      state.selected_option = 0;
+      return true;
+    }
+    if (input.IsJustPressed(Button::Right)) {
+      state.selected_option = 1;
+      return true;
+    }
+    int delta = 0;
+    if (input.IsJustPressed(Button::A) || input.IsRepeated(Button::A)) {
+      delta = state.selected_option == 0 ? -1 : 1;
+    } else if (input.IsRepeated(Button::Left) && state.selected_option == 0) {
+      delta = -1;
+    } else if (input.IsRepeated(Button::Right) && state.selected_option == 1) {
+      delta = 1;
+    }
+    if (delta != 0 && callbacks.adjust_font_size) {
+      return callbacks.adjust_font_size(delta, state);
+    }
+    return delta != 0;
+  }
+
+  if ((input.IsJustPressed(Button::A) || input.IsRepeated(Button::A)) && callbacks.start_transcode) {
+    return callbacks.start_transcode();
+  }
+  return false;
+}
+
+void DrawTxtSettingsPreview(const TxtSettingsRenderDeps &deps) {
+  if (!deps.renderer) return;
+
+  const SDL_Color text_color = deps.light_theme ? SDL_Color{44, 50, 60, 255} : SDL_Color{236, 241, 247, 255};
+  const SDL_Color muted_color = deps.light_theme ? SDL_Color{128, 134, 142, 255} : SDL_Color{149, 164, 181, 255};
+  const SDL_Color button_fill = deps.light_theme ? SDL_Color{229, 224, 214, 240} : SDL_Color{29, 42, 57, 230};
+  const SDL_Color button_selected = deps.light_theme ? SDL_Color{213, 228, 239, 250} : SDL_Color{41, 82, 113, 240};
+  const SDL_Color button_border = deps.light_theme ? SDL_Color{104, 122, 144, 255} : SDL_Color{122, 201, 255, 255};
+  const SDL_Color divider_color = deps.light_theme ? SDL_Color{138, 154, 170, 255} : SDL_Color{66, 95, 124, 255};
+  const SDL_Color transcode_fill = deps.light_theme ? SDL_Color{72, 122, 164, 255} : SDL_Color{63, 119, 158, 255};
+
+  auto get_text_entry = [&](const std::string &text, SDL_Color color) -> TextCacheEntry * {
+    return deps.get_text_texture ? deps.get_text_texture(text, color) : nullptr;
+  };
+  auto get_emphasis_entry = [&](const std::string &text, SDL_Color color) -> TextCacheEntry * {
+    if (deps.get_emphasis_text_texture) return deps.get_emphasis_text_texture(text, color);
+    return get_text_entry(text, color);
+  };
+
+  const int divider_inset = 10;
+  const int content_left = deps.preview_rect.x + 18;
+  const int content_right = deps.preview_rect.x + deps.preview_rect.w - 18;
+  const int row_center0 = deps.first_row_y + deps.row_height / 2;
+  const int row_center1 = deps.first_row_y + deps.row_pitch + deps.row_height / 2;
+  const int row_center2 = deps.first_row_y + deps.row_pitch * 2 + deps.row_height / 2;
+  const int row_center3 = deps.first_row_y + deps.row_pitch * 3 + deps.row_height / 2;
+  const int button_w = 28;
+  const int button_h = 28;
+  const int color_block = button_w;
+  const int color_gap = 8;
+  const int text_to_control_gap = 18;
+  const int transcode_button_w = 82;
+  const int transcode_button_h = 28;
+  const int number_w = 30;
+
+  deps.draw_rect(deps.preview_rect.x + divider_inset,
+                 deps.first_row_y - 12,
+                 std::max(0, deps.preview_rect.w - divider_inset * 2),
+                 1,
+                 divider_color,
+                 true);
+
+  const std::array<const char *, 4> labels = {{
+      u8"\u80cc\u666f\u989c\u8272",
+      u8"\u5b57\u4f53\u989c\u8272",
+      u8"\u5b57\u53f7\u5927\u5c0f",
+      u8"TXT\u8f6c\u7801",
+  }};
+  const std::array<int, 4> row_centers = {{row_center0, row_center1, row_center2, row_center3}};
+
+  int max_label_w = 0;
+  for (const char *label : labels) {
+    if (TextCacheEntry *entry = get_text_entry(label, text_color); entry) {
+      max_label_w = std::max(max_label_w, entry->w);
+    }
+  }
+
+  const int control_x = content_left + max_label_w + text_to_control_gap;
+
+  for (size_t i = 0; i < labels.size(); ++i) {
+    if (TextCacheEntry *entry = get_text_entry(labels[i], text_color); entry && entry->texture) {
+      SDL_Rect dst{content_left, row_centers[i] - entry->h / 2, entry->w, entry->h};
+      SDL_RenderCopy(deps.renderer, entry->texture, nullptr, &dst);
+    }
+  }
+
+  const int left_btn_x = control_x;
+  const int number_x = left_btn_x + button_w + 10;
+  const int right_btn_x = number_x + number_w + 10;
+  const int button_y = row_center2 - button_h / 2;
+  const bool left_selected = deps.state.panel_active && deps.state.selected_row == 2 && deps.state.selected_option == 0;
+  const bool right_selected = deps.state.panel_active && deps.state.selected_row == 2 && deps.state.selected_option == 1;
+
+  for (int i = 0; i < kColorOptionCount; ++i) {
+    const int x = left_btn_x + i * (color_block + color_gap);
+    const int y0 = row_center0 - color_block / 2;
+    const int y1 = row_center1 - color_block / 2;
+    const bool selected_bg = deps.state.panel_active && deps.state.selected_row == 0 && deps.state.selected_option == i;
+    const bool selected_fg = deps.state.panel_active && deps.state.selected_row == 1 && deps.state.selected_option == i;
+
+    deps.draw_rect(x, y0, color_block, color_block, GetTxtBackgroundColor(i), true);
+    deps.draw_rect(x, y0, color_block, color_block,
+                   selected_bg ? button_border : (deps.state.background_color == i ? text_color : muted_color), false);
+
+    deps.draw_rect(x, y1, color_block, color_block, GetTxtFontColor(i), true);
+    deps.draw_rect(x, y1, color_block, color_block,
+                   selected_fg ? button_border : (deps.state.font_color == i ? text_color : muted_color), false);
+  }
+
+  deps.draw_rect(left_btn_x, button_y, button_w, button_h, left_selected ? button_selected : button_fill, true);
+  deps.draw_rect(left_btn_x, button_y, button_w, button_h, left_selected ? button_border : muted_color, false);
+  if (TextCacheEntry *entry = get_emphasis_entry("<", text_color); entry && entry->texture) {
+    SDL_Rect dst{left_btn_x + (button_w - entry->w) / 2, button_y + (button_h - entry->h) / 2, entry->w, entry->h};
+    SDL_RenderCopy(deps.renderer, entry->texture, nullptr, &dst);
+  }
+
+  if (TextCacheEntry *entry = get_text_entry(std::to_string(TxtFontPointSizeForLevel(deps.state.font_size_level)), text_color);
+      entry && entry->texture) {
+    SDL_Rect dst{number_x + (number_w - entry->w) / 2, row_center2 - entry->h / 2, entry->w, entry->h};
+    SDL_RenderCopy(deps.renderer, entry->texture, nullptr, &dst);
+  }
+
+  deps.draw_rect(right_btn_x, button_y, button_w, button_h, right_selected ? button_selected : button_fill, true);
+  deps.draw_rect(right_btn_x, button_y, button_w, button_h, right_selected ? button_border : muted_color, false);
+  if (TextCacheEntry *entry = get_emphasis_entry(">", text_color); entry && entry->texture) {
+    SDL_Rect dst{right_btn_x + (button_w - entry->w) / 2, button_y + (button_h - entry->h) / 2, entry->w, entry->h};
+    SDL_RenderCopy(deps.renderer, entry->texture, nullptr, &dst);
+  }
+
+  const int transcode_button_x = left_btn_x;
+  const int transcode_button_y = row_center3 - transcode_button_h / 2;
+  const bool transcode_selected = deps.state.panel_active && deps.state.selected_row == kTranscodeRow;
+  deps.draw_rect(transcode_button_x, transcode_button_y, transcode_button_w, transcode_button_h,
+                 transcode_selected ? button_selected : button_fill, true);
+  deps.draw_rect(transcode_button_x, transcode_button_y, transcode_button_w, transcode_button_h,
+                 transcode_selected ? button_border : muted_color, false);
+  if (TextCacheEntry *entry = get_text_entry(u8"\u5f00\u59cb\u8f6c\u7801", text_color); entry && entry->texture) {
+    SDL_Rect dst{transcode_button_x + (transcode_button_w - entry->w) / 2,
+                 row_center3 - entry->h / 2,
+                 entry->w,
+                 entry->h};
+    SDL_RenderCopy(deps.renderer, entry->texture, nullptr, &dst);
+  }
+
+  if (!deps.txt_transcode_job.active) return;
+
+  const int bar_w = std::max(150, deps.preview_rect.w - 64);
+  const int bar_h = 14;
+  const int bar_x = deps.preview_rect.x + (deps.preview_rect.w - bar_w) / 2;
+  const int bar_y = row_center3 + 26;
+  const float progress = deps.txt_transcode_job.total > 0
+                             ? static_cast<float>(deps.txt_transcode_job.processed) /
+                                   static_cast<float>(deps.txt_transcode_job.total)
+                             : 0.0f;
+  const int fill_w = std::clamp(static_cast<int>(bar_w * progress), 0, bar_w);
+
+  deps.draw_rect(bar_x, bar_y, bar_w, bar_h, SDL_Color{46, 52, 62, 224}, true);
+  deps.draw_rect(bar_x, bar_y, fill_w, bar_h, transcode_fill, true);
+  deps.draw_rect(bar_x, bar_y, bar_w, bar_h, SDL_Color{255, 255, 255, 210}, false);
+
+  if (TextCacheEntry *entry = get_text_entry(
+          std::to_string(deps.txt_transcode_job.processed) + "/" + std::to_string(deps.txt_transcode_job.total),
+          text_color);
+      entry && entry->texture) {
+    SDL_Rect dst{deps.preview_rect.x + (deps.preview_rect.w - entry->w) / 2, bar_y + bar_h + 8, entry->w, entry->h};
+    SDL_RenderCopy(deps.renderer, entry->texture, nullptr, &dst);
+  }
+
+  if (!deps.txt_transcode_job.current_file.empty() && deps.utf8_ellipsize) {
+    const std::string file_text = deps.utf8_ellipsize(deps.txt_transcode_job.current_file, 24);
+    if (TextCacheEntry *entry = get_text_entry(file_text, muted_color); entry && entry->texture) {
+      SDL_Rect dst{deps.preview_rect.x + (deps.preview_rect.w - entry->w) / 2, bar_y + bar_h + 28, entry->w, entry->h};
+      SDL_RenderCopy(deps.renderer, entry->texture, nullptr, &dst);
+    }
+  }
+}

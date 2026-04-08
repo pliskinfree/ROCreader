@@ -6,6 +6,7 @@
 #include "input_manager.h"
 #include "reader_session_state.h"
 #include "system_settings_runtime.h"
+#include "txt_settings_runtime.h"
 #include "ui_assets.h"
 #include "ui_text_cache.h"
 
@@ -29,6 +30,8 @@ struct SettingsRuntimeInputDeps {
   animation::TweenFloat &menu_anim;
   SystemSettingsState &system_settings_state;
   SystemSettingsCallbacks system_settings_callbacks;
+  TxtSettingsState &txt_settings_state;
+  TxtSettingsCallbacks txt_settings_callbacks;
   ContributorAvatarState &contributor_avatar_state;
   size_t contributor_avatar_count = 0;
   std::function<void(int)> on_contributor_avatar_confirm;
@@ -62,6 +65,7 @@ struct SettingsRuntimeRenderDeps {
   int sidebar_mask_max_alpha = 0;
   const TxtTranscodeJob &txt_transcode_job;
   const SystemSettingsState &system_settings_state;
+  const TxtSettingsState &txt_settings_state;
   const std::vector<ContributorAvatarEntry> &contributor_avatar_entries;
   const ContributorAvatarState &contributor_avatar_state;
   SettingsRuntimeLayout layout;

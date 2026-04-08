@@ -202,7 +202,6 @@ constexpr uint32_t kTransientMessageDurationMs = 1800;
 constexpr uint32_t kReaderFastFlipThresholdMs = 200;
 constexpr uint32_t kReaderPageFlipDebounceMs = 150;
 constexpr int kTxtLineSpacing = 8;
-constexpr int kTxtFontPt = 22;
 constexpr int kTxtLayoutCacheVersion = 2;
 constexpr size_t kTxtMaxBytes = 64 * 1024 * 1024;
 constexpr size_t kTxtMaxWrappedLines = 250000;
@@ -836,6 +835,18 @@ int main(int, char **) {
   SystemControlService system_control_service(use_h700_defaults);
   LidPowerController lid_power_controller(power_script_path);
   SystemSettingsState system_settings_state{};
+  TxtSettingsState txt_settings_state{};
+  txt_settings_state.background_color = ClampTxtColorIndex(config.Get().txt_background_color);
+  txt_settings_state.font_color = ClampTxtColorIndex(config.Get().txt_font_color);
+  txt_settings_state.font_size_level = ClampTxtFontSizeLevel(config.Get().txt_font_size_level);
+  std::function<void(int)> apply_txt_font_size_level = [&](int level) {
+    const int clamped = ClampTxtFontSizeLevel(level);
+    if (config.Mutable().txt_font_size_level != clamped) {
+      config.Mutable().txt_font_size_level = clamped;
+      config.MarkDirty();
+    }
+    txt_settings_state.font_size_level = clamped;
+  };
   ContributorAvatarState contributor_avatar_state{};
   if (use_h700_defaults) {
     bool changed = false;
@@ -1150,6 +1161,7 @@ int main(int, char **) {
 #ifdef HAVE_SDL2_TTF
   UiTextCacheState ui_text_cache{};
   ui_text_cache.max_text_cache_entries = kTextCacheMaxEntries;
+  int current_reader_font_pt = TxtFontPointSizeForLevel(config.Get().txt_font_size_level);
   TxtTextServiceState txt_text_service{
       {},
       txt_layout_cache_dir,
@@ -1162,6 +1174,18 @@ int main(int, char **) {
     ClearUiTextCache(ui_text_cache, forget_texture_size);
   };
 
+  apply_txt_font_size_level = [&](int level) {
+    const int clamped = ClampTxtFontSizeLevel(level);
+    if (config.Mutable().txt_font_size_level != clamped) {
+      config.Mutable().txt_font_size_level = clamped;
+      config.MarkDirty();
+      config.Save();
+    }
+    txt_settings_state.font_size_level = clamped;
+    current_reader_font_pt = TxtFontPointSizeForLevel(clamped);
+    ShutdownUiTextCache(ui_text_cache, forget_texture_size);
+  };
+
   std::function<void(const std::string &, bool)> persist_current_txt_resume_snapshot;
 
   auto get_title_ellipsized = [&](const std::string &raw_name, int text_area_w,
@@ -1170,7 +1194,7 @@ int main(int, char **) {
   };
 
   auto open_ui_font = [&]() {
-    OpenUiFonts(ui_text_cache, exe_path, ui_path, kTxtFontPt);
+    OpenUiFonts(ui_text_cache, exe_path, ui_path, current_reader_font_pt);
   };
 
   auto get_text_texture = [&](const std::string &text, SDL_Color color) -> TextCacheEntry * {
@@ -1844,6 +1868,48 @@ int main(int, char **) {
                 return true;
               },
           },
+          txt_settings_state,
+          TxtSettingsCallbacks{
+              [&](TxtSettingsState &settings_state) {
+                settings_state.background_color = ClampTxtColorIndex(config.Get().txt_background_color);
+                settings_state.font_color = ClampTxtColorIndex(config.Get().txt_font_color);
+                settings_state.font_size_level = ClampTxtFontSizeLevel(config.Get().txt_font_size_level);
+                if (settings_state.selected_row == 0) settings_state.selected_option = settings_state.background_color;
+                else if (settings_state.selected_row == 1) settings_state.selected_option = settings_state.font_color;
+                else if (settings_state.selected_row == 2) settings_state.selected_option = 1;
+                else settings_state.selected_option = 0;
+              },
+              [&](int color_index, TxtSettingsState &settings_state) {
+                const int clamped = ClampTxtColorIndex(color_index);
+                config.Mutable().txt_background_color = clamped;
+                config.MarkDirty();
+                config.Save();
+                settings_state.background_color = clamped;
+                settings_state.selected_option = clamped;
+                return true;
+              },
+              [&](int color_index, TxtSettingsState &settings_state) {
+                const int clamped = ClampTxtColorIndex(color_index);
+                config.Mutable().txt_font_color = clamped;
+                config.MarkDirty();
+                config.Save();
+                settings_state.font_color = clamped;
+                settings_state.selected_option = clamped;
+                return true;
+              },
+              [&](int delta, TxtSettingsState &settings_state) {
+                const int next_level = ClampTxtFontSizeLevel(settings_state.font_size_level + delta);
+                if (next_level == settings_state.font_size_level) return false;
+                apply_txt_font_size_level(next_level);
+                settings_state.font_size_level = next_level;
+                settings_state.selected_option = delta < 0 ? 0 : 1;
+                return true;
+              },
+              [&]() {
+                start_txt_transcode_job();
+                return true;
+              },
+          },
           contributor_avatar_state,
           contributor_avatar_entries.size(),
           [&](int selected_index) { update_selected_avatar_badge_texture(selected_index); },
@@ -2278,7 +2344,11 @@ int main(int, char **) {
       }
 
       if (state == State::Reader) {
-        DrawRect(renderer, 0, 0, Layout().screen_w, Layout().screen_h, SDL_Color{12, 12, 12, 255});
+        const SDL_Color reader_bg =
+            (reader_mode == ReaderMode::Txt && txt_reader.open)
+                ? GetTxtBackgroundColor(config.Get().txt_background_color)
+                : SDL_Color{12, 12, 12, 255};
+        DrawRect(renderer, 0, 0, Layout().screen_w, Layout().screen_h, reader_bg);
         if (reader_mode == ReaderMode::Txt && txt_reader.open) {
           TxtReaderRenderDeps txt_render_deps{
               renderer,
@@ -2288,7 +2358,7 @@ int main(int, char **) {
               [&]() { SDL_RenderSetClipRect(renderer, nullptr); },
               [&](const std::string &text, int x, int y) {
 #ifdef HAVE_SDL2_TTF
-                const SDL_Color color{242, 244, 248, 255};
+                const SDL_Color color = GetTxtFontColor(config.Get().txt_font_color);
                 TextCacheEntry *te = get_reader_text_texture(text, color);
                 if (te && te->texture) {
                   SDL_Rect td{x, y, te->w, te->h};
@@ -2375,6 +2445,7 @@ int main(int, char **) {
             kSidebarMaskMaxAlpha,
             txt_transcode_job,
             system_settings_state,
+            txt_settings_state,
             contributor_avatar_entries,
             contributor_avatar_state,
             SettingsRuntimeLayout{
