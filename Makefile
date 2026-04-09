@@ -22,7 +22,8 @@ CXXFLAGS := $(filter-out -O0 -O1 -O2 -O3 -Ofast,$(CXXFLAGS))
 CXXFLAGS += -O3 -mcpu=cortex-a53 -mtune=cortex-a53 -ffast-math
 endif
 CXXFLAGS += $(SDL_CFLAGS) -I./src
-LDFLAGS += $(SDL_LIBS)
+CXXFLAGS += -pthread
+LDFLAGS += -pthread $(SDL_LIBS)
 CXXFLAGS += $(EXTRA_CXXFLAGS)
 LDFLAGS += $(EXTRA_LDFLAGS)
 

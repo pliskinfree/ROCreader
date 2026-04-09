@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -20,6 +21,29 @@ constexpr const char *kGithubContentsApi =
     "https://api.github.com/repos/LPF970915/ROCreader/contents/Downloads?ref=main";
 constexpr const char *kPendingMarkerFilename = "ROCreader_update_pending.txt";
 constexpr const char *kUserAgent = "ROCreader-Updater";
+constexpr const char *kDownloadTempFilename = "ROCreader_update_download.tmp";
+constexpr int kDownloadConnectTimeoutSec = 15;
+constexpr int kDownloadMaxTimeSec = 900;
+
+std::filesystem::path UpdateLogPath() {
+  std::error_code ec;
+  const std::filesystem::path cwd = std::filesystem::current_path(ec);
+  if (ec) return {};
+  const std::filesystem::path cache_dir = cwd / "cache";
+  std::filesystem::create_directories(cache_dir, ec);
+  if (ec) return cwd / "version_update.log";
+  return cache_dir / "version_update.log";
+}
+
+void AppendUpdateLog(const std::string &message) {
+  const std::filesystem::path log_path = UpdateLogPath();
+  if (log_path.empty()) return;
+  std::ofstream out(log_path, std::ios::app);
+  if (!out) return;
+  using clock = std::chrono::system_clock;
+  const auto now = clock::to_time_t(clock::now());
+  out << now << " " << message << "\n";
+}
 
 void DrawCenteredText(SDL_Renderer *renderer, const SDL_Rect &bounds,
                       const std::function<TextCacheEntry *(const std::string &, SDL_Color)> &get_text_texture,
@@ -79,6 +103,22 @@ bool IsVersionNewer(const std::string &candidate, const std::string &baseline) {
   return false;
 }
 
+std::string FormatDownloadSpeed(double bytes_per_sec) {
+  if (bytes_per_sec <= 0.0) return std::string(u8"下载速度 0 KB/s");
+  constexpr double kKiB = 1024.0;
+  constexpr double kMiB = 1024.0 * 1024.0;
+  std::ostringstream oss;
+  oss.setf(std::ios::fixed);
+  if (bytes_per_sec >= kMiB) {
+    oss.precision(2);
+    oss << u8"下载速度 " << (bytes_per_sec / kMiB) << " MB/s";
+  } else {
+    oss.precision(1);
+    oss << u8"下载速度 " << (bytes_per_sec / kKiB) << " KB/s";
+  }
+  return oss.str();
+}
+
 std::string EscapeForPosix(const std::string &value) {
   std::string escaped = "'";
   for (char ch : value) {
@@ -122,6 +162,7 @@ std::string RunCommandCapture(const std::string &command) {
 }
 
 int RunCommand(const std::string &command) {
+  AppendUpdateLog("RunCommand: " + command);
   return std::system(command.c_str());
 }
 
@@ -158,16 +199,32 @@ bool DownloadFile(const std::string &url, const std::filesystem::path &output_pa
       "$ProgressPreference='SilentlyContinue'; "
       "Invoke-WebRequest -UseBasicParsing -Headers @{ 'User-Agent'='" + std::string(kUserAgent) + "' } "
       "-Uri '" + escaped_url + "' -OutFile '" + escaped_path + "'\"";
-  return RunCommand(command) == 0;
+  const bool ok = RunCommand(command) == 0;
+  AppendUpdateLog(std::string("PowerShell download result: ") + (ok ? "success" : "failed"));
+  return ok;
 #else
-  const std::string curl_command =
-      "curl -LfsS -H " + EscapeForPosix(std::string("User-Agent: ") + kUserAgent) + " "
-      + EscapeForPosix(url) + " -o " + EscapeForPosix(output_path.string()) + " 2>/dev/null";
-  if (RunCommand(curl_command) == 0) return true;
-  const std::string wget_command =
-      "wget -q --header=" + EscapeForPosix(std::string("User-Agent: ") + kUserAgent) + " "
-      + EscapeForPosix(url) + " -O " + EscapeForPosix(output_path.string()) + " 2>/dev/null";
-  return RunCommand(wget_command) == 0;
+  const std::string quoted_url = EscapeForPosix(url);
+  const std::string quoted_output = EscapeForPosix(output_path.string());
+  const std::string header = EscapeForPosix(std::string("User-Agent: ") + kUserAgent);
+
+  const std::vector<std::string> commands = {
+      "curl -L --fail --silent --show-error --http1.1 --connect-timeout "
+          + std::to_string(kDownloadConnectTimeoutSec) + " --max-time "
+          + std::to_string(kDownloadMaxTimeSec) + " -H " + header + " "
+          + quoted_url + " -o " + quoted_output,
+      "wget -q --timeout=" + std::to_string(kDownloadConnectTimeoutSec)
+          + " --tries=1 --user-agent=" + EscapeForPosix(kUserAgent)
+          + " -O " + quoted_output + " " + quoted_url,
+      "busybox wget -q -T " + std::to_string(kDownloadConnectTimeoutSec)
+          + " -O " + quoted_output + " " + quoted_url,
+  };
+
+  for (const std::string &command : commands) {
+    const int rc = RunCommand(command);
+    AppendUpdateLog("Download command exit code: " + std::to_string(rc));
+    if (rc == 0) return true;
+  }
+  return false;
 #endif
 }
 
@@ -224,6 +281,7 @@ struct RemoteArchiveInfo {
 
 bool FetchLatestRemoteArchive(RemoteArchiveInfo &out_info) {
   const std::string json = HttpGetText(kGithubContentsApi);
+  AppendUpdateLog("Fetched GitHub contents metadata bytes=" + std::to_string(json.size()));
   if (json.empty()) return false;
 
   size_t search_pos = 0;
@@ -256,6 +314,8 @@ bool FetchLatestRemoteArchive(RemoteArchiveInfo &out_info) {
   }
 
   if (!found) return false;
+  AppendUpdateLog("Latest remote archive: " + best.filename + " version=" + best.version
+                  + " bytes=" + std::to_string(best.size_bytes));
   out_info = std::move(best);
   return true;
 }
@@ -360,7 +420,11 @@ bool BeginVersionUpdateDownloadInternal(VersionUpdateState &state) {
   state.active_download_url = remote_info.download_url;
   state.expected_download_bytes = remote_info.size_bytes;
   state.pending_package_path = downloads_dir / remote_info.filename;
-  state.temp_package_path = downloads_dir / (remote_info.filename + ".download");
+  state.temp_package_path = downloads_dir / kDownloadTempFilename;
+  AppendUpdateLog("Preparing download root=" + state.download_root.string());
+  AppendUpdateLog("Pending package path=" + state.pending_package_path.string());
+  AppendUpdateLog("Temp package path=" + state.temp_package_path.string());
+  AppendUpdateLog("Download URL=" + state.active_download_url);
 
   if (std::filesystem::exists(state.pending_package_path, ec) && !ec) {
     const uint64_t existing_size = std::filesystem::file_size(state.pending_package_path, ec);
@@ -379,6 +443,8 @@ bool BeginVersionUpdateDownloadInternal(VersionUpdateState &state) {
   state.download_thread_done = false;
   state.download_thread_success = false;
   state.download_progress_pct = 0;
+  state.last_observed_download_bytes = 0;
+  state.download_speed_bytes_per_sec = 0.0;
   state.has_pending_package = false;
   state.download_in_progress = true;
   state.status = VersionUpdateStatus::Downloading;
@@ -396,9 +462,14 @@ bool BeginVersionUpdateDownloadInternal(VersionUpdateState &state) {
       std::filesystem::rename(temp_path, final_path, move_ec);
       success = !move_ec;
       if (!success) {
+        AppendUpdateLog("Failed to rename downloaded package into final filename.");
         move_ec.clear();
         std::filesystem::remove(temp_path, move_ec);
       }
+    } else {
+      AppendUpdateLog("DownloadFile returned failure.");
+      std::error_code remove_ec;
+      std::filesystem::remove(temp_path, remove_ec);
     }
     state.download_thread_success = success;
     state.download_thread_done = true;
@@ -427,7 +498,23 @@ bool HandleVersionUpdateInput(const InputManager &input, VersionUpdateState &sta
     return true;
   }
 
-  if (state.download_in_progress) return false;
+  if (state.download_in_progress) {
+    if (input.IsJustPressed(Button::A) || input.IsJustPressed(Button::Left) ||
+        input.IsJustPressed(Button::Right) || input.IsJustPressed(Button::Up) ||
+        input.IsJustPressed(Button::Down) || input.IsRepeated(Button::Left) ||
+        input.IsRepeated(Button::Right) || input.IsRepeated(Button::Up) ||
+        input.IsRepeated(Button::Down)) {
+      return true;
+    }
+    return false;
+  }
+
+  if (input.IsJustPressed(Button::Left) || input.IsJustPressed(Button::Right) ||
+      input.IsJustPressed(Button::Up) || input.IsJustPressed(Button::Down) ||
+      input.IsRepeated(Button::Left) || input.IsRepeated(Button::Right) ||
+      input.IsRepeated(Button::Up) || input.IsRepeated(Button::Down)) {
+    return true;
+  }
 
   if ((input.IsJustPressed(Button::A) || input.IsJustPressed(Button::Right)) && callbacks.start_check_and_update) {
     callbacks.start_check_and_update(state);
@@ -445,7 +532,6 @@ void InitializeVersionUpdateState(VersionUpdateState &state) {
 }
 
 void TickVersionUpdateState(VersionUpdateState &state, float dt) {
-  (void)dt;
   if (state.download_in_progress && !state.temp_package_path.empty()) {
     std::error_code ec;
     const uint64_t size = std::filesystem::exists(state.temp_package_path, ec)
@@ -454,6 +540,20 @@ void TickVersionUpdateState(VersionUpdateState &state, float dt) {
     if (!ec && state.expected_download_bytes > 0) {
       state.download_progress_pct = std::clamp(
           static_cast<int>((size * 100ull) / state.expected_download_bytes), 0, 99);
+    }
+    if (!ec) {
+      if (dt > 0.0001f) {
+        const uint64_t delta_bytes =
+            size >= state.last_observed_download_bytes ? (size - state.last_observed_download_bytes) : 0;
+        const double instant_speed = static_cast<double>(delta_bytes) / static_cast<double>(dt);
+        if (state.download_speed_bytes_per_sec <= 0.0) {
+          state.download_speed_bytes_per_sec = instant_speed;
+        } else {
+          state.download_speed_bytes_per_sec =
+              state.download_speed_bytes_per_sec * 0.72 + instant_speed * 0.28;
+        }
+      }
+      state.last_observed_download_bytes = size;
     }
   }
 
@@ -465,10 +565,14 @@ void TickVersionUpdateState(VersionUpdateState &state, float dt) {
     state.has_pending_package = true;
     state.status = VersionUpdateStatus::Downloaded;
     state.download_progress_pct = 100;
+    state.download_speed_bytes_per_sec = 0.0;
     WritePendingMarker(state);
+    AppendUpdateLog("Update package downloaded successfully.");
   } else if (state.status == VersionUpdateStatus::Downloading) {
     state.status = VersionUpdateStatus::DownloadFailed;
     state.download_progress_pct = 0;
+    state.download_speed_bytes_per_sec = 0.0;
+    AppendUpdateLog("Update package download failed.");
   }
   state.download_thread_done = false;
 }
@@ -550,6 +654,12 @@ void DrawVersionUpdatePreview(const VersionUpdateRenderDeps &deps) {
                          + std::to_string(deps.state.download_progress_pct) + "%",
                      text_color,
                      line3_y - 20);
+    DrawCenteredText(deps.renderer,
+                     deps.preview_rect,
+                     deps.get_text_texture,
+                     FormatDownloadSpeed(deps.state.download_speed_bytes_per_sec),
+                     muted_color,
+                     line4_y);
     break;
   }
   case VersionUpdateStatus::Downloaded:

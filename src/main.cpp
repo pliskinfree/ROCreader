@@ -1632,10 +1632,17 @@ int main(int, char **) {
         menu_items[std::clamp(menu_selected, 0, static_cast<int>(menu_items.size()) - 1)] ==
             SettingId::ContributorAvatars &&
         !contributor_avatar_entries.empty();
+    const bool version_update_download_active =
+        state == State::Settings &&
+        !menu_items.empty() &&
+        menu_items[std::clamp(menu_selected, 0, static_cast<int>(menu_items.size()) - 1)] ==
+            SettingId::VersionUpdate &&
+        version_update_state.download_in_progress;
     const bool has_active_animation =
         state == State::Boot || input.AnyPressed() ||
         txt_transcode_job.active ||
         (reader_mode == ReaderMode::Txt && txt_reader.open && txt_reader.loading) ||
+        version_update_download_active ||
         contributor_marquee_active ||
         (animate_enabled && (menu_anim.IsAnimating() || scene_flash.IsAnimating() || page_animating || any_grid_animating));
     const bool needs_periodic_tick =

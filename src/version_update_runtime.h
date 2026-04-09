@@ -32,6 +32,8 @@ struct VersionUpdateState {
   bool download_in_progress = false;
   bool has_pending_package = false;
   uint64_t expected_download_bytes = 0;
+  uint64_t last_observed_download_bytes = 0;
+  double download_speed_bytes_per_sec = 0.0;
   std::filesystem::path download_root;
   std::filesystem::path pending_marker_path;
   std::filesystem::path pending_package_path;
