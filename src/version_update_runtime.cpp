@@ -22,6 +22,7 @@ constexpr const char *kGithubContentsApi =
 constexpr const char *kPendingMarkerFilename = "ROCreader_update_pending.txt";
 constexpr const char *kUserAgent = "ROCreader-Updater";
 constexpr const char *kDownloadTempFilename = "ROCreader_update_download.tmp";
+constexpr const char *kInstalledVersionFilename = "version.txt";
 constexpr int kDownloadConnectTimeoutSec = 15;
 constexpr int kDownloadMaxTimeSec = 900;
 
@@ -101,6 +102,46 @@ bool IsVersionNewer(const std::string &candidate, const std::string &baseline) {
     if (lv != rv) return lv > rv;
   }
   return false;
+}
+
+std::string TrimAsciiWhitespace(std::string text) {
+  auto is_space = [](unsigned char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+  };
+  while (!text.empty() && is_space(static_cast<unsigned char>(text.front()))) {
+    text.erase(text.begin());
+  }
+  while (!text.empty() && is_space(static_cast<unsigned char>(text.back()))) {
+    text.pop_back();
+  }
+  return text;
+}
+
+std::string ReadInstalledVersionFromFile(const std::filesystem::path &version_path) {
+  if (version_path.empty()) return {};
+  std::ifstream in(version_path);
+  if (!in) return {};
+  std::string line;
+  std::getline(in, line);
+  return TrimAsciiWhitespace(line);
+}
+
+std::string DetectInstalledVersionLabel() {
+  std::vector<std::filesystem::path> candidates;
+  for (const std::string &root : storage_paths::DetectRocreaderRoots()) {
+    if (!root.empty()) candidates.push_back(std::filesystem::path(root) / kInstalledVersionFilename);
+  }
+  std::error_code ec;
+  const std::filesystem::path cwd = std::filesystem::current_path(ec);
+  if (!ec) {
+    candidates.push_back(cwd / kInstalledVersionFilename);
+    candidates.push_back(cwd.parent_path() / kInstalledVersionFilename);
+  }
+  for (const auto &candidate : candidates) {
+    const std::string version = ReadInstalledVersionFromFile(candidate);
+    if (!version.empty()) return version;
+  }
+  return {};
 }
 
 std::string FormatDownloadSpeed(double bytes_per_sec) {
@@ -340,6 +381,12 @@ std::filesystem::path PendingMarkerPath(const std::filesystem::path &download_ro
   return PendingDownloadsDir(download_root) / kPendingMarkerFilename;
 }
 
+void RemovePendingMarkerFile(const std::filesystem::path &marker_path) {
+  if (marker_path.empty()) return;
+  std::error_code ec;
+  std::filesystem::remove(marker_path, ec);
+}
+
 bool ReadPendingMarker(const std::filesystem::path &marker_path, VersionUpdateState &state) {
   std::ifstream in(marker_path);
   if (!in) return false;
@@ -355,7 +402,15 @@ bool ReadPendingMarker(const std::filesystem::path &marker_path, VersionUpdateSt
     else if (key == "version") version = value;
   }
   std::error_code ec;
-  if (package_path.empty() || !std::filesystem::exists(package_path, ec) || ec) return false;
+  if (package_path.empty() || !std::filesystem::exists(package_path, ec) || ec) {
+    RemovePendingMarkerFile(marker_path);
+    return false;
+  }
+  if (!version.empty() && !state.current_version.empty() && !IsVersionNewer(version, state.current_version)) {
+    AppendUpdateLog("Pending marker is stale; installed version is already " + state.current_version);
+    RemovePendingMarkerFile(marker_path);
+    return false;
+  }
   state.pending_package_path = package_path;
   state.latest_version = version;
   state.has_pending_package = true;
@@ -381,6 +436,11 @@ void JoinDownloadThread(VersionUpdateState &state) {
 
 bool BeginVersionUpdateDownloadInternal(VersionUpdateState &state) {
   JoinDownloadThread(state);
+
+  const std::string installed_version = DetectInstalledVersionLabel();
+  if (!installed_version.empty()) {
+    state.current_version = installed_version;
+  }
 
   state.download_root = DetectDownloadRoot();
   if (state.download_root.empty()) {
@@ -525,6 +585,10 @@ bool HandleVersionUpdateInput(const InputManager &input, VersionUpdateState &sta
 }
 
 void InitializeVersionUpdateState(VersionUpdateState &state) {
+  const std::string installed_version = DetectInstalledVersionLabel();
+  if (!installed_version.empty()) {
+    state.current_version = installed_version;
+  }
   state.download_root = DetectDownloadRoot();
   if (state.download_root.empty()) return;
   state.pending_marker_path = PendingMarkerPath(state.download_root);

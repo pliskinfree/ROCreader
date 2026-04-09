@@ -317,18 +317,31 @@ std::string DetectVersionFromDownloadsDir(const std::filesystem::path &downloads
 
 std::string DetectVersionLabel(const std::filesystem::path &runtime_root) {
   std::vector<std::filesystem::path> candidates;
+  for (const std::string &root : storage_paths::DetectRocreaderRoots()) {
+    if (!root.empty()) candidates.push_back(std::filesystem::path(root) / "version.txt");
+  }
   if (!runtime_root.empty()) {
+    candidates.push_back(runtime_root / "version.txt");
+    candidates.push_back(runtime_root.parent_path() / "version.txt");
     candidates.push_back(runtime_root / "Downloads");
     candidates.push_back(runtime_root.parent_path() / "Downloads");
   }
   std::error_code ec;
   const std::filesystem::path cwd = std::filesystem::current_path(ec);
   if (!ec) {
+    candidates.push_back(cwd / "version.txt");
+    candidates.push_back(cwd.parent_path() / "version.txt");
     candidates.push_back(cwd / "Downloads");
     candidates.push_back(cwd.parent_path() / "Downloads");
   }
 
   for (const auto &candidate : candidates) {
+    if (candidate.filename() == "version.txt") {
+      std::ifstream in(candidate);
+      std::string version;
+      if (in && std::getline(in, version) && !version.empty()) return version;
+      continue;
+    }
     const std::string version = DetectVersionFromDownloadsDir(candidate);
     if (!version.empty()) return version;
   }
