@@ -10,6 +10,7 @@ LIB_SYSTEM_SDL_DIR="$APP_DIR/lib_system_sdl"
 LIB_DIR="$LIB_FULL_DIR"
 UPDATE_STATUS_FILE="$APP_DIR/cache/update_boot_status.txt"
 UPDATE_STAGE_DIR="$APP_DIR/cache/update_stage"
+INSTALLED_VERSION_FILE="$APP_DIR/version.txt"
 
 export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-alsa}"
 export SDL_NOMOUSE="${SDL_NOMOUSE:-1}"
@@ -47,6 +48,17 @@ write_update_status() {
   } >"$UPDATE_STATUS_FILE"
 }
 
+read_installed_version() {
+  [ -f "$INSTALLED_VERSION_FILE" ] || return 0
+  sed -n '1p' "$INSTALLED_VERSION_FILE"
+}
+
+write_installed_version() {
+  version="$1"
+  [ -n "$version" ] || return 0
+  printf '%s\n' "$version" >"$INSTALLED_VERSION_FILE"
+}
+
 find_pending_marker() {
   for root in /mnt/mmc /mnt/sdcard; do
     marker="$root/Downloads/ROCreader_update_pending.txt"
@@ -59,6 +71,54 @@ extract_marker_value() {
   key="$1"
   marker="$2"
   awk -F= -v wanted="$key" '$1 == wanted { print substr($0, index($0, "=") + 1); exit }' "$marker"
+}
+
+extract_version_from_name() {
+  file_name="$(basename "$1")"
+  printf '%s\n' "$file_name" | sed -n 's/.*\(ver[0-9][0-9.]*\)\.zip$/\1/p'
+}
+
+version_sort_key() {
+  version="$1"
+  printf '%s\n' "$version" | awk '
+    BEGIN { count = 0 }
+    {
+      n = split($0, parts, /[^0-9]+/)
+      for (i = 1; i <= n; ++i) {
+        if (parts[i] != "") {
+          printf "%06d", parts[i]
+          count++
+        }
+      }
+    }
+    END {
+      if (count == 0) printf "000000"
+    }'
+}
+
+version_is_newer() {
+  candidate="$1"
+  baseline="$2"
+  [ "$(version_sort_key "$candidate")" \> "$(version_sort_key "$baseline")" ]
+}
+
+find_latest_download_zip() {
+  best_path=""
+  best_version=""
+  for root in /mnt/mmc /mnt/sdcard; do
+    downloads_dir="$root/Downloads"
+    [ -d "$downloads_dir" ] || continue
+    for zip_file in "$downloads_dir"/*.zip; do
+      [ -f "$zip_file" ] || continue
+      zip_version="$(extract_version_from_name "$zip_file")"
+      [ -n "$zip_version" ] || continue
+      if [ -z "$best_path" ] || version_is_newer "$zip_version" "$best_version"; then
+        best_path="$zip_file"
+        best_version="$zip_version"
+      fi
+    done
+  done
+  [ -n "$best_path" ] && printf '%s\n' "$best_path"
 }
 
 extract_zip_to_stage() {
@@ -88,19 +148,41 @@ replace_runtime_entry() {
 
 perform_pending_update_if_any() {
   marker="$(find_pending_marker || true)"
-  [ -n "$marker" ] || return 0
+  installed_version="$(read_installed_version || true)"
+  package_path=""
+  package_version=""
+  latest_zip="$(find_latest_download_zip || true)"
+  latest_version=""
+  if [ -n "$latest_zip" ]; then
+    latest_version="$(extract_version_from_name "$latest_zip")"
+  fi
+  if [ -n "$latest_zip" ] && [ -n "$latest_version" ]; then
+    if [ -z "$installed_version" ] || version_is_newer "$latest_version" "$installed_version"; then
+      package_path="$latest_zip"
+      package_version="$latest_version"
+    fi
+  fi
+  if [ -z "$package_path" ] && [ -n "$marker" ]; then
+    package_dir="$(dirname "$marker")"
+    package_name="$(extract_marker_value filename "$marker")"
+    package_version="$(extract_marker_value version "$marker")"
+    package_path="$package_dir/$package_name"
+    if [ -z "$package_version" ]; then
+      package_version="$(extract_version_from_name "$package_path")"
+    fi
+  fi
+  [ -n "$package_path" ] || return 0
 
-  package_dir="$(dirname "$marker")"
-  package_name="$(extract_marker_value filename "$marker")"
-  package_version="$(extract_marker_value version "$marker")"
-  package_path="$package_dir/$package_name"
   staged_runtime="$UPDATE_STAGE_DIR/Roms/APPS/ROCreader"
   staged_launcher="$UPDATE_STAGE_DIR/Roms/APPS/ROCreader.sh"
 
   log_line "[update] pending marker: $marker"
+  log_line "[update] installed version: ${installed_version:-unknown}"
+  log_line "[update] latest zip: ${latest_zip:-none}"
   log_line "[update] package: $package_path"
+  log_line "[update] package version: ${package_version:-unknown}"
 
-  if [ -z "$package_name" ] || [ ! -f "$package_path" ]; then
+  if [ ! -f "$package_path" ]; then
     log_line "[update] missing package, skip install"
     write_update_status "failed" "$package_version"
     return 0
@@ -136,7 +218,8 @@ perform_pending_update_if_any() {
   chmod +x "$APP_DIR/rocreader_sdl" 2>/dev/null || true
   chmod +x "$SELF_DIR/ROCreader.sh" 2>/dev/null || true
 
-  rm -f "$marker"
+  write_installed_version "$package_version"
+  rm -f /mnt/mmc/Downloads/ROCreader_update_pending.txt /mnt/sdcard/Downloads/ROCreader_update_pending.txt
   rm -rf "$UPDATE_STAGE_DIR"
   write_update_status "success" "$package_version"
   log_line "[update] install success version=${package_version:-unknown}"
