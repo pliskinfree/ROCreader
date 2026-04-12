@@ -102,6 +102,13 @@ void HandleVolumeControls(AppUiState &state, const InputManager &input, uint32_t
 MenuToggleAction HandleMenuToggleInput(AppUiState &state, const InputManager &input, bool is_settings, bool is_shelf,
                                        bool is_reader, bool settings_close_armed, float settings_toggle_guard,
                                        bool menu_closing, float debounce_sec) {
+  const bool volume_just_pressed = input.IsJustPressed(Button::VolUp) || input.IsJustPressed(Button::VolDown);
+  const bool volume_repeated = input.IsRepeated(Button::VolUp) || input.IsRepeated(Button::VolDown);
+  const bool volume_held = input.IsPressed(Button::VolUp) || input.IsPressed(Button::VolDown);
+  if (volume_just_pressed || volume_repeated || volume_held) {
+    return MenuToggleAction::None;
+  }
+
   const bool start_just_pressed = input.IsJustPressed(Button::Start);
   const bool select_just_pressed = input.IsJustPressed(Button::Select);
   const bool menu_just_pressed = input.IsJustPressed(Button::Menu);
