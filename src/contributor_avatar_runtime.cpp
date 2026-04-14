@@ -496,7 +496,8 @@ void DrawContributorAvatarPreview(const ContributorAvatarRenderDeps &deps) {
   const int name_gap = 8;
   const int name_h = 20;
   const int tile_w = std::max(60, (safe_w - col_gap * 2) / 3);
-  const int row_pitch = std::max(88, static_cast<int>(std::floor((safe_h - row_gap * 1.5f) / 2.5f)));
+  const int row_pitch =
+      std::clamp(static_cast<int>(std::floor((safe_h - row_gap * 1.5f) / 2.5f)), 88, 154);
   const int image_size = std::max(48, std::min(tile_w, row_pitch - name_gap - name_h - row_gap));
   const int x_base = safe_left + std::max(0, (safe_w - (tile_w * 3 + col_gap * 2)) / 2);
   const int top_inner_gap = std::max(12, safe_h / 24);

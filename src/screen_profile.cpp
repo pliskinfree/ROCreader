@@ -71,6 +71,11 @@ bool ReadEnvScreenProfile(int &out_w, int &out_h) {
   const char *env_profile = std::getenv("ROCREADER_SCREEN_PROFILE");
   if (!env_profile || !*env_profile) return false;
   const std::string profile = ToLowerAscii(env_profile);
+  if (profile == "720x720") {
+    out_w = 720;
+    out_h = 720;
+    return true;
+  }
   if (profile == "640x480" || profile == "640") {
     out_w = 640;
     out_h = 480;
@@ -102,6 +107,11 @@ bool ReadConfigScreenProfile(int &out_w, int &out_h) {
       const std::string key = ToLowerAscii(line.substr(0, eq));
       if (key != "screen_profile") continue;
       const std::string value = ToLowerAscii(line.substr(eq + 1));
+      if (value == "720x720") {
+        out_w = 720;
+        out_h = 720;
+        return true;
+      }
       if (value == "640x480" || value == "640") {
         out_w = 640;
         out_h = 480;
@@ -158,9 +168,13 @@ std::string CanonicalModelTokenFromText(const std::string &text) {
 
 bool ApplyProfileFromModelToken(const std::string &model_token, int &out_w, int &out_h) {
   if (model_token.empty()) return false;
-  // Current UI assets/layouts only have dedicated 720x480 and 640x480 variants.
-  // Keep machine-to-profile mapping explicit so special panels like CubeXX can be
-  // handled separately later instead of silently folding into the wrong profile.
+  // Keep machine-to-profile mapping explicit so model-specific panels don't
+  // silently fold into the wrong layout.
+  if (model_token == "rgcubexx") {
+    out_w = 720;
+    out_h = 720;
+    return true;
+  }
   if (model_token == "rg34xx" || model_token == "rg34xx-sp") {
     out_w = 720;
     out_h = 480;
@@ -364,6 +378,12 @@ bool ReadSdlDisplaySize(int &out_w, int &out_h) {
 }
 
 bool TryApplyProfileFromDetectedSize(ScreenProfile &profile) {
+  if (profile.detected_w == 720 && profile.detected_h == 720) {
+    profile.screen_w = 720;
+    profile.screen_h = 720;
+    profile.profile_name = "720x720";
+    return true;
+  }
   if (profile.detected_w == 640 || profile.detected_h == 640) {
     profile.screen_w = 640;
     profile.screen_h = 480;

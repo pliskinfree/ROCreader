@@ -153,9 +153,26 @@ constexpr LayoutMetrics layout_640x480{
     18, 12, 34, 34,
 };
 
+constexpr LayoutMetrics layout_720x720{
+    720, 720, 20,
+    0, 36,
+    36, 58,
+    104, 556,
+    660, 60,
+    140, 210,
+    180, 250,
+    33, 38,
+    33, 100,
+    36, 2, 4, 24,
+    240, 0, 42,
+    32, 26,
+    21, 54,
+    667, 54,
+    90, 135, 50,
+    18, 16, 34, 34,
+};
+
 constexpr int kGridCols = 4;
-constexpr int kGridRows = 2;
-constexpr int kItemsPerPage = kGridCols * kGridRows;
 constexpr float kFocusScaleBase = 1.0f;
 constexpr float kFocusScaleCurrent = 1.045f; // reduce current zoomed size by 5%
 constexpr float kFocusScale = kFocusScaleCurrent;
@@ -215,12 +232,18 @@ const LayoutMetrics *g_layout = &layout_720x480;
 const LayoutMetrics &Layout() { return *g_layout; }
 
 const LayoutMetrics &SelectLayoutProfile(int screen_w, int screen_h) {
+  if (screen_w == layout_720x720.screen_w && screen_h == layout_720x720.screen_h) return layout_720x720;
   if (screen_w == layout_640x480.screen_w && screen_h == layout_640x480.screen_h) return layout_640x480;
   return layout_720x480;
 }
 
 int FocusedCoverW() { return static_cast<int>(Layout().cover_w * kFocusScale + 0.5f); }
 int FocusedCoverH() { return static_cast<int>(Layout().cover_h * kFocusScale + 0.5f); }
+int ShelfVisibleRows() {
+  if (Layout().screen_w == 720 && Layout().screen_h == 720) return 3;
+  return 2;
+}
+int ShelfItemsPerPage() { return kGridCols * ShelfVisibleRows(); }
 
 std::string NormalizePathKey(const std::string &path);
 
@@ -2480,7 +2503,7 @@ int main(int, char **) {
                 Layout().nav_y,
             },
             kGridCols,
-            kItemsPerPage,
+            ShelfItemsPerPage(),
             dt,
             animate_enabled,
             any_grid_animating,
