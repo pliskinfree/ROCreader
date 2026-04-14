@@ -215,11 +215,7 @@ std::string ExtractModelToken(const std::string &text) {
 bool ReadBoardIniModelToken(std::string &out_token) {
   const std::vector<std::filesystem::path> candidates = {
       "/oem/board.ini",
-      "/oem/Board.ini",
       "/mnt/vendor/oem/board.ini",
-      "/mnt/vendor/board.ini",
-      "/mnt/vendor/oem/Board.ini",
-      "/mnt/vendor/Board.ini",
   };
   for (const auto &path : candidates) {
     std::ifstream in(path, std::ios::binary);
@@ -229,43 +225,6 @@ bool ReadBoardIniModelToken(std::string &out_token) {
     if (token.empty()) continue;
     out_token = token;
     return true;
-  }
-
-  const std::vector<std::filesystem::path> search_roots = {
-      "/oem",
-      "/mnt/vendor",
-  };
-  for (const auto &root : search_roots) {
-    std::error_code ec;
-    if (!std::filesystem::exists(root, ec) || ec) continue;
-    for (std::filesystem::recursive_directory_iterator it(
-             root,
-             std::filesystem::directory_options::skip_permission_denied,
-             ec),
-         end;
-         it != end;
-         it.increment(ec)) {
-      if (ec) {
-        ec.clear();
-        continue;
-      }
-      if (it.depth() > 2) {
-        it.disable_recursion_pending();
-        continue;
-      }
-      if (!it->is_regular_file(ec) || ec) {
-        ec.clear();
-        continue;
-      }
-      if (ToLowerAscii(it->path().filename().string()) != "board.ini") continue;
-      std::ifstream in(it->path(), std::ios::binary);
-      if (!in) continue;
-      const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-      const std::string token = ExtractModelToken(text);
-      if (token.empty()) continue;
-      out_token = token;
-      return true;
-    }
   }
   return false;
 }
@@ -424,25 +383,6 @@ std::string DetectDeviceModelToken() {
 
   std::string board_ini_token;
   if (ReadBoardIniModelToken(board_ini_token)) return board_ini_token;
-
-  const std::vector<std::filesystem::path> candidates = {
-      "/sys/firmware/devicetree/base/model",
-      "/proc/device-tree/model",
-      "/tmp/device_info.txt",
-      "/tmp/sysinfo/model",
-      "/proc/cmdline",
-      "/etc/hostname",
-      "/sys/devices/virtual/dmi/id/product_name",
-      "/sys/devices/virtual/dmi/id/board_name",
-  };
-  for (const auto &path : candidates) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) continue;
-    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    text.erase(std::remove(text.begin(), text.end(), '\0'), text.end());
-    const std::string token = ExtractModelToken(text);
-    if (!token.empty()) return token;
-  }
   return {};
 }
 
@@ -464,37 +404,10 @@ ScreenProfile DetectScreenProfile() {
     if (ApplyProfileFromModelToken(board_ini_token, detected_w, detected_h)) {
       if (TryCommitDetectedProfile(profile, detected_w, detected_h, "board-ini")) return profile;
     }
-  } else {
-#if defined(__arm__) || defined(__aarch64__)
-    if (TryCommitDetectedProfile(profile, 720, 720, "board-ini-fallback")) return profile;
-#endif
   }
-
-  if (ReadDeviceModelScreenProfile(detected_w, detected_h)) {
-    if (TryCommitDetectedProfile(profile, detected_w, detected_h, "device-model")) return profile;
-  }
-
-  if (ReadFramebufferModeSize(detected_w, detected_h)) {
-    if (TryCommitDetectedProfile(profile, detected_w, detected_h, "framebuffer-mode")) return profile;
-  }
-
-  if (ReadFramebufferSize(detected_w, detected_h)) {
-    if (TryCommitDetectedProfile(profile, detected_w, detected_h, "framebuffer")) return profile;
-  }
-
-  if (ReadConfigScreenProfile(detected_w, detected_h)) {
-    if (TryCommitDetectedProfile(profile, detected_w, detected_h, "config")) return profile;
-  }
-
-  if (ReadSdlDisplaySize(detected_w, detected_h)) {
-    if (TryCommitDetectedProfile(profile, detected_w, detected_h, "sdl")) return profile;
-  }
-
-  profile.detected_w = kDefaultScreenW;
-  profile.detected_h = kDefaultScreenH;
-  profile.detection_source = "default";
-  ApplyDefaultProfile(profile);
-  return profile;
+  return TryCommitDetectedProfile(profile, 720, 720, "board-ini-fallback")
+             ? profile
+             : ScreenProfile{};
 }
 
 bool Uses34xxSpKeymap(const std::string &model_token) {
