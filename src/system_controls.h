@@ -1,6 +1,6 @@
 #pragma once
 
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <string>
 
 struct SystemControlValue {
@@ -50,6 +50,8 @@ private:
   void DiscoverBrightnessPaths();
 
   bool prefer_system_volume_ = false;
+  bool volume_level_initialized_ = false;
+  int cached_volume_level_ = 0;
   std::string working_volume_control_;
   std::string working_mixer_card_;
   std::string working_mixer_elem_;

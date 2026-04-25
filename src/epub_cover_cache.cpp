@@ -4,7 +4,7 @@
 
 #include <SDL.h>
 
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <sstream>
 #include <string>
 

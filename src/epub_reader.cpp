@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <fstream>
 #include <regex>
 #include <sstream>
@@ -19,7 +19,7 @@ namespace {
 std::string ResolveRelative(const std::string &base_dir, const std::string &href) {
   try {
     std::filesystem::path p = std::filesystem::path(base_dir) / std::filesystem::path(href);
-    return p.lexically_normal().generic_string();
+    return filesystem_compat::LexicallyNormal(p).generic_string();
   } catch (...) {
     return href;
   }

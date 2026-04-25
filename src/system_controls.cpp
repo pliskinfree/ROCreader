@@ -72,7 +72,8 @@ std::string ReadSmallTextFile(const std::filesystem::path &path) {
 void LogSystemControl(const std::string &message) {
   const bool is_failure = message.find("failed") != std::string::npos;
   const bool is_init = message.rfind("init ", 0) == 0;
-  if (!is_failure && !is_init) return;
+  const bool is_volume_set = message.rfind("set volume", 0) == 0;
+  if (!is_failure && !is_init && !is_volume_set) return;
   std::cout << "[native_h700][system_controls] " << message << "\n";
 }
 
@@ -107,6 +108,34 @@ int RawBrightnessToUiLevel(int raw_brightness) {
 int UiLevelToRawBrightness(int level) {
   return kDispBrightnessUiLevels[static_cast<size_t>(std::clamp(level, 0, kBrightnessUiMaxLevel))];
 }
+
+int ReadEnvInt(const char *name, int fallback_value, int min_value, int max_value) {
+  const char *raw = std::getenv(name);
+  if (!raw || !*raw) return fallback_value;
+  try {
+    return std::clamp(std::stoi(raw), min_value, max_value);
+  } catch (...) {
+    return fallback_value;
+  }
+}
+
+int VolumeUiMaxLevel() {
+  return ReadEnvInt("ROCREADER_SYSTEM_VOLUME_LEVELS", 10, 1, 100);
+}
+
+int VolumeOutputMaxPercent() {
+  return ReadEnvInt("ROCREADER_SYSTEM_VOLUME_OUTPUT_MAX_PERCENT", 100, 1, 100);
+}
+
+int OutputPercentToUiPercent(int output_percent) {
+  const int max_output = VolumeOutputMaxPercent();
+  return std::clamp((std::clamp(output_percent, 0, max_output) * 100 + max_output / 2) / max_output, 0, 100);
+}
+
+int UiPercentToOutputPercent(int ui_percent) {
+  const int max_output = VolumeOutputMaxPercent();
+  return std::clamp((std::clamp(ui_percent, 0, 100) * max_output + 50) / 100, 0, max_output);
+}
 } // namespace
 
 SystemControlService::SystemControlService(bool prefer_system_volume)
@@ -132,7 +161,9 @@ bool SystemControlService::RefreshVolumeOnly(SystemControlValue &value) {
 }
 
 bool SystemControlService::ApplyVolumePercent(int percent, SystemControlValue &value) {
-  return SetVolumeLevel(PercentToVolumeLevel(std::clamp(percent, 0, 100)), value);
+  const int ui_percent = std::clamp(percent, 0, 100);
+  const int max_level = VolumeUiMaxLevel();
+  return SetVolumeLevel(ClampVolumeLevel((ui_percent * max_level + 50) / 100), value);
 }
 
 bool SystemControlService::ApplyBrightnessLevel(int level, SystemControlValue &value) {
@@ -153,16 +184,19 @@ bool SystemControlService::AdjustBrightness(int delta_steps, SystemControlLevels
   return SetBrightnessLevel(next_level, levels.brightness);
 }
 
-int SystemControlService::ClampVolumeLevel(int level) { return std::clamp(level, 0, 10); }
+int SystemControlService::ClampVolumeLevel(int level) { return std::clamp(level, 0, VolumeUiMaxLevel()); }
 
 int SystemControlService::ClampBrightnessLevel(int level) { return std::clamp(level, 0, kBrightnessUiMaxLevel); }
 
 int SystemControlService::PercentToVolumeLevel(int percent) {
-  return ClampVolumeLevel((percent * 10 + 50) / 100);
+  const int ui_percent = OutputPercentToUiPercent(percent);
+  const int max_level = VolumeUiMaxLevel();
+  return ClampVolumeLevel((ui_percent * max_level + 50) / 100);
 }
 
 int SystemControlService::VolumeLevelToPercent(int level) {
-  return std::clamp((ClampVolumeLevel(level) * 100 + 5) / 10, 0, 100);
+  const int max_level = VolumeUiMaxLevel();
+  return std::clamp((ClampVolumeLevel(level) * 100 + max_level / 2) / max_level, 0, 100);
 }
 
 std::string SystemControlService::TrimAscii(std::string text) {
@@ -434,7 +468,7 @@ std::string SystemControlService::RunCommandCapture(const std::string &command) 
 
 void SystemControlService::RefreshVolume(SystemControlValue &value) {
   value = {};
-  value.max_level = 10;
+  value.max_level = VolumeUiMaxLevel();
   if (!prefer_system_volume_) {
     LogSystemControl("refresh volume skipped: prefer_system_volume=0");
     return;
@@ -507,36 +541,51 @@ void SystemControlService::RefreshBrightness(SystemControlValue &value) {
 }
 
 bool SystemControlService::SetVolumeLevel(int level, SystemControlValue &value) {
-  value.max_level = 10;
+  value.max_level = VolumeUiMaxLevel();
   if (!prefer_system_volume_) {
     LogSystemControl("set volume skipped: prefer_system_volume=0 requested_level=" + std::to_string(level));
     return false;
   }
-  const int percent = VolumeLevelToPercent(level);
+  const int ui_percent = VolumeLevelToPercent(level);
+  const int percent = UiPercentToOutputPercent(ui_percent);
   LogSystemControl("set volume request: level=" + std::to_string(level) +
-                   " percent=" + std::to_string(percent) +
+                   " ui_percent=" + std::to_string(ui_percent) +
+                   " output_percent=" + std::to_string(percent) +
+                   " output_max_percent=" + std::to_string(VolumeOutputMaxPercent()) +
                    " working_control=" + working_volume_control_);
 
   if (TrySetVolumePercentAlsa(percent)) {
-    RefreshVolume(value);
+    value.available = true;
+    value.max_level = VolumeUiMaxLevel();
+    value.level = ClampVolumeLevel(level);
+    cached_volume_level_ = value.level;
+    volume_level_initialized_ = true;
     LogSystemControl("set volume success via ALSA: resulting_level=" + std::to_string(value.level));
-    return value.available;
+    return true;
   }
 
   if (!working_volume_control_.empty() && TrySetVolumePercent(working_volume_control_, percent)) {
-    RefreshVolume(value);
+    value.available = true;
+    value.max_level = VolumeUiMaxLevel();
+    value.level = ClampVolumeLevel(level);
+    cached_volume_level_ = value.level;
+    volume_level_initialized_ = true;
     LogSystemControl("set volume success via cached control: control=" + working_volume_control_ +
                      " resulting_level=" + std::to_string(value.level));
-    return value.available;
+    return true;
   }
 
   for (const char *control : kMixerControls) {
     if (!TrySetVolumePercent(control, percent)) continue;
     working_volume_control_ = control;
-    RefreshVolume(value);
+    value.available = true;
+    value.max_level = VolumeUiMaxLevel();
+    value.level = ClampVolumeLevel(level);
+    cached_volume_level_ = value.level;
+    volume_level_initialized_ = true;
     LogSystemControl("set volume success via discovered control: control=" + working_volume_control_ +
                      " resulting_level=" + std::to_string(value.level));
-    return value.available;
+    return true;
   }
   LogSystemControl("set volume failed: level=" + std::to_string(level) +
                    " percent=" + std::to_string(percent));

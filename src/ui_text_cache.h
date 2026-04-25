@@ -7,7 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -46,7 +46,8 @@ using BeforeDestroyTextTextureFn = std::function<void(SDL_Texture *)>;
 using MeasureTextWidthFn = std::function<int(const std::string &)>;
 
 void OpenUiFonts(UiTextCacheState &state, const std::filesystem::path &exe_path,
-                 const std::filesystem::path &ui_path, int reader_font_pt);
+                 const std::filesystem::path &ui_path, int body_font_pt, int title_font_pt,
+                 int reader_font_pt);
 void ClearUiTextCache(UiTextCacheState &state, const BeforeDestroyTextTextureFn &before_destroy = {});
 void ShutdownUiTextCache(UiTextCacheState &state, const BeforeDestroyTextTextureFn &before_destroy = {});
 TextCacheEntry *GetUiTextTexture(UiTextCacheState &state, SDL_Renderer *renderer, const std::string &text,

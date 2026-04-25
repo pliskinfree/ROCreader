@@ -56,13 +56,14 @@ struct SettingsRuntimeLayout {
   int settings_sidebar_w = 0;
   int settings_y_offset = 0;
   int settings_content_offset_y = 0;
+  float ui_scale = 1.0f;
 };
 
 struct SettingsRuntimeRenderDeps {
   SDL_Renderer *renderer = nullptr;
   UiAssets &ui_assets;
   const NativeConfig &cfg;
-  bool use_h700_34xx_keymap = false;
+  InputProfile input_profile = InputProfile::DesktopDefault;
   const std::vector<SettingId> &menu_items;
   int menu_selected = 0;
   animation::TweenFloat &menu_anim;

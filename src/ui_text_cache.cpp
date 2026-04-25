@@ -2,7 +2,7 @@
 
 #include <SDL.h>
 
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -48,29 +48,43 @@ const char *RolePrefix(UiTextRole role) {
 }
 
 void OpenUiFonts(UiTextCacheState &state, const std::filesystem::path &exe_path,
-                 const std::filesystem::path &ui_path, int reader_font_pt) {
+                 const std::filesystem::path &ui_path, int body_font_pt, int title_font_pt,
+                 int reader_font_pt) {
 #ifndef HAVE_SDL2_TTF
   (void)state;
   (void)exe_path;
   (void)ui_path;
+  (void)body_font_pt;
+  (void)title_font_pt;
   (void)reader_font_pt;
 #else
   if (state.font_attempted) return;
   state.font_attempted = true;
   if (state.font) return;
+  body_font_pt = std::max(1, body_font_pt);
+  title_font_pt = std::max(1, title_font_pt);
+  reader_font_pt = std::max(1, reader_font_pt);
   const std::vector<std::string> candidates = {
-      (exe_path / "fonts" / "ui_font_02.ttf").lexically_normal().string(),
-      (exe_path / "fonts" / "ui_font.ttf").lexically_normal().string(),
-      (exe_path.parent_path() / "fonts" / "ui_font_02.ttf").lexically_normal().string(),
-      (exe_path.parent_path() / "fonts" / "ui_font.ttf").lexically_normal().string(),
-      (std::filesystem::current_path() / "fonts" / "ui_font_02.ttf").lexically_normal().string(),
-      (std::filesystem::current_path() / "fonts" / "ui_font.ttf").lexically_normal().string(),
-      (ui_path.parent_path() / "fonts" / "ui_font_02.ttf").lexically_normal().string(),
-      (ui_path.parent_path() / "fonts" / "ui_font.ttf").lexically_normal().string(),
-      (exe_path / ".." / "ui_font_02.ttf").lexically_normal().string(),
-      (exe_path / ".." / "ui_font.ttf").lexically_normal().string(),
-      (std::filesystem::current_path() / "ui_font_02.ttf").lexically_normal().string(),
-      (std::filesystem::current_path() / "ui_font.ttf").lexically_normal().string(),
+      filesystem_compat::LexicallyNormal((exe_path / "fonts" / "ui_font_02.ttf")).string(),
+      filesystem_compat::LexicallyNormal((exe_path / "fonts" / "ui_font.ttf")).string(),
+      filesystem_compat::LexicallyNormal((exe_path / "resources" / "fonts" / "ui_font_02.ttf")).string(),
+      filesystem_compat::LexicallyNormal((exe_path / "resources" / "fonts" / "ui_font.ttf")).string(),
+      filesystem_compat::LexicallyNormal((exe_path.parent_path() / "fonts" / "ui_font_02.ttf")).string(),
+      filesystem_compat::LexicallyNormal((exe_path.parent_path() / "fonts" / "ui_font.ttf")).string(),
+      filesystem_compat::LexicallyNormal((exe_path.parent_path() / "resources" / "fonts" / "ui_font_02.ttf")).string(),
+      filesystem_compat::LexicallyNormal((exe_path.parent_path() / "resources" / "fonts" / "ui_font.ttf")).string(),
+      filesystem_compat::LexicallyNormal((std::filesystem::current_path() / "fonts" / "ui_font_02.ttf")).string(),
+      filesystem_compat::LexicallyNormal((std::filesystem::current_path() / "fonts" / "ui_font.ttf")).string(),
+      filesystem_compat::LexicallyNormal((std::filesystem::current_path() / "resources" / "fonts" / "ui_font_02.ttf")).string(),
+      filesystem_compat::LexicallyNormal((std::filesystem::current_path() / "resources" / "fonts" / "ui_font.ttf")).string(),
+      filesystem_compat::LexicallyNormal((ui_path.parent_path() / "fonts" / "ui_font_02.ttf")).string(),
+      filesystem_compat::LexicallyNormal((ui_path.parent_path() / "fonts" / "ui_font.ttf")).string(),
+      filesystem_compat::LexicallyNormal((ui_path.parent_path() / "resources" / "fonts" / "ui_font_02.ttf")).string(),
+      filesystem_compat::LexicallyNormal((ui_path.parent_path() / "resources" / "fonts" / "ui_font.ttf")).string(),
+      filesystem_compat::LexicallyNormal((exe_path / ".." / "ui_font_02.ttf")).string(),
+      filesystem_compat::LexicallyNormal((exe_path / ".." / "ui_font.ttf")).string(),
+      filesystem_compat::LexicallyNormal((std::filesystem::current_path() / "ui_font_02.ttf")).string(),
+      filesystem_compat::LexicallyNormal((std::filesystem::current_path() / "ui_font.ttf")).string(),
       "ui_font_02.ttf",
       "ui_font.ttf",
       (ui_path / "fonts" / "ui_font_02.ttf").string(),
@@ -97,13 +111,13 @@ void OpenUiFonts(UiTextCacheState &state, const std::filesystem::path &exe_path,
   for (const auto &path : candidates) {
     if (!std::filesystem::exists(path)) continue;
     std::cout << "[native_h700] ui font try: " << path << "\n";
-    TTF_Font *font = TTF_OpenFont(path.c_str(), 16);
+    TTF_Font *font = TTF_OpenFont(path.c_str(), body_font_pt);
     if (!font) {
       std::cerr << "[native_h700] ui font open failed: body path=" << path
                 << " err=" << TTF_GetError() << "\n";
       continue;
     }
-    TTF_Font *title_font = TTF_OpenFont(path.c_str(), 24);
+    TTF_Font *title_font = TTF_OpenFont(path.c_str(), title_font_pt);
     if (!title_font) {
       std::cerr << "[native_h700] ui font open failed: title path=" << path
                 << " err=" << TTF_GetError() << "\n";
@@ -127,7 +141,9 @@ void OpenUiFonts(UiTextCacheState &state, const std::filesystem::path &exe_path,
         path.find("ui_font_02.ttf") != std::string::npos) {
       std::cout << " (project font)";
     }
-    std::cout << " reader_pt=" << reader_font_pt << "\n";
+    std::cout << " body_pt=" << body_font_pt
+              << " title_pt=" << title_font_pt
+              << " reader_pt=" << reader_font_pt << "\n";
     break;
   }
   if (!state.font || !state.title_font || !state.reader_font) {

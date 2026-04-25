@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <cmath>
 #include <sstream>
 
 const char *ButtonName(Button b) {
@@ -33,6 +34,16 @@ const char *ButtonNameOrInvalid(Button b) {
   return InputManager::IsValid(b) ? ButtonName(b) : "Invalid";
 }
 
+const char *InputProfileName(InputProfile profile) {
+  switch (profile) {
+  case InputProfile::DesktopDefault: return "desktop-default";
+  case InputProfile::H700Default: return "h700-default";
+  case InputProfile::H70034xxSp: return "h700-34xxsp";
+  case InputProfile::TrimuiBrick: return "trimui-brick";
+  default: return "unknown";
+  }
+}
+
 const char *SdlEventName(Uint32 type) {
   switch (type) {
   case SDL_KEYDOWN: return "SDL_KEYDOWN";
@@ -44,15 +55,20 @@ const char *SdlEventName(Uint32 type) {
   case SDL_JOYBUTTONUP: return "SDL_JOYBUTTONUP";
   case SDL_JOYHATMOTION: return "SDL_JOYHATMOTION";
   case SDL_JOYAXISMOTION: return "SDL_JOYAXISMOTION";
+  case SDL_CONTROLLERDEVICEADDED: return "SDL_CONTROLLERDEVICEADDED";
+  case SDL_CONTROLLERDEVICEREMOVED: return "SDL_CONTROLLERDEVICEREMOVED";
+  case SDL_JOYDEVICEADDED: return "SDL_JOYDEVICEADDED";
+  case SDL_JOYDEVICEREMOVED: return "SDL_JOYDEVICEREMOVED";
   default: return "SDL_EVENT_UNKNOWN";
   }
 }
 
-InputManager::InputManager(const std::string &mapping_path, bool h700_defaults, bool h700_34xx_style) {
+InputManager::InputManager(const std::string &mapping_path, InputProfile input_profile) {
+  input_profile_ = input_profile;
   pad_map_.fill(InvalidButton());
   joy_map_.fill(InvalidButton());
-  LoadDefaultPadMap();
-  LoadDefaultJoyMap(h700_defaults, h700_34xx_style);
+  LoadDefaultPadMap(input_profile);
+  LoadDefaultJoyMap(input_profile);
   LoadOverrides(mapping_path);
 }
 
@@ -68,9 +84,23 @@ void InputManager::BeginFrame(float dt) {
 
 void InputManager::HandleEvent(const SDL_Event &e) {
   if (e.type == SDL_KEYDOWN && !e.key.repeat) {
-    SetDown(KeyToButton(e.key.keysym.sym), true);
+    const Button mapped = KeyToButton(e.key.keysym.sym);
+    if (input_profile_ == InputProfile::TrimuiBrick) {
+      std::cout << "[native_h700] input event: type=" << SdlEventName(e.type)
+                << " key=" << static_cast<int>(e.key.keysym.sym)
+                << " scancode=" << static_cast<int>(e.key.keysym.scancode)
+                << " mapped=" << ButtonNameOrInvalid(mapped) << "\n";
+    }
+    SetDown(mapped, true);
   } else if (e.type == SDL_KEYUP) {
-    SetDown(KeyToButton(e.key.keysym.sym), false);
+    const Button mapped = KeyToButton(e.key.keysym.sym);
+    if (input_profile_ == InputProfile::TrimuiBrick) {
+      std::cout << "[native_h700] input event: type=" << SdlEventName(e.type)
+                << " key=" << static_cast<int>(e.key.keysym.sym)
+                << " scancode=" << static_cast<int>(e.key.keysym.scancode)
+                << " mapped=" << ButtonNameOrInvalid(mapped) << "\n";
+    }
+    SetDown(mapped, false);
   } else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
     const Button mapped = PadToButton(e.cbutton.button);
     std::cout << "[native_h700] input event: type=" << SdlEventName(e.type)
@@ -85,14 +115,37 @@ void InputManager::HandleEvent(const SDL_Event &e) {
     SetDown(PadToButton(e.cbutton.button), false);
   } else if (e.type == SDL_CONTROLLERAXISMOTION) {
     constexpr int kDeadzone = 16000;
+    constexpr int kLogDelta = 512;
     const int axis = e.caxis.axis;
     const int val = static_cast<int>(e.caxis.value);
+    const bool valid_axis = axis >= 0 && axis < static_cast<int>(last_pad_axis_values_.size());
+    const int old_val = valid_axis ? last_pad_axis_values_[static_cast<size_t>(axis)] : 0;
+    const bool full_axis_log = std::getenv("ROCREADER_FULL_INPUT_LOG") != nullptr;
+    const bool should_log_axis =
+        full_axis_log && input_profile_ == InputProfile::TrimuiBrick &&
+        (!valid_axis || !pad_axis_seen_[static_cast<size_t>(axis)] || std::abs(val - old_val) >= kLogDelta ||
+         std::abs(val) < kLogDelta || std::abs(val) > kDeadzone);
+    if (should_log_axis) {
+      std::cout << "[native_h700] input event: type=" << SdlEventName(e.type)
+                << " which=" << e.caxis.which
+                << " pad_axis=" << axis
+                << " value=" << val
+                << " old=" << old_val << "\n";
+    }
+    if (valid_axis) {
+      last_pad_axis_values_[static_cast<size_t>(axis)] = val;
+      pad_axis_seen_[static_cast<size_t>(axis)] = true;
+    }
     if (axis == SDL_CONTROLLER_AXIS_LEFTX || axis == SDL_CONTROLLER_AXIS_RIGHTX) {
       SetDown(Button::Left, val < -kDeadzone);
       SetDown(Button::Right, val > kDeadzone);
     } else if (axis == SDL_CONTROLLER_AXIS_LEFTY || axis == SDL_CONTROLLER_AXIS_RIGHTY) {
       SetDown(Button::Up, val < -kDeadzone);
       SetDown(Button::Down, val > kDeadzone);
+    } else if (axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) {
+      SetDown(Button::L2, val > kDeadzone);
+    } else if (axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) {
+      SetDown(Button::R2, val > kDeadzone);
     }
   } else if (e.type == SDL_JOYBUTTONDOWN) {
     const Button mapped = JoyButtonToButton(e.jbutton.button);
@@ -108,20 +161,46 @@ void InputManager::HandleEvent(const SDL_Event &e) {
     SetDown(JoyButtonToButton(e.jbutton.button), false);
   } else if (e.type == SDL_JOYHATMOTION) {
     const uint8_t v = e.jhat.value;
+    std::cout << "[native_h700] input event: type=" << SdlEventName(e.type)
+              << " hat=" << static_cast<int>(e.jhat.hat)
+              << " value=" << static_cast<int>(v) << "\n";
     SetDown(Button::Up, (v & SDL_HAT_UP) != 0);
     SetDown(Button::Down, (v & SDL_HAT_DOWN) != 0);
     SetDown(Button::Left, (v & SDL_HAT_LEFT) != 0);
     SetDown(Button::Right, (v & SDL_HAT_RIGHT) != 0);
   } else if (e.type == SDL_JOYAXISMOTION) {
     constexpr int kDeadzone = 16000;
+    constexpr int kLogDelta = 512;
     const int axis = e.jaxis.axis;
     const int val = static_cast<int>(e.jaxis.value);
+    const bool valid_axis = axis >= 0 && axis < static_cast<int>(last_joy_axis_values_.size());
+    const int old_val = valid_axis ? last_joy_axis_values_[static_cast<size_t>(axis)] : 0;
+    const bool full_axis_log = std::getenv("ROCREADER_FULL_INPUT_LOG") != nullptr;
+    const bool should_log_axis =
+        full_axis_log && input_profile_ == InputProfile::TrimuiBrick &&
+        (!valid_axis || !joy_axis_seen_[static_cast<size_t>(axis)] || std::abs(val - old_val) >= kLogDelta ||
+         std::abs(val) < kLogDelta || std::abs(val) > kDeadzone);
+    if (should_log_axis) {
+      std::cout << "[native_h700] input event: type=" << SdlEventName(e.type)
+                << " which=" << e.jaxis.which
+                << " joy_axis=" << axis
+                << " value=" << val
+                << " old=" << old_val << "\n";
+    }
+    if (valid_axis) {
+      last_joy_axis_values_[static_cast<size_t>(axis)] = val;
+      joy_axis_seen_[static_cast<size_t>(axis)] = true;
+    }
     if (axis == 0 || axis == 6) {
       SetDown(Button::Left, val < -kDeadzone);
       SetDown(Button::Right, val > kDeadzone);
     } else if (axis == 1 || axis == 7) {
       SetDown(Button::Up, val < -kDeadzone);
       SetDown(Button::Down, val > kDeadzone);
+    } else if (input_profile_ == InputProfile::TrimuiBrick && axis == 2) {
+      SetDown(Button::L2, val > kDeadzone);
+    } else if (input_profile_ == InputProfile::TrimuiBrick && axis == 5) {
+      SetDown(Button::R2, val > kDeadzone);
     }
   }
 }
@@ -244,15 +323,22 @@ Button InputManager::JoyButtonToButton(uint8_t b) const {
   return joy_map_[b];
 }
 
-void InputManager::LoadDefaultPadMap() {
+void InputManager::LoadDefaultPadMap(InputProfile input_profile) {
   pad_map_[SDL_CONTROLLER_BUTTON_DPAD_UP] = Button::Up;
   pad_map_[SDL_CONTROLLER_BUTTON_DPAD_DOWN] = Button::Down;
   pad_map_[SDL_CONTROLLER_BUTTON_DPAD_LEFT] = Button::Left;
   pad_map_[SDL_CONTROLLER_BUTTON_DPAD_RIGHT] = Button::Right;
-  pad_map_[SDL_CONTROLLER_BUTTON_A] = Button::A;
-  pad_map_[SDL_CONTROLLER_BUTTON_B] = Button::B;
-  pad_map_[SDL_CONTROLLER_BUTTON_X] = Button::X;
-  pad_map_[SDL_CONTROLLER_BUTTON_Y] = Button::Y;
+  if (input_profile == InputProfile::TrimuiBrick) {
+    pad_map_[SDL_CONTROLLER_BUTTON_A] = Button::B;
+    pad_map_[SDL_CONTROLLER_BUTTON_B] = Button::A;
+    pad_map_[SDL_CONTROLLER_BUTTON_X] = Button::Y;
+    pad_map_[SDL_CONTROLLER_BUTTON_Y] = Button::X;
+  } else {
+    pad_map_[SDL_CONTROLLER_BUTTON_A] = Button::A;
+    pad_map_[SDL_CONTROLLER_BUTTON_B] = Button::B;
+    pad_map_[SDL_CONTROLLER_BUTTON_X] = Button::X;
+    pad_map_[SDL_CONTROLLER_BUTTON_Y] = Button::Y;
+  }
   pad_map_[SDL_CONTROLLER_BUTTON_LEFTSHOULDER] = Button::L1;
   pad_map_[SDL_CONTROLLER_BUTTON_RIGHTSHOULDER] = Button::R1;
   pad_map_[SDL_CONTROLLER_BUTTON_LEFTSTICK] = Button::L2;
@@ -261,12 +347,12 @@ void InputManager::LoadDefaultPadMap() {
   pad_map_[SDL_CONTROLLER_BUTTON_START] = Button::Start;
 }
 
-void InputManager::LoadDefaultJoyMap(bool h700_defaults, bool h700_34xx_style) {
+void InputManager::LoadDefaultJoyMap(InputProfile input_profile) {
   joy_map_[0] = Button::A;
   joy_map_[1] = Button::B;
   joy_map_[4] = Button::L1;
   joy_map_[5] = Button::R1;
-  if (h700_defaults && h700_34xx_style) {
+  if (input_profile == InputProfile::H70034xxSp) {
     joy_map_[2] = Button::Y;
     joy_map_[3] = Button::X;
     joy_map_[6] = Button::Select;
@@ -277,6 +363,22 @@ void InputManager::LoadDefaultJoyMap(bool h700_defaults, bool h700_34xx_style) {
     joy_map_[11] = Button::R2;
     joy_map_[12] = Button::Select;
     joy_map_[13] = Button::Start;
+    joy_map_[15] = Button::VolDown;
+    joy_map_[16] = Button::VolUp;
+  } else if (input_profile == InputProfile::TrimuiBrick) {
+    joy_map_[0] = Button::B;
+    joy_map_[1] = Button::A;
+    joy_map_[2] = Button::Y;
+    joy_map_[3] = Button::X;
+    joy_map_[6] = Button::Select;
+    joy_map_[7] = Button::Start;
+    joy_map_[8] = Button::Menu;
+    joy_map_[9] = Button::L2;
+    joy_map_[10] = Button::R2;
+    joy_map_[11] = InvalidButton();
+    joy_map_[12] = Button::Select;
+    joy_map_[13] = Button::L2;
+    joy_map_[14] = Button::R2;
     joy_map_[15] = Button::VolDown;
     joy_map_[16] = Button::VolUp;
   } else {

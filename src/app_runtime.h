@@ -17,6 +17,7 @@ public:
   bool AdjustUp();
   bool AdjustDown();
   bool RefreshPercent(int &out_percent);
+  int MaxLevel() const;
 
 private:
   bool AdjustBySteps(int delta_steps, int &out_percent);
@@ -48,4 +49,5 @@ void HandleVolumeControls(AppUiState &state, const InputManager &input, uint32_t
                           const std::function<void()> &play_change_sfx);
 MenuToggleAction HandleMenuToggleInput(AppUiState &state, const InputManager &input, bool is_settings,
                                        bool is_shelf, bool is_reader, bool settings_close_armed,
-                                       float settings_toggle_guard, bool menu_closing, float debounce_sec);
+                                       float settings_toggle_guard, bool menu_closing, float debounce_sec,
+                                       InputProfile input_profile);

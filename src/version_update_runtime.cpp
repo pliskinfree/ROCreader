@@ -5,6 +5,7 @@
 #include <array>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -28,6 +29,10 @@ constexpr int kDownloadConnectTimeoutSec = 15;
 constexpr int kDownloadMaxTimeSec = 300;
 constexpr int kDownloadLowSpeedBytesPerSec = 1024;
 constexpr int kDownloadLowSpeedWindowSec = 20;
+
+int ScalePx(float scale, int value) {
+  return std::max(1, static_cast<int>(std::round(static_cast<float>(value) * std::max(0.1f, scale))));
+}
 
 std::filesystem::path UpdateLogPath() {
   std::error_code ec;
@@ -696,13 +701,19 @@ void DrawVersionUpdatePreview(const VersionUpdateRenderDeps &deps) {
   const SDL_Color slot_active = deps.light_theme ? SDL_Color{72, 122, 164, 255} : SDL_Color{122, 201, 255, 255};
   const SDL_Color success_color = deps.light_theme ? SDL_Color{54, 132, 94, 255} : SDL_Color{116, 224, 165, 255};
 
+  const float scale = std::max(0.1f, deps.ui_scale);
+  const int button_base_w = ScalePx(scale, kButtonWidth);
+  const int button_h = ScalePx(scale, kButtonHeight + 4);
+  const int button_pad_x = ScalePx(scale, 24);
+  const int progress_bar_w = ScalePx(scale, kProgressBarWidth);
+  const int progress_bar_h = ScalePx(scale, kProgressBarHeight);
   const int center_x = deps.preview_rect.x + deps.preview_rect.w / 2;
-  const int content_height = 162;
+  const int content_height = ScalePx(scale, 162);
   const int content_top = deps.preview_rect.y + std::max(0, (deps.preview_rect.h - content_height) / 2);
-  const int line1_y = content_top + 18;
-  const int line2_y = content_top + 76;
-  const int line3_y = content_top + 136;
-  const int line4_y = content_top + 162;
+  const int line1_y = content_top + ScalePx(scale, 18);
+  const int line2_y = content_top + ScalePx(scale, 76);
+  const int line3_y = content_top + ScalePx(scale, 136);
+  const int line4_y = content_top + ScalePx(scale, 162);
 
   DrawCenteredText(deps.renderer,
                    deps.preview_rect,
@@ -718,16 +729,15 @@ void DrawVersionUpdatePreview(const VersionUpdateRenderDeps &deps) {
                                                 text_color)
                                           : nullptr;
   const int button_width =
-      std::max(kButtonWidth, (button_text_entry ? button_text_entry->w : 0) + 36);
-  const int button_right = center_x + kButtonWidth / 2;
+      std::max(button_base_w, (button_text_entry ? button_text_entry->w : 0) + button_pad_x * 2);
   const bool button_selected = deps.state.panel_active && !deps.state.download_in_progress;
-  const int button_x = button_right - button_width;
-  const int button_y = line2_y - kButtonHeight / 2;
-  deps.draw_rect(button_x, button_y, button_width, kButtonHeight,
+  const int button_x = center_x - button_width / 2;
+  const int button_y = line2_y - button_h / 2;
+  deps.draw_rect(button_x, button_y, button_width, button_h,
                  button_selected ? button_active : button_fill, true);
-  deps.draw_rect(button_x, button_y, button_width, kButtonHeight, button_border, false);
+  deps.draw_rect(button_x, button_y, button_width, button_h, button_border, false);
   DrawCenteredText(deps.renderer,
-                   SDL_Rect{button_x, button_y, button_width, kButtonHeight},
+                   SDL_Rect{button_x, button_y, button_width, button_h},
                    deps.get_text_texture,
                    std::string(LocalizedAppText(deps.language_index, AppTextId::VersionCheckAndUpdate)),
                    text_color,
@@ -751,21 +761,21 @@ void DrawVersionUpdatePreview(const VersionUpdateRenderDeps &deps) {
                      line3_y);
     break;
   case VersionUpdateStatus::Downloading: {
-    const int bar_x = center_x - kProgressBarWidth / 2;
-    const int bar_y = line3_y - kProgressBarHeight / 2 + 8;
-    deps.draw_rect(bar_x, bar_y, kProgressBarWidth, kProgressBarHeight, slot_fill, true);
-    const int fill_w = std::clamp((kProgressBarWidth * deps.state.download_progress_pct) / 100, 0, kProgressBarWidth);
+    const int bar_x = center_x - progress_bar_w / 2;
+    const int bar_y = line3_y - progress_bar_h / 2 + ScalePx(scale, 8);
+    deps.draw_rect(bar_x, bar_y, progress_bar_w, progress_bar_h, slot_fill, true);
+    const int fill_w = std::clamp((progress_bar_w * deps.state.download_progress_pct) / 100, 0, progress_bar_w);
     if (fill_w > 0) {
-      deps.draw_rect(bar_x, bar_y, fill_w, kProgressBarHeight, slot_active, true);
+      deps.draw_rect(bar_x, bar_y, fill_w, progress_bar_h, slot_active, true);
     }
-    deps.draw_rect(bar_x, bar_y, kProgressBarWidth, kProgressBarHeight, button_border, false);
+    deps.draw_rect(bar_x, bar_y, progress_bar_w, progress_bar_h, button_border, false);
     DrawCenteredText(deps.renderer,
                      deps.preview_rect,
                      deps.get_text_texture,
                      std::string(LocalizedAppText(deps.language_index, AppTextId::VersionDownloading)) + " "
                          + std::to_string(deps.state.download_progress_pct) + "%",
                      text_color,
-                     line3_y - 20);
+                     line3_y - ScalePx(scale, 20));
     DrawCenteredText(deps.renderer,
                      deps.preview_rect,
                      deps.get_text_texture,

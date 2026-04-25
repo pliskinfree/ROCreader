@@ -72,6 +72,10 @@ screen_profile_from_board_ini() {
   model_name="$(read_board_ini_model || true)"
   [ -n "$model_name" ] || return 1
   case "$model_name" in
+    *trimui*brick*|*brick*|*tg3040*)
+      printf '1024x768|%s\n' "$model_name"
+      return 0
+      ;;
     *rgcubexx*|*cubexx*)
       printf '720x720|%s\n' "$model_name"
       return 0
@@ -91,6 +95,10 @@ screen_profile_from_board_ini() {
 
 normalize_screen_override() {
   case "${ROCREADER_SCREEN_PROFILE:-}" in
+    1024x768|brick|trimui-brick)
+      export ROCREADER_SCREEN_W=1024
+      export ROCREADER_SCREEN_H=768
+      ;;
     720x720)
       export ROCREADER_SCREEN_W=720
       export ROCREADER_SCREEN_H=720
@@ -117,6 +125,10 @@ detect_screen_size_token() {
     [ -r "$path" ] || continue
     value="$(tr -d '\000\r' <"$path" | head -n 1)"
     case "$value" in
+      *1024*x*768*|*1024*768*)
+        printf '%s\n' "1024x768"
+        return 0
+        ;;
       *640*)
         printf '%s\n' "640x480"
         return 0
@@ -139,6 +151,14 @@ ensure_screen_override_if_needed() {
 
   model_rule="$(screen_profile_from_board_ini || true)"
   case "$model_rule" in
+    1024x768\|*)
+      model_name="${model_rule#*|}"
+      export ROCREADER_SCREEN_PROFILE=1024x768
+      export ROCREADER_SCREEN_W=1024
+      export ROCREADER_SCREEN_H=768
+      log_line "[launcher] screen override board.ini: $model_name -> 1024x768"
+      return 0
+      ;;
     720x720\|*)
       model_name="${model_rule#*|}"
       export ROCREADER_SCREEN_PROFILE=720x720

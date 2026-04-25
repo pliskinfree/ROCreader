@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstdint>
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <string>
 
 struct SystemStatusSnapshot {

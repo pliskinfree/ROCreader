@@ -5,7 +5,7 @@
 #include <SDL_mixer.h>
 #endif
 
-#include <filesystem>
+#include "filesystem_compat.h"
 
 enum class SfxId { Move, Select, Back, Change };
 

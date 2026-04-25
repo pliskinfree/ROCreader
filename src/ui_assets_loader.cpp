@@ -2,7 +2,7 @@
 
 #include <SDL.h>
 
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -92,13 +92,19 @@ UiAssetsLoadResult LoadUiAssets(UiAssets &assets, UiAssetsLoaderDeps &deps) {
   UiAssetsLoadResult result;
   std::vector<std::filesystem::path> ui_roots = {
       deps.exe_path / "ui",
+      deps.exe_path / "resources" / "ui",
       deps.exe_path / ".." / "ui",
+      deps.exe_path / ".." / "resources" / "ui",
       std::filesystem::current_path() / "ui",
+      std::filesystem::current_path() / "resources" / "ui",
   };
   std::vector<std::filesystem::path> ui_pack_paths = {
       deps.exe_path / "ui.pack",
+      deps.exe_path / "resources" / "ui.pack",
       deps.exe_path / ".." / "ui.pack",
+      deps.exe_path / ".." / "resources" / "ui.pack",
       std::filesystem::current_path() / "ui.pack",
+      std::filesystem::current_path() / "resources" / "ui.pack",
   };
   std::unordered_map<std::string, std::vector<unsigned char>> packed_ui_assets;
 

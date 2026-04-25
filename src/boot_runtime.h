@@ -5,7 +5,7 @@
 
 #include <SDL.h>
 
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <functional>
 #include <string>
 #include <vector>

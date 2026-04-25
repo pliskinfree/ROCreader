@@ -40,6 +40,7 @@ enum class AppTextId {
   VersionDownloadFailed,
   KeyGuideProfile34xxSp,
   KeyGuideProfileOtherH700,
+  KeyGuideProfileTrimuiBrick,
   KeyGuideActionDpad,
   KeyGuideActionA,
   KeyGuideActionB,

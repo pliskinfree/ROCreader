@@ -125,8 +125,10 @@ void XorUiPayload(std::vector<unsigned char> &data, const std::string &name) {
 std::vector<PackedUiAsset> LoadPackedAvatarAssets(const std::filesystem::path &exe_path) {
   std::vector<std::filesystem::path> ui_pack_paths = {
       exe_path / "ui.pack",
+      exe_path / "resources" / "ui.pack",
       exe_path / ".." / "ui.pack",
       std::filesystem::current_path() / "ui.pack",
+      std::filesystem::current_path() / "resources" / "ui.pack",
   };
 
   for (const auto &pack_path : ui_pack_paths) {
@@ -210,6 +212,10 @@ constexpr float kAvatarNameMarqueePauseSec = 0.0f;
 constexpr float kAvatarNameMarqueeSpeedPx = 84.0f;
 constexpr float kAvatarNameMarqueeGapPx = 4.0f;
 
+int ScalePx(float scale, int value) {
+  return std::max(1, static_cast<int>(std::round(static_cast<float>(value) * std::max(0.1f, scale))));
+}
+
 float ComputeEffectiveMarqueeDt(float dt, ContributorAvatarState &state) {
   const uint32_t now = SDL_GetTicks();
   float effective_dt = dt;
@@ -242,11 +248,13 @@ void DestroyContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entrie
 
 void LoadContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entries, const std::filesystem::path &ui_root,
                                   const std::filesystem::path &exe_path, SDL_Renderer *renderer, int language_index,
+                                  int avatar_texture_size,
                                   const std::function<SDL_Surface *(const void *, size_t)> &load_surface_from_memory,
                                   const std::function<void(SDL_Texture *, int, int)> &remember_texture_size,
                                   const std::function<void(SDL_Texture *)> &before_destroy) {
   DestroyContributorAvatarEntries(entries, before_destroy);
   if (!renderer) return;
+  avatar_texture_size = std::max(1, avatar_texture_size);
 
   std::vector<AvatarCandidate> candidates;
   std::unordered_map<int, SDL_Texture *> rank_frames;
@@ -286,13 +294,13 @@ void LoadContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entries, 
     }
   } else if (has_ui_root) {
     for (const auto &entry : std::filesystem::directory_iterator(ui_root)) {
-      if (!entry.is_regular_file()) continue;
+      if (!filesystem_compat::IsRegularFile(entry)) continue;
       AvatarCandidate candidate;
       if (ParseAvatarCandidate(entry.path(), candidate)) candidates.push_back(std::move(candidate));
     }
 
     for (const auto &entry : std::filesystem::directory_iterator(ui_root)) {
-      if (!entry.is_regular_file()) continue;
+      if (!filesystem_compat::IsRegularFile(entry)) continue;
       const int rank_order = ParseRankFrameOrder(entry.path());
       if (rank_order < 0 || rank_order > 3 || rank_frames.count(rank_order) > 0) continue;
 
@@ -347,7 +355,7 @@ void LoadContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entries, 
       surface = LoadSurfaceFromFile(candidate.path.string());
     }
     if (!surface) continue;
-    SDL_Texture *texture = CreateNormalizedCoverTexture(renderer, surface, 160, 160, 1.0f);
+    SDL_Texture *texture = CreateNormalizedCoverTexture(renderer, surface, avatar_texture_size, avatar_texture_size, 1.0f);
     SDL_FreeSurface(surface);
     if (!texture) continue;
     int width = 0;
@@ -489,24 +497,26 @@ void DrawContributorAvatarPreview(const ContributorAvatarRenderDeps &deps) {
     return;
   }
 
-  const int safe_top = deps.preview_rect.y + 35;
-  const int safe_bottom = deps.preview_rect.y + deps.preview_rect.h - 35;
-  const int safe_left = deps.preview_rect.x + 28;
-  const int safe_right = deps.preview_rect.x + deps.preview_rect.w - 28;
+  const float scale = deps.ui_scale;
+  const int safe_top = deps.preview_rect.y + ScalePx(scale, 35);
+  const int safe_bottom = deps.preview_rect.y + deps.preview_rect.h - ScalePx(scale, 35);
+  const int safe_left = deps.preview_rect.x + ScalePx(scale, 28);
+  const int safe_right = deps.preview_rect.x + deps.preview_rect.w - ScalePx(scale, 28);
   const int safe_w = std::max(0, safe_right - safe_left);
   const int safe_h = std::max(0, safe_bottom - safe_top);
   if (safe_w <= 0 || safe_h <= 0) return;
 
-  const int col_gap = 22;
-  const int row_gap = 16;
-  const int name_gap = 8;
-  const int name_h = 20;
-  const int tile_w = std::max(60, (safe_w - col_gap * 2) / 3);
+  const int col_gap = ScalePx(scale, 22);
+  const int row_gap = ScalePx(scale, 16);
+  const int name_gap = ScalePx(scale, 8);
+  const int name_h = ScalePx(scale, 20);
+  const int tile_w = std::max(ScalePx(scale, 60), (safe_w - col_gap * 2) / 3);
   const int row_pitch =
-      std::clamp(static_cast<int>(std::floor((safe_h - row_gap * 1.5f) / 2.5f)), 88, 154);
-  const int image_size = std::max(48, std::min(tile_w, row_pitch - name_gap - name_h - row_gap));
+      std::clamp(static_cast<int>(std::floor((safe_h - row_gap * 1.5f) / 2.5f)),
+                 ScalePx(scale, 88), ScalePx(scale, 154));
+  const int image_size = std::max(ScalePx(scale, 48), std::min(tile_w, row_pitch - name_gap - name_h - row_gap));
   const int x_base = safe_left + std::max(0, (safe_w - (tile_w * 3 + col_gap * 2)) / 2);
-  const int top_inner_gap = std::max(12, safe_h / 24);
+  const int top_inner_gap = std::max(ScalePx(scale, 12), safe_h / 24);
   const int y_base = safe_top + top_inner_gap;
   const int scroll_y = deps.state.scroll_row * row_pitch;
 
@@ -538,7 +548,8 @@ void DrawContributorAvatarPreview(const ContributorAvatarRenderDeps &deps) {
         SDL_RenderCopy(deps.renderer, deps.entries[i].rank_frame, nullptr, &dst);
       }
       if (selected) {
-        deps.draw_rect(image_x - 3, image_y - 3, draw_image_size + 6, draw_image_size + 6,
+        const int focus_pad = ScalePx(scale, 3);
+        deps.draw_rect(image_x - focus_pad, image_y - focus_pad, draw_image_size + focus_pad * 2, draw_image_size + focus_pad * 2,
                        SDL_Color{120, 205, 255, 255}, false);
       }
     }
@@ -558,7 +569,7 @@ void DrawContributorAvatarPreview(const ContributorAvatarRenderDeps &deps) {
           SDL_Rect td{centered_x, draw_y, label_tex->w, label_tex->h};
           SDL_RenderCopy(deps.renderer, label_tex->texture, nullptr, &td);
         } else if (focused) {
-          const float span = static_cast<float>(label_tex->w) + kAvatarNameMarqueeGapPx;
+          const float span = static_cast<float>(label_tex->w) + kAvatarNameMarqueeGapPx * scale;
           const float xoff = span > 0.0f ? std::fmod(deps.state.marquee_offset, span) : 0.0f;
           SDL_Rect td1{label_x - static_cast<int>(std::round(xoff)), draw_y, label_tex->w, label_tex->h};
           SDL_Rect td2{td1.x + static_cast<int>(std::round(span)), draw_y, label_tex->w, label_tex->h};

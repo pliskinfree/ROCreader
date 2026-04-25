@@ -9,6 +9,8 @@ VolumeController::VolumeController(bool prefer_system) : prefer_system_(prefer_s
 
 bool VolumeController::UsesSystemVolume() const { return prefer_system_; }
 
+int VolumeController::MaxLevel() const { return std::max(1, levels_.volume.max_level); }
+
 bool VolumeController::AdjustUp() {
   int ignored_percent = 0;
   return AdjustBySteps(+1, ignored_percent);
@@ -22,7 +24,7 @@ bool VolumeController::AdjustDown() {
 bool VolumeController::RefreshPercent(int &out_percent) {
   if (!prefer_system_) return false;
   if (!service_.RefreshVolumeOnly(levels_.volume) || !levels_.volume.available) return false;
-  out_percent = std::clamp(levels_.volume.level * 10, 0, 100);
+  out_percent = std::clamp((levels_.volume.level * 100) / std::max(1, levels_.volume.max_level), 0, 100);
   return true;
 }
 
@@ -30,9 +32,10 @@ bool VolumeController::AdjustBySteps(int delta_steps, int &out_percent) {
   if (!prefer_system_) return false;
   std::cout << "[native_h700] volume adjust request: mode=system steps=" << delta_steps << "\n";
   if (!service_.AdjustVolume(delta_steps, levels_) || !levels_.volume.available) return false;
-  out_percent = std::clamp(levels_.volume.level * 10, 0, 100);
+  out_percent = std::clamp((levels_.volume.level * 100) / std::max(1, levels_.volume.max_level), 0, 100);
   std::cout << "[native_h700] volume adjust success: percent=" << out_percent
-            << " level=" << levels_.volume.level << "\n";
+            << " level=" << levels_.volume.level
+            << " max=" << levels_.volume.max_level << "\n";
   return true;
 }
 
@@ -58,53 +61,52 @@ void HandleVolumeControls(AppUiState &state, const InputManager &input, uint32_t
   if (volume_controller.UsesSystemVolume()) {
     if (vol_up_pressed) system_volume_changed = volume_controller.AdjustUp() || system_volume_changed;
     if (vol_down_pressed) system_volume_changed = volume_controller.AdjustDown() || system_volume_changed;
-    if (system_volume_changed) {
-      volume_controller.RefreshPercent(system_percent);
-    }
+    const bool system_volume_read = volume_controller.RefreshPercent(system_percent);
+    system_volume_changed = system_volume_changed || system_volume_read;
     if (system_volume_changed) {
       std::cout << "[native_h700] system volume: "
                 << (vol_up_pressed && vol_down_pressed ? "unchanged-step" : (vol_up_pressed ? "up" : "down"))
                 << " percent=" << system_percent << "\n";
     } else if (!state.warned_system_volume_fallback) {
       state.warned_system_volume_fallback = true;
-      std::cout << "[native_h700] system volume control unavailable, fallback to app sfx volume\n";
+      std::cout << "[native_h700] system volume control unavailable\n";
     }
+    if (system_volume_changed) {
+      NativeConfig &cfg = config.Mutable();
+      const int clamped_percent = std::clamp(system_percent, 0, 100);
+      if (cfg.system_volume_percent != clamped_percent) {
+        cfg.system_volume_percent = clamped_percent;
+        config.MarkDirty();
+      }
+      state.volume_display_percent = system_percent;
+      if (cfg.audio && play_change_sfx) play_change_sfx();
+    }
+    state.volume_display_until = now + 1500;
+    return;
   }
 
-  if (!system_volume_changed) {
-    NativeConfig &cfg = config.Mutable();
-    const int old_volume = cfg.sfx_volume;
-    if (vol_up_pressed) cfg.sfx_volume = std::min(SDL_MIX_MAXVOLUME, cfg.sfx_volume + 13);
-    if (vol_down_pressed) cfg.sfx_volume = std::max(0, cfg.sfx_volume - 13);
-    if (cfg.sfx_volume != old_volume) {
-      if (apply_sfx_volume) apply_sfx_volume(cfg.sfx_volume);
-      config.MarkDirty();
-      std::cout << "[native_h700] sound volume: " << cfg.sfx_volume << "\n";
-      if (cfg.audio && cfg.sfx_volume > 0 && play_change_sfx) {
-        play_change_sfx();
-      }
-    }
-    state.volume_display_percent =
-        std::clamp((cfg.sfx_volume * 100) / std::max(1, SDL_MIX_MAXVOLUME), 0, 100);
-  } else {
-    NativeConfig &cfg = config.Mutable();
-    const int clamped_percent = std::clamp(system_percent, 0, 100);
-    if (cfg.system_volume_percent != clamped_percent) {
-      cfg.system_volume_percent = clamped_percent;
-      config.MarkDirty();
-    }
-    state.volume_display_percent = system_percent;
-    if (cfg.audio && play_change_sfx) {
+  NativeConfig &cfg = config.Mutable();
+  const int old_volume = cfg.sfx_volume;
+  if (vol_up_pressed) cfg.sfx_volume = std::min(SDL_MIX_MAXVOLUME, cfg.sfx_volume + 13);
+  if (vol_down_pressed) cfg.sfx_volume = std::max(0, cfg.sfx_volume - 13);
+  if (cfg.sfx_volume != old_volume) {
+    if (apply_sfx_volume) apply_sfx_volume(cfg.sfx_volume);
+    config.MarkDirty();
+    std::cout << "[native_h700] sound volume: " << cfg.sfx_volume << "\n";
+    if (cfg.audio && cfg.sfx_volume > 0 && play_change_sfx) {
       play_change_sfx();
     }
   }
+  state.volume_display_percent =
+      std::clamp((cfg.sfx_volume * 100) / std::max(1, SDL_MIX_MAXVOLUME), 0, 100);
 
   state.volume_display_until = now + 1500;
 }
 
 MenuToggleAction HandleMenuToggleInput(AppUiState &state, const InputManager &input, bool is_settings, bool is_shelf,
                                        bool is_reader, bool settings_close_armed, float settings_toggle_guard,
-                                       bool menu_closing, float debounce_sec) {
+                                       bool menu_closing, float debounce_sec, InputProfile input_profile) {
+  (void)input_profile;
   const bool volume_just_pressed = input.IsJustPressed(Button::VolUp) || input.IsJustPressed(Button::VolDown);
   const bool volume_repeated = input.IsRepeated(Button::VolUp) || input.IsRepeated(Button::VolDown);
   const bool volume_held = input.IsPressed(Button::VolUp) || input.IsPressed(Button::VolDown);

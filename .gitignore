@@ -7,3 +7,16 @@ books/
 ui/
 sounds/
 trimui-smart-pro-toolchain/
+dist_lowglibc/
+TrimuiBrick/.build
+TrimuiBrick/deb_cache/
+TrimuiBrick/dist/
+TrimuiBrick/dist_lowglibc/
+TrimuiBrick/logs/
+TrimuiBrick/sysroot_overlay/
+TrimuiBrick/workspace/
+
+!Downloads/
+!Downloads/**
+!TrimuiBrick/Downloads/
+!TrimuiBrick/Downloads/**

@@ -7,7 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -109,7 +109,7 @@ std::string FindFirstDocInFolder(const std::string &folder_path, const std::stri
   for (std::filesystem::recursive_directory_iterator it(root, opts, ec), end; it != end; it.increment(ec)) {
     if (ec) continue;
     const auto &entry = *it;
-    if (!entry.is_regular_file(ec)) continue;
+    if (!filesystem_compat::IsRegularFile(entry, ec)) continue;
     if (deps.get_lower_ext(entry.path().string()) != wanted_ext) continue;
     matches.push_back(path_adapter::ResolveReadableFilePath(entry));
   }

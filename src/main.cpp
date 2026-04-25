@@ -1,4 +1,4 @@
-﻿#include <SDL.h>
+#include <SDL.h>
 #ifdef HAVE_SDL2_IMAGE
 #include <SDL_image.h>
 #endif
@@ -13,10 +13,11 @@
 #include <atomic>
 #include <array>
 #include <cmath>
+#include <csignal>
 #include <cstdlib>
 #include <cstdint>
 #include <deque>
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -55,6 +56,7 @@
 #include "reader_core.h"
 #include "reader_session_ops.h"
 #include "reader_session_state.h"
+#include "runtime_log.h"
 #include "screen_profile.h"
 #include "system_controls.h"
 #include "system_settings_runtime.h"
@@ -113,6 +115,9 @@ struct LayoutMetrics {
   int reader_progress_panel_margin_bottom = 12;
   int reader_progress_bar_margin_x = 34;
   int reader_progress_percent_margin_x = 34;
+  int grid_cols = 4;
+  int visible_rows = 2;
+  float ui_scale = 1.0f;
 };
 
 constexpr LayoutMetrics layout_720x480{
@@ -132,6 +137,8 @@ constexpr LayoutMetrics layout_720x480{
     667, 46,
     90, 135, 42,
     18, 12, 34, 34,
+    4, 2,
+    1.0f,
 };
 
 constexpr LayoutMetrics layout_640x480{
@@ -151,6 +158,8 @@ constexpr LayoutMetrics layout_640x480{
     587, 46,
     72, 124, 42,
     18, 12, 34, 34,
+    4, 2,
+    1.0f,
 };
 
 constexpr LayoutMetrics layout_720x720{
@@ -170,9 +179,31 @@ constexpr LayoutMetrics layout_720x720{
     667, 54,
     90, 135, 50,
     18, 16, 34, 34,
+    4, 3,
+    1.0f,
 };
 
-constexpr int kGridCols = 4;
+constexpr LayoutMetrics layout_1024x768{
+    1024, 768, 26,
+    0, 48,
+    48, 80,
+    128, 560,
+    688, 80,
+    208, 312,
+    267, 371,
+    40, 48,
+    37, 160,
+    58, 3, 6, 38,
+    256, 0, 56,
+    45, 32,
+    22, 74,
+    939, 74,
+    115, 198, 67,
+    29, 19, 54, 54,
+    4, 2,
+    1.6f,
+};
+
 constexpr float kFocusScaleBase = 1.0f;
 constexpr float kFocusScaleCurrent = 1.045f; // reduce current zoomed size by 5%
 constexpr float kFocusScale = kFocusScaleCurrent;
@@ -227,11 +258,17 @@ constexpr size_t kTxtLayoutCacheMaxEntries = 4;
 constexpr size_t kTextCacheMaxEntries = 128;
 #endif
 
+void FatalSignalHandler(int sig) {
+  runtime_log::Line(std::string("fatal signal: ") + std::to_string(sig));
+  std::_Exit(128 + sig);
+}
+
 const LayoutMetrics *g_layout = &layout_720x480;
 
 const LayoutMetrics &Layout() { return *g_layout; }
 
 const LayoutMetrics &SelectLayoutProfile(int screen_w, int screen_h) {
+  if (screen_w == layout_1024x768.screen_w && screen_h == layout_1024x768.screen_h) return layout_1024x768;
   if (screen_w == layout_720x720.screen_w && screen_h == layout_720x720.screen_h) return layout_720x720;
   if (screen_w == layout_640x480.screen_w && screen_h == layout_640x480.screen_h) return layout_640x480;
   return layout_720x480;
@@ -239,11 +276,13 @@ const LayoutMetrics &SelectLayoutProfile(int screen_w, int screen_h) {
 
 int FocusedCoverW() { return static_cast<int>(Layout().cover_w * kFocusScale + 0.5f); }
 int FocusedCoverH() { return static_cast<int>(Layout().cover_h * kFocusScale + 0.5f); }
-int ShelfVisibleRows() {
-  if (Layout().screen_w == 720 && Layout().screen_h == 720) return 3;
-  return 2;
+int ScalePx(int value) {
+  return std::max(1, static_cast<int>(std::round(static_cast<float>(value) * Layout().ui_scale)));
 }
-int ShelfItemsPerPage() { return kGridCols * ShelfVisibleRows(); }
+float ScaleFloat(float value) { return value * Layout().ui_scale; }
+int ShelfGridCols() { return std::max(1, Layout().grid_cols); }
+int ShelfVisibleRows() { return std::max(1, Layout().visible_rows); }
+int ShelfItemsPerPage() { return ShelfGridCols() * ShelfVisibleRows(); }
 
 std::string NormalizePathKey(const std::string &path);
 
@@ -269,7 +308,7 @@ std::string NormalizePathKey(const std::string &path) {
   if (path.empty()) return {};
   try {
     std::filesystem::path p(path);
-    p = p.lexically_normal();
+    p = filesystem_compat::LexicallyNormal(p);
     std::string out = p.generic_string();
 #ifdef _WIN32
     out = ToLowerAscii(out);
@@ -317,13 +356,13 @@ std::string DetectVersionFromDownloadsDir(const std::filesystem::path &downloads
       ec.clear();
       continue;
     }
-    if (!it->is_regular_file(ec)) {
+    if (!filesystem_compat::IsRegularFile(*it, ec)) {
       ec.clear();
       continue;
     }
     std::string version;
     if (!TryExtractVersionFromArchiveName(it->path().filename().string(), version)) continue;
-    const auto write_time = it->last_write_time(ec);
+    const auto write_time = filesystem_compat::LastWriteTime(*it, ec);
     if (ec) {
       ec.clear();
       continue;
@@ -671,28 +710,48 @@ bool WriteFileBytesAtomically(const std::filesystem::path &path, const std::stri
 
 } // namespace
 
-int main(int, char **) {
+int main(int, char **argv) {
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
+  std::setvbuf(stderr, nullptr, _IONBF, 0);
+  runtime_log::Init(argv ? argv[0] : nullptr);
+  std::signal(SIGSEGV, FatalSignalHandler);
+  std::signal(SIGABRT, FatalSignalHandler);
+  std::signal(SIGFPE, FatalSignalHandler);
+  std::signal(SIGILL, FatalSignalHandler);
+  runtime_log::Line("main: start");
+  runtime_log::Line("main: SDL_Init begin");
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK | SDL_INIT_EVENTS) != 0) {
+    runtime_log::Line(std::string("main: SDL_Init failed: ") + SDL_GetError());
     std::cerr << "[native_h700] SDL init failed: " << SDL_GetError() << "\n";
     return 1;
   }
+  runtime_log::Line("main: SDL_Init ok");
   SDL_JoystickEventState(SDL_ENABLE);
 #ifdef HAVE_SDL2_TTF
+  runtime_log::Line("main: TTF_Init begin");
   if (TTF_Init() != 0) {
+    runtime_log::Line(std::string("main: TTF_Init warning: ") + TTF_GetError());
     std::cerr << "[native_h700] SDL2_ttf init warning: " << TTF_GetError() << "\n";
+  } else {
+    runtime_log::Line("main: TTF_Init ok");
   }
 #endif
 #ifdef HAVE_SDL2_IMAGE
+  runtime_log::Line("main: IMG_Init begin");
   const int img_flags = IMG_INIT_PNG | IMG_INIT_JPG | IMG_INIT_WEBP;
   const int img_ok = IMG_Init(img_flags);
   if ((img_ok & img_flags) == 0) {
+    runtime_log::Line(std::string("main: IMG_Init warning: ") + IMG_GetError());
     std::cerr << "[native_h700] SDL2_image init warning: " << IMG_GetError() << "\n";
+  } else {
+    runtime_log::Line("main: IMG_Init ok");
   }
 #endif
   const char *env_windowed = std::getenv("ROCREADER_WINDOWED");
   const char *env_fullscreen = std::getenv("ROCREADER_FULLSCREEN");
   const bool force_windowed = env_windowed && std::string(env_windowed) == "1";
   const bool force_fullscreen = env_fullscreen && std::string(env_fullscreen) == "1";
+  runtime_log::Line("main: DetectScreenProfile begin");
   const ScreenProfile screen_profile = DetectScreenProfile();
 
   uint32_t win_flags = SDL_WINDOW_SHOWN;
@@ -710,6 +769,8 @@ int main(int, char **) {
             << " profile=" << screen_profile.profile_name
             << " layout=" << Layout().screen_w << "x" << Layout().screen_h << "\n";
 
+  runtime_log::Line(std::string("main: screen source=") + screen_profile.detection_source + " detected=" + std::to_string(screen_profile.detected_w) + "x" + std::to_string(screen_profile.detected_h) + " profile=" + screen_profile.profile_name);
+  runtime_log::Line("main: SDL_CreateWindow begin");
   SDL_Window *window =
       SDL_CreateWindow("ROCreader Native H700",
                        SDL_WINDOWPOS_CENTERED,
@@ -718,14 +779,18 @@ int main(int, char **) {
                        Layout().screen_h,
                        win_flags);
   if (!window) {
+    runtime_log::Line(std::string("main: SDL_CreateWindow failed: ") + SDL_GetError());
     std::cerr << "[native_h700] window failed: " << SDL_GetError() << "\n";
     SDL_Quit();
     return 2;
   }
+  runtime_log::Line("main: SDL_CreateWindow ok");
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+  runtime_log::Line("main: SDL_CreateRenderer begin");
   SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
   if (!renderer) renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
   if (!renderer) {
+    runtime_log::Line(std::string("main: SDL_CreateRenderer failed: ") + SDL_GetError());
     std::cerr << "[native_h700] renderer failed: " << SDL_GetError() << "\n";
     SDL_DestroyWindow(window);
     SDL_Quit();
@@ -738,6 +803,7 @@ int main(int, char **) {
               << " accelerated=" << ((renderer_info.flags & SDL_RENDERER_ACCELERATED) ? "yes" : "no")
               << " vsync=" << ((renderer_info.flags & SDL_RENDERER_PRESENTVSYNC) ? "yes" : "no") << "\n";
   }
+  runtime_log::Line("main: SDL_CreateRenderer ok");
   const bool renderer_supports_target_textures = (renderer_info.flags & SDL_RENDERER_TARGETTEXTURE) != 0;
 
   std::vector<SDL_GameController *> opened_controllers;
@@ -745,18 +811,41 @@ int main(int, char **) {
   const int joystick_count = SDL_NumJoysticks();
   std::cout << "[native_h700] joysticks: " << joystick_count << "\n";
   for (int i = 0; i < joystick_count; ++i) {
+    const char *joy_name = SDL_JoystickNameForIndex(i);
+    std::cout << "[native_h700] joystick info: idx=" << i
+              << " name=" << (joy_name ? joy_name : "unknown")
+              << " is_gamecontroller=" << (SDL_IsGameController(i) ? "1" : "0") << "\n";
     if (SDL_IsGameController(i)) {
       SDL_GameController *gc = SDL_GameControllerOpen(i);
       if (gc) {
         opened_controllers.push_back(gc);
-        std::cout << "[native_h700] opened gamecontroller idx=" << i << "\n";
+        SDL_Joystick *js = SDL_GameControllerGetJoystick(gc);
+        std::cout << "[native_h700] opened gamecontroller idx=" << i
+                  << " name=" << (SDL_GameControllerName(gc) ? SDL_GameControllerName(gc) : "unknown")
+                  << " joystick_name=" << (js && SDL_JoystickName(js) ? SDL_JoystickName(js) : "unknown")
+                  << " instance=" << (js ? SDL_JoystickInstanceID(js) : -1)
+                  << " axes=" << (js ? SDL_JoystickNumAxes(js) : -1)
+                  << " buttons=" << (js ? SDL_JoystickNumButtons(js) : -1)
+                  << " hats=" << (js ? SDL_JoystickNumHats(js) : -1)
+                  << " balls=" << (js ? SDL_JoystickNumBalls(js) : -1) << "\n";
         continue;
       }
+      std::cout << "[native_h700] open gamecontroller failed idx=" << i
+                << " err=" << SDL_GetError() << "\n";
     }
     SDL_Joystick *js = SDL_JoystickOpen(i);
     if (js) {
       opened_joysticks.push_back(js);
-      std::cout << "[native_h700] opened joystick idx=" << i << "\n";
+      std::cout << "[native_h700] opened joystick idx=" << i
+                << " name=" << (SDL_JoystickName(js) ? SDL_JoystickName(js) : "unknown")
+                << " instance=" << SDL_JoystickInstanceID(js)
+                << " axes=" << SDL_JoystickNumAxes(js)
+                << " buttons=" << SDL_JoystickNumButtons(js)
+                << " hats=" << SDL_JoystickNumHats(js)
+                << " balls=" << SDL_JoystickNumBalls(js) << "\n";
+    } else {
+      std::cout << "[native_h700] open joystick failed idx=" << i
+                << " err=" << SDL_GetError() << "\n";
     }
   }
 
@@ -774,9 +863,9 @@ int main(int, char **) {
         std::filesystem::current_path() / name,
     };
     for (const auto &p : candidates) {
-      if (std::filesystem::exists(p)) return p.lexically_normal();
+      if (std::filesystem::exists(p)) return filesystem_compat::LexicallyNormal(p);
     }
-    return (exe_path / name).lexically_normal();
+    return filesystem_compat::LexicallyNormal((exe_path / name));
   };
 
   UiAssets ui_assets;
@@ -824,7 +913,7 @@ int main(int, char **) {
   auto resolve_ui_root = [&]() -> std::filesystem::path {
     if (!ui_assets_load_result.ui_root_hit.empty()) {
       const std::filesystem::path common_root = ui_assets_load_result.ui_root_hit / "common";
-      if (std::filesystem::exists(common_root)) return common_root.lexically_normal();
+      if (std::filesystem::exists(common_root)) return filesystem_compat::LexicallyNormal(common_root);
       return ui_assets_load_result.ui_root_hit;
     }
     const std::vector<std::filesystem::path> candidates = {
@@ -836,13 +925,23 @@ int main(int, char **) {
         std::filesystem::current_path() / "ui",
     };
     for (const auto &candidate : candidates) {
-      if (std::filesystem::exists(candidate)) return candidate.lexically_normal();
+      if (std::filesystem::exists(candidate)) return filesystem_compat::LexicallyNormal(candidate);
     }
     return {};
   };
-  LoadContributorAvatarEntries(contributor_avatar_entries, resolve_ui_root(), exe_path, renderer,
-                               0,
-                               LoadSurfaceFromMemory, remember_texture_size, forget_texture_size);
+  const char *env_preload_avatars = std::getenv("ROCREADER_PRELOAD_AVATARS");
+  const bool preload_avatars = !env_preload_avatars || std::string(env_preload_avatars) != "0";
+  if (preload_avatars) {
+    runtime_log::Line("main: contributor avatars preload begin");
+    LoadContributorAvatarEntries(contributor_avatar_entries, resolve_ui_root(), exe_path, renderer,
+                                 0,
+                                 ScalePx(96),
+                                 LoadSurfaceFromMemory, remember_texture_size, forget_texture_size);
+    runtime_log::Line(std::string("main: contributor avatars preload done count=") +
+                      std::to_string(contributor_avatar_entries.size()));
+  } else {
+    runtime_log::Line("main: contributor avatars preload skipped");
+  }
   SDL_Texture *selected_avatar_badge_texture = nullptr;
   auto destroy_selected_avatar_badge_texture = [&]() {
     if (!selected_avatar_badge_texture) return;
@@ -855,24 +954,24 @@ int main(int, char **) {
     if (selected_index < 0 || selected_index >= static_cast<int>(contributor_avatar_entries.size())) return;
     SDL_Texture *source = contributor_avatar_entries[selected_index].texture;
     if (!source) return;
-    selected_avatar_badge_texture = CreateScaledTextureCache(renderer, source, 28, 28);
+    const int badge_size = ScalePx(28);
+    selected_avatar_badge_texture = CreateScaledTextureCache(renderer, source, badge_size, badge_size);
     if (!selected_avatar_badge_texture) return;
-    remember_texture_size(selected_avatar_badge_texture, 28, 28);
+    remember_texture_size(selected_avatar_badge_texture, badge_size, badge_size);
   };
   auto find_default_contributor_avatar_index = [&]() -> int {
     if (contributor_avatar_entries.empty()) return 0;
-    int default_index = 0;
     for (size_t i = 0; i < contributor_avatar_entries.size(); ++i) {
-      if (contributor_avatar_entries[i].raw_label == u8"BloodROC_贡献值MAX") {
+      if (contributor_avatar_entries[i].raw_label.find("BloodROC") != std::string::npos) {
         return static_cast<int>(i);
       }
     }
     for (size_t i = 0; i < contributor_avatar_entries.size(); ++i) {
-      if (contributor_avatar_entries[i].raw_label.find(u8"贡献值MAX") != std::string::npos) {
+      if (contributor_avatar_entries[i].raw_label.find("MAX") != std::string::npos) {
         return static_cast<int>(i);
       }
     }
-    return default_index;
+    return 0;
   };
   auto initialize_selected_avatar_badge_texture = [&]() {
     if (contributor_avatar_entries.empty()) return;
@@ -881,7 +980,13 @@ int main(int, char **) {
   initialize_selected_avatar_badge_texture();
 
   std::vector<std::string> books_roots = storage_paths::DetectBooksRoots();
+  runtime_log::Line(std::string("main: DetectBooksRoots count=") + std::to_string(books_roots.size()));
+  for (const auto &r : books_roots) runtime_log::Line(std::string("main: books root: ") + r);
+  if (books_roots.empty()) runtime_log::Line("main: WARNING no books roots found; expected folder name is lowercase books");
+  runtime_log::Line("main: DetectCoverRoots begin");
   std::vector<std::string> cover_roots = storage_paths::DetectCoverRoots();
+  runtime_log::Line(std::string("main: DetectCoverRoots count=") + std::to_string(cover_roots.size()));
+  for (const auto &r : cover_roots) runtime_log::Line(std::string("main: cover root: ") + r);
   std::filesystem::path txt_layout_cache_dir =
       std::filesystem::path("/mnt/mmc/cache/txt_layouts");
   std::filesystem::path removable_txt_layout_cache_dir =
@@ -913,24 +1018,30 @@ int main(int, char **) {
   for (const auto &r : cover_roots) std::cout << " " << r;
   std::cout << "\n";
   std::cout << "[native_h700] cover thumb cache dir: "
-            << cover_thumb_cache_dir.lexically_normal().string() << "\n";
+            << filesystem_compat::LexicallyNormal(cover_thumb_cache_dir).string() << "\n";
   std::cout << "[native_h700] removable cover thumb cache dir: "
-            << removable_cover_thumb_cache_dir.lexically_normal().string() << "\n";
+            << filesystem_compat::LexicallyNormal(removable_cover_thumb_cache_dir).string() << "\n";
   std::cout << "[native_h700] txt layout cache dir: "
-            << txt_layout_cache_dir.lexically_normal().string() << "\n";
+            << filesystem_compat::LexicallyNormal(txt_layout_cache_dir).string() << "\n";
   std::cout << "[native_h700] removable txt layout cache dir: "
-            << removable_txt_layout_cache_dir.lexically_normal().string() << "\n";
+            << filesystem_compat::LexicallyNormal(removable_txt_layout_cache_dir).string() << "\n";
 
   const std::filesystem::path keymap_path = resolve_runtime_file("native_keymap.ini");
 #if defined(__arm__) || defined(__aarch64__)
   const bool use_h700_defaults = true;
   const std::string device_model_token = DetectDeviceModelToken();
-  const bool use_h700_34xx_keymap = Uses34xxSpKeymap(device_model_token);
 #else
   const bool use_h700_defaults = false;
-  const std::string device_model_token;
-  const bool use_h700_34xx_keymap = false;
+  const std::string device_model_token = DetectDeviceModelToken();
 #endif
+  const bool use_trimui_brick_keymap =
+      device_model_token == "trimui-brick" || screen_profile.profile_name == "1024x768";
+  const InputProfile input_profile =
+      use_trimui_brick_keymap
+          ? InputProfile::TrimuiBrick
+          : (use_h700_defaults
+                 ? (Uses34xxSpKeymap(device_model_token) ? InputProfile::H70034xxSp : InputProfile::H700Default)
+                 : InputProfile::DesktopDefault);
   const std::filesystem::path config_path = resolve_runtime_file("native_config.ini");
   const std::filesystem::path progress_path = resolve_runtime_file("native_progress.tsv");
   const std::filesystem::path favorites_path = resolve_runtime_file("native_favorites.txt");
@@ -939,17 +1050,20 @@ int main(int, char **) {
   const std::filesystem::path power_script_path =
       (env_power_script && *env_power_script) ? std::filesystem::path(env_power_script)
                                               : std::filesystem::path("/mnt/mod/ctrl/pwr_new.sh");
-  std::cout << "[native_h700] keymap path: " << keymap_path.lexically_normal().string() << "\n";
-  std::cout << "[native_h700] config path: " << config_path.lexically_normal().string() << "\n";
-  std::cout << "[native_h700] power script path: " << power_script_path.lexically_normal().string() << "\n";
+  std::cout << "[native_h700] keymap path: " << filesystem_compat::LexicallyNormal(keymap_path).string() << "\n";
+  std::cout << "[native_h700] config path: " << filesystem_compat::LexicallyNormal(config_path).string() << "\n";
+  std::cout << "[native_h700] power script path: " << filesystem_compat::LexicallyNormal(power_script_path).string() << "\n";
   std::cout << "[native_h700] device model token: "
             << (device_model_token.empty() ? std::string("unknown") : device_model_token) << "\n";
-  std::cout << "[native_h700] h700 joy profile: "
-            << (use_h700_defaults ? (use_h700_34xx_keymap ? "34xxsp" : "other-h700") : "desktop-default")
-            << "\n";
+  std::cout << "[native_h700] input profile: " << InputProfileName(input_profile) << "\n";
 
-  InputManager input(keymap_path.string(), use_h700_defaults, use_h700_34xx_keymap);
+  runtime_log::Line(std::string("main: keymap path: ") + filesystem_compat::LexicallyNormal(keymap_path).string());
+  runtime_log::Line(std::string("main: config path: ") + filesystem_compat::LexicallyNormal(config_path).string());
+  runtime_log::Line(std::string("main: input profile: ") + InputProfileName(input_profile));
+  InputManager input(keymap_path.string(), input_profile);
+  runtime_log::Line(std::string("main: joy map: ") + input.DescribeJoyMap());
   std::cout << "[native_h700] joy map: " << input.DescribeJoyMap() << "\n";
+  runtime_log::Line(std::string("main: pad map: ") + input.DescribePadMap());
   std::cout << "[native_h700] pad map: " << input.DescribePadMap() << "\n";
   ConfigStore config(config_path.string());
   if (!config.Get().audio) {
@@ -982,8 +1096,10 @@ int main(int, char **) {
   ContributorAvatarState contributor_avatar_state{};
   if (use_h700_defaults) {
     bool changed = false;
-    if (system_control_service.ApplyVolumePercent(config.Get().system_volume_percent, system_settings_state.levels.volume) &&
-        system_settings_state.levels.volume.available) {
+    if (input_profile == InputProfile::TrimuiBrick) {
+      system_control_service.RefreshVolumeOnly(system_settings_state.levels.volume);
+    } else if (system_control_service.ApplyVolumePercent(config.Get().system_volume_percent, system_settings_state.levels.volume) &&
+               system_settings_state.levels.volume.available) {
       const int applied_percent =
           std::clamp((system_settings_state.levels.volume.level * 100) /
                          std::max(1, system_settings_state.levels.volume.max_level),
@@ -1017,6 +1133,7 @@ int main(int, char **) {
   }
 
   AppUiState app_ui{};
+  uint32_t last_system_volume_sync = 0;
   app_ui.volume_display_percent = ClampInt((config.Get().sfx_volume * 100) / std::max(1, SDL_MIX_MAXVOLUME), 0, 100);
   if (system_settings_state.levels.volume.available) {
     app_ui.volume_display_percent = std::clamp(
@@ -1307,7 +1424,15 @@ int main(int, char **) {
 #ifdef HAVE_SDL2_TTF
   UiTextCacheState ui_text_cache{};
   ui_text_cache.max_text_cache_entries = kTextCacheMaxEntries;
-  int current_reader_font_pt = TxtFontPointSizeForLevel(config.Get().txt_font_size_level);
+  auto scaled_font_pt = [&](int pt) {
+    return std::max(1, static_cast<int>(std::round(static_cast<float>(pt) * Layout().ui_scale)));
+  };
+  auto reader_font_pt_for_level = [&](int level) {
+    return scaled_font_pt(TxtFontPointSizeForLevel(level));
+  };
+  const int body_font_pt = scaled_font_pt(16);
+  const int title_font_pt = scaled_font_pt(24);
+  int current_reader_font_pt = reader_font_pt_for_level(config.Get().txt_font_size_level);
   TxtTextServiceState txt_text_service{
       {},
       txt_layout_cache_dir,
@@ -1328,7 +1453,7 @@ int main(int, char **) {
       config.Save();
     }
     txt_settings_state.font_size_level = clamped;
-    current_reader_font_pt = TxtFontPointSizeForLevel(clamped);
+    current_reader_font_pt = reader_font_pt_for_level(clamped);
     ShutdownUiTextCache(ui_text_cache, forget_texture_size);
   };
 
@@ -1340,7 +1465,7 @@ int main(int, char **) {
   };
 
   auto open_ui_font = [&]() {
-    OpenUiFonts(ui_text_cache, exe_path, ui_path, current_reader_font_pt);
+    OpenUiFonts(ui_text_cache, exe_path, ui_path, body_font_pt, title_font_pt, current_reader_font_pt);
   };
 
   auto get_text_texture = [&](const std::string &text, SDL_Color color) -> TextCacheEntry * {
@@ -1407,7 +1532,7 @@ int main(int, char **) {
           ec.clear();
           continue;
         }
-        if (!it->is_regular_file(ec) || ec) {
+        if (!filesystem_compat::IsRegularFile(*it, ec) || ec) {
           ec.clear();
           continue;
         }
@@ -1514,7 +1639,7 @@ int main(int, char **) {
 
   auto get_text_viewport_bounds = [&]() -> SDL_Rect {
     open_ui_font();
-    const int font_pt = TxtFontPointSizeForLevel(config.Get().txt_font_size_level);
+    const int font_pt = reader_font_pt_for_level(config.Get().txt_font_size_level);
     int font_h = font_pt + 4;
 #ifdef HAVE_SDL2_TTF
     if (ui_text_cache.reader_font) font_h = TTF_FontHeight(ui_text_cache.reader_font);
@@ -1527,12 +1652,12 @@ int main(int, char **) {
             Layout().txt_margin_x,
             Layout().txt_margin_y,
             font_pt,
-            font_h + kTxtLineSpacing,
+            font_h + ScalePx(kTxtLineSpacing),
         });
   };
 
 #ifdef HAVE_SDL2_TTF
-  const std::string kTxtParagraphIndent = u8"閵嗏偓閵嗏偓";
+  const std::string kTxtParagraphIndent = u8"銆€銆€";
   const std::string kTxtParagraphIndentAscii = "  ";
 
 #endif
@@ -1587,7 +1712,7 @@ int main(int, char **) {
         append_wrapped_text_line,
         invalidate_all_render_cache,
         clamp_text_scroll,
-        kTxtLineSpacing,
+        ScalePx(kTxtLineSpacing),
         kTxtMaxBytes,
         kTxtResumeSaveDelayMs,
     };
@@ -1823,6 +1948,23 @@ int main(int, char **) {
     }
     process_txt_transcode_step();
     flush_deferred_writes(false);
+    if (state == State::Settings && volume_controller.UsesSystemVolume() && now - last_system_volume_sync >= 250) {
+      int synced_volume_percent = app_ui.volume_display_percent;
+      if (volume_controller.RefreshPercent(synced_volume_percent)) {
+        app_ui.volume_display_percent = synced_volume_percent;
+        config.Mutable().system_volume_percent = synced_volume_percent;
+      }
+      if (system_control_service.RefreshVolumeOnly(system_settings_state.levels.volume) &&
+          system_settings_state.levels.volume.available) {
+        const int menu_volume_percent = std::clamp(
+            (system_settings_state.levels.volume.level * 100) /
+                std::max(1, system_settings_state.levels.volume.max_level),
+            0, 100);
+        app_ui.volume_display_percent = menu_volume_percent;
+        config.Mutable().system_volume_percent = menu_volume_percent;
+      }
+      last_system_volume_sync = now;
+    }
     HandleVolumeControls(
         app_ui, input, now, volume_controller, config,
         [&](int volume) { sfx.SetVolume(volume); },
@@ -1848,7 +1990,7 @@ int main(int, char **) {
     const MenuToggleAction menu_toggle_action =
         HandleMenuToggleInput(app_ui, input, state == State::Settings, state == State::Shelf,
                               state == State::Reader, settings_close_armed, settings_toggle_guard, menu_closing,
-                              kMenuToggleDebounceSec);
+                              kMenuToggleDebounceSec, input_profile);
     if (menu_toggle_action == MenuToggleAction::CloseSettings) {
       const NativeConfig &ui_cfg = config.Get();
       if (ui_cfg.animations) menu_anim.AnimateTo(0.0f, 0.16f, animation::Ease::InOutCubic);
@@ -1901,6 +2043,8 @@ int main(int, char **) {
             title_marquee_active = false;
             title_marquee_offset = 0.0f;
             title_marquee_wait = kTitleMarqueePauseSec;
+            runtime_log::Line(std::string("boot: scan complete books=") + std::to_string(total_books) +
+                              " cover_generate=" + std::to_string(cover_generate_count));
             std::cout << "[native_h700] boot scan complete: books=" << total_books
                       << " cover_generate=" << cover_generate_count << "\n";
             state = State::Shelf;
@@ -1917,7 +2061,7 @@ int main(int, char **) {
           focus_index,
           shelf_page,
           nav_selected_index,
-          kGridCols,
+          ShelfGridCols(),
           dt,
           ui_cfg.animations,
           page_animating,
@@ -1929,7 +2073,7 @@ int main(int, char **) {
           title_marquee_wait,
           title_marquee_offset,
           kTitleMarqueePauseSec,
-          kTitleMarqueeSpeedPx,
+          ScaleFloat(kTitleMarqueeSpeedPx),
           grid_item_anims,
           focused_title_needs_marquee,
           clear_cover_cache,
@@ -1964,7 +2108,7 @@ int main(int, char **) {
               scene_flash.Snap(kSceneFadeFlashAlpha);
               scene_flash.AnimateTo(0.0f, kSceneFadeFlashDurationSec, animation::Ease::OutCubic);
             } else {
-              show_transient_message(u8"鏈壘鍒版枃浠?");
+              show_transient_message(u8"未找到文�?");
               state = State::Shelf;
             }
             return opened;
@@ -1995,9 +2139,11 @@ int main(int, char **) {
               },
               [&](int delta, SystemControlLevels &levels) {
                 const bool ok = system_control_service.AdjustVolume(delta, levels);
-                if (ok && levels.volume.available) {
+                system_control_service.Refresh(levels);
+                if (levels.volume.available) {
                   const int saved_percent =
                       std::clamp((levels.volume.level * 100) / std::max(1, levels.volume.max_level), 0, 100);
+                  app_ui.volume_display_percent = saved_percent;
                   if (config.Mutable().system_volume_percent != saved_percent) {
                     config.Mutable().system_volume_percent = saved_percent;
                     config.MarkDirty();
@@ -2214,7 +2360,7 @@ int main(int, char **) {
                 input,
                 reader_ui,
                 dt,
-                kReaderTapStepPx,
+                ScalePx(kReaderTapStepPx),
                 text_scroll_by,
                 text_page_by,
             };
@@ -2222,10 +2368,12 @@ int main(int, char **) {
           }
         } else if (reader_mode == ReaderMode::Pdf) {
           const int pdf_rotation = pdf_runtime.Progress().rotation;
-          if (input.IsJustPressed(Button::L2)) {
+          const bool rotate_left_pressed = input.IsJustPressed(Button::L2);
+          const bool rotate_right_pressed = input.IsJustPressed(Button::R2);
+          if (rotate_left_pressed) {
             pdf_runtime.RotateLeft();
           }
-          if (input.IsJustPressed(Button::R2)) {
+          if (rotate_right_pressed) {
             pdf_runtime.RotateRight();
           }
           if (input.IsJustPressed(Button::L1)) {
@@ -2305,10 +2453,12 @@ int main(int, char **) {
             }
             return 0;
           };
-          if (input.IsJustPressed(Button::L2)) {
+          const bool rotate_left_pressed = input.IsJustPressed(Button::L2);
+          const bool rotate_right_pressed = input.IsJustPressed(Button::R2);
+          if (rotate_left_pressed) {
             epub_runtime.RotateLeft();
           }
-          if (input.IsJustPressed(Button::R2)) {
+          if (rotate_right_pressed) {
             epub_runtime.RotateRight();
           }
           if (input.IsJustPressed(Button::L1)) {
@@ -2404,7 +2554,7 @@ int main(int, char **) {
           const std::string label = std::to_string(app_ui.volume_display_percent);
           TextCacheEntry *te = get_text_texture(label, volume_text);
           if (!te || !te->texture) return;
-          const int tx = 18;
+          const int tx = ScalePx(18);
           const int ty = Layout().top_bar_y + std::max(0, (Layout().top_bar_h - te->h) / 2);
           SDL_Rect td{tx, ty, te->w, te->h};
           SDL_RenderCopy(renderer, te->texture, nullptr, &td);
@@ -2423,13 +2573,13 @@ int main(int, char **) {
           }
 
             const int center_y = Layout().top_bar_y + Layout().top_bar_h / 2;
-            const int battery_shift_y = 3;
-            const int battery_shift_x = (Layout().screen_w <= 640) ? -80 : 0;
-            const int battery_icon_x = 552 + battery_shift_x;
-            const int battery_text_x = 587 + battery_shift_x;
-            const int clock_shift_x = 40;
-            const int clock_shift_y = 3;
-            int clock_right = Layout().screen_w - 16 - clock_shift_x;
+            const int battery_shift_y = ScalePx(3);
+            const int battery_shift_x = (input_profile == InputProfile::TrimuiBrick) ? 133 : 0;
+            const int battery_icon_x = ScalePx(552) - battery_shift_x;
+            const int battery_text_x = ScalePx(587) - battery_shift_x;
+            const int clock_shift_x = ScalePx(40);
+            const int clock_shift_y = ScalePx(3);
+            int clock_right = Layout().screen_w - ScalePx(16) - clock_shift_x;
 
           if (!status.clock_text.empty()) {
             TextCacheEntry *clock_tex = get_text_texture(status.clock_text, text_color);
@@ -2441,9 +2591,9 @@ int main(int, char **) {
             }
           }
 
-          const int avatar_badge_size = 28;
-          const int avatar_badge_x = Layout().screen_w - 12 - avatar_badge_size;
-          const int avatar_badge_y = 4;
+          const int avatar_badge_size = ScalePx(28);
+          const int avatar_badge_x = Layout().screen_w - ScalePx(12) - avatar_badge_size;
+          const int avatar_badge_y = ScalePx(4);
           DrawRect(renderer, avatar_badge_x, avatar_badge_y, avatar_badge_size, avatar_badge_size,
                    SDL_Color{26, 32, 42, 220}, true);
           DrawRect(renderer, avatar_badge_x, avatar_badge_y, avatar_badge_size, avatar_badge_size,
@@ -2459,17 +2609,17 @@ int main(int, char **) {
             int battery_text_w = battery_tex ? battery_tex->w : 0;
             int battery_text_h = battery_tex ? battery_tex->h : 0;
 
-            const int cap_w = 4;
-            const int cap_h = 8;
-            const int body_w = 24;
-            const int body_h = 12;
+            const int cap_w = ScalePx(4);
+            const int cap_h = ScalePx(8);
+            const int body_w = ScalePx(24);
+            const int body_h = ScalePx(12);
             const int icon_x = battery_icon_x;
             const int icon_y = center_y - body_h / 2 + battery_shift_y;
 
             DrawRect(renderer, icon_x, icon_y, body_w, body_h, outline_color, false);
             DrawRect(renderer, icon_x + body_w, center_y - cap_h / 2 + battery_shift_y, cap_w, cap_h, outline_color, true);
 
-            const int inner_pad = 2;
+            const int inner_pad = ScalePx(2);
             const int inner_w = body_w - inner_pad * 2;
             const int inner_h = body_h - inner_pad * 2;
             const int fill_w = std::clamp((inner_w * status.battery_percent) / 100, 0, inner_w);
@@ -2524,7 +2674,7 @@ int main(int, char **) {
                 Layout().nav_slot_w,
                 Layout().nav_y,
             },
-            kGridCols,
+            ShelfGridCols(),
             ShelfItemsPerPage(),
             dt,
             animate_enabled,
@@ -2625,7 +2775,7 @@ int main(int, char **) {
                   : (reader_ui.progress_overlay_dirty
                    ? ClampInt(reader_ui.progress_overlay_preview_pct, 0, 100)
                    : actual_pct);
-          const int panel_h = 58;
+          const int panel_h = ScalePx(58);
           const int panel_y = Layout().screen_h - panel_h - Layout().reader_progress_panel_margin_bottom;
           DrawRect(renderer,
                    Layout().reader_progress_panel_margin_x,
@@ -2635,9 +2785,9 @@ int main(int, char **) {
                    SDL_Color{0, 0, 0, 178});
 
           const int bar_x = Layout().reader_progress_bar_margin_x;
-          const int bar_y = panel_y + 30;
+          const int bar_y = panel_y + ScalePx(30);
           const int bar_w = Layout().screen_w - Layout().reader_progress_bar_margin_x * 2;
-          const int bar_h = 12;
+          const int bar_h = ScalePx(12);
           DrawRect(renderer, bar_x, bar_y, bar_w, bar_h, SDL_Color{60, 60, 60, 220});
           const int actual_fill_source = txt_progress_computing ? txt_layout_pct : actual_pct;
           const int actual_fill_w = std::max(0, std::min(bar_w, (bar_w * actual_fill_source) / 100));
@@ -2653,13 +2803,13 @@ int main(int, char **) {
           SDL_Color tc{245, 245, 245, 255};
           const std::string pct_text = (pct < 10) ? ("0" + std::to_string(pct)) : std::to_string(pct);
           const std::string percent =
-              txt_progress_computing ? ("(进度条计算中" + pct_text + "%)")
+              txt_progress_computing ? ("(Calculating " + pct_text + "%)")
                                      : (((reader_mode == ReaderMode::Pdf && pdf_runtime.IsRenderPending()) ||
                                          (reader_mode == ReaderMode::Epub && epub_runtime.IsRenderPending()))
-                                            ? ("(页面渲染中) " + std::to_string(pct) + "%")
+                                            ? ("(Rendering) " + std::to_string(pct) + "%")
                                             : (std::to_string(pct) + "%"));
           if (TextCacheEntry *te = get_text_texture(percent, tc); te && te->texture) {
-            SDL_Rect td{Layout().screen_w - Layout().reader_progress_percent_margin_x - te->w, panel_y + 8, te->w, te->h};
+            SDL_Rect td{Layout().screen_w - Layout().reader_progress_percent_margin_x - te->w, panel_y + ScalePx(8), te->w, te->h};
             SDL_RenderCopy(renderer, te->texture, nullptr, &td);
           }
         }
@@ -2671,7 +2821,7 @@ int main(int, char **) {
             renderer,
             ui_assets,
             cfg,
-            use_h700_34xx_keymap,
+            input_profile,
             menu_items,
             menu_selected,
             menu_anim,
@@ -2692,6 +2842,7 @@ int main(int, char **) {
                 Layout().settings_sidebar_w,
                 Layout().settings_y_offset,
                 Layout().settings_content_offset_y,
+                Layout().ui_scale,
             },
             [&](int x, int y, int w, int h, SDL_Color c, bool filled) { DrawRect(renderer, x, y, w, h, c, filled); },
             get_texture_size,
@@ -2709,12 +2860,12 @@ int main(int, char **) {
       if (!transient_message.empty() && now < transient_message_until) {
         const SDL_Color text_color{245, 245, 245, 255};
         if (TextCacheEntry *te = get_text_texture(transient_message, text_color); te && te->texture) {
-          const int pad_x = 24;
-          const int pad_y = 12;
+          const int pad_x = ScalePx(24);
+          const int pad_y = ScalePx(12);
           const int box_w = te->w + pad_x * 2;
           const int box_h = te->h + pad_y * 2;
           const int box_x = std::max(0, (Layout().screen_w - box_w) / 2);
-          const int box_y = std::max(0, Layout().screen_h - box_h - 72);
+          const int box_y = std::max(0, Layout().screen_h - box_h - ScalePx(72));
           DrawRect(renderer, box_x, box_y, box_w, box_h, SDL_Color{0, 0, 0, 210});
           DrawRect(renderer, box_x, box_y, box_w, box_h, SDL_Color{255, 255, 255, 40}, false);
           SDL_Rect td{box_x + pad_x, box_y + pad_y, te->w, te->h};

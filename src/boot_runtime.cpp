@@ -127,7 +127,7 @@ void TickBootRuntime(BootRuntimeState &state, float dt, const BootRuntimeTickDep
       const auto entry = *state.count_it;
       state.count_it.increment(ec);
       ++processed;
-      if (ec || !entry.is_regular_file(ec)) continue;
+      if (ec || !filesystem_compat::IsRegularFile(entry, ec)) continue;
       const std::string readable_path = path_adapter::ResolveReadableFilePath(entry);
       const std::string ext = deps.get_lower_ext ? deps.get_lower_ext(readable_path) : std::string{};
       if (ext == ".pdf" || ext == ".txt" || ext == ".epub") {

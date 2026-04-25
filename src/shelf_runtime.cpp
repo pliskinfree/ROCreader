@@ -1,7 +1,7 @@
 #include "shelf_runtime.h"
 
 #include <algorithm>
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <array>
 #include <set>
 #include <sstream>
@@ -74,14 +74,16 @@ std::vector<BookItem> BuildItemsFromScannedPaths(ShelfCategory category,
   for (const auto &book : scanned_books) {
     const std::string source_path = book.real_path.empty() ? book.path : book.real_path;
     if (!PathMatchesAnyExt(source_path, wanted_exts, deps)) continue;
-    const std::filesystem::path raw_doc_path = std::filesystem::path(source_path).lexically_normal();
+    const std::filesystem::path raw_doc_path =
+        filesystem_compat::LexicallyNormal(std::filesystem::path(source_path));
 
     if (current_folder.empty()) {
       for (const auto &root_raw : books_roots) {
-        const std::filesystem::path raw_root_path = std::filesystem::path(root_raw).lexically_normal();
+        const std::filesystem::path raw_root_path =
+            filesystem_compat::LexicallyNormal(std::filesystem::path(root_raw));
         if (!IsUnderRoot(raw_doc_path, raw_root_path) || raw_doc_path == raw_root_path) continue;
 
-        std::filesystem::path rel = raw_doc_path.lexically_relative(raw_root_path);
+        std::filesystem::path rel = filesystem_compat::LexicallyRelative(raw_doc_path, raw_root_path);
         if (rel.empty()) continue;
         const size_t rel_count = static_cast<size_t>(std::distance(rel.begin(), rel.end()));
         if (rel_count == 0) continue;
@@ -93,10 +95,11 @@ std::vector<BookItem> BuildItemsFromScannedPaths(ShelfCategory category,
         break;
       }
     } else {
-      const std::filesystem::path raw_folder_path = std::filesystem::path(current_folder).lexically_normal();
+      const std::filesystem::path raw_folder_path =
+          filesystem_compat::LexicallyNormal(std::filesystem::path(current_folder));
       if (!IsUnderRoot(raw_doc_path, raw_folder_path) || raw_doc_path == raw_folder_path) continue;
 
-      std::filesystem::path rel = raw_doc_path.lexically_relative(raw_folder_path);
+      std::filesystem::path rel = filesystem_compat::LexicallyRelative(raw_doc_path, raw_folder_path);
       if (rel.empty()) continue;
       const size_t rel_count = static_cast<size_t>(std::distance(rel.begin(), rel.end()));
       if (rel_count == 0) continue;
@@ -601,10 +604,12 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
     }
     if (deps.ui_assets.nav_l1_icon) draw_native(deps.ui_assets.nav_l1_icon, deps.layout.nav_l1_x, deps.layout.nav_l1_y);
     if (deps.ui_assets.nav_r1_icon) draw_native(deps.ui_assets.nav_r1_icon, deps.layout.nav_r1_x, deps.layout.nav_r1_y);
+    int nav_pill_h = 32;
     if (deps.ui_assets.nav_selected_pill) {
       int pw = 0;
       int ph = 0;
       deps.get_texture_size(deps.ui_assets.nav_selected_pill, pw, ph);
+      if (ph > 0) nav_pill_h = ph;
       const int slot_center_x =
           deps.layout.nav_start_x + deps.nav_selected_index * deps.layout.nav_slot_w + deps.layout.nav_slot_w / 2;
       draw_native(deps.ui_assets.nav_selected_pill, slot_center_x - pw / 2, deps.layout.nav_y);
@@ -619,7 +624,7 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
       if (!tex) continue;
       const int slot_x = deps.layout.nav_start_x + i * deps.layout.nav_slot_w;
       const int tx = slot_x + std::max(0, (deps.layout.nav_slot_w - tw) / 2);
-      const int ty = deps.layout.nav_y + std::max(0, (32 - th) / 2);
+      const int ty = deps.layout.nav_y + std::max(0, (nav_pill_h - th) / 2);
       SDL_Rect td{tx, ty, tw, th};
       SDL_RenderCopy(deps.renderer, tex, nullptr, &td);
     }

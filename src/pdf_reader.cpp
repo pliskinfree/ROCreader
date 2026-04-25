@@ -2,12 +2,18 @@
 
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <memory>
 #include <vector>
 
 #if defined(HAVE_MUPDF)
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <mupdf/fitz.h>
+#ifdef __cplusplus
+}
+#endif
 
 struct PdfReader::Impl {
   fz_context *ctx = nullptr;
@@ -164,7 +170,7 @@ bool PdfReader::PageSize(int page_index, int &w, int &h) const {
   fz_rect bounds{};
   fz_try(impl_->ctx) {
     fz_page *page = fz_load_page(impl_->ctx, impl_->doc, page_index);
-    bounds = fz_bound_page(impl_->ctx, page);
+    fz_bound_page(impl_->ctx, page, &bounds);
     fz_drop_page(impl_->ctx, page);
   }
   fz_catch(impl_->ctx) {
@@ -202,34 +208,35 @@ bool PdfReader::RenderPageRGBA(int page_index, float scale, std::vector<unsigned
   fz_page *page = nullptr;
   fz_rect bounds{};
   fz_irect ibounds{};
-  fz_matrix m = fz_scale(scale, scale);
+  fz_matrix m{};
+  fz_scale(&m, scale, scale);
 
   fz_try(impl_->ctx) {
     page = fz_load_page(impl_->ctx, impl_->doc, page_index);
-    bounds = fz_bound_page(impl_->ctx, page);
-    bounds = fz_transform_rect(bounds, m);
-    ibounds = fz_round_rect(bounds);
-    pix = fz_new_pixmap_with_bbox(impl_->ctx, fz_device_rgb(impl_->ctx), ibounds, nullptr, 0);
+    fz_bound_page(impl_->ctx, page, &bounds);
+    fz_transform_rect(&bounds, &m);
+    fz_round_rect(&ibounds, &bounds);
+    pix = fz_new_pixmap_with_bbox(impl_->ctx, fz_device_rgb(impl_->ctx), &ibounds);
     fz_clear_pixmap_with_value(impl_->ctx, pix, 255);
-    dev = fz_new_draw_device(impl_->ctx, m, pix);
-    fz_run_page(impl_->ctx, page, dev, fz_identity, nullptr);
-    fz_close_device(impl_->ctx, dev);
+    dev = fz_new_draw_device(impl_->ctx, pix);
+    fz_run_page(impl_->ctx, page, dev, &m, nullptr);
 
     w = fz_pixmap_width(impl_->ctx, pix);
     h = fz_pixmap_height(impl_->ctx, pix);
-    const int stride = fz_pixmap_stride(impl_->ctx, pix);
+    const int components = std::max(1, fz_pixmap_components(impl_->ctx, pix));
+    const int stride = w * components;
     const unsigned char *samples = fz_pixmap_samples(impl_->ctx, pix);
     rgba.assign(static_cast<size_t>(w * h * 4), 255);
     for (int y = 0; y < h; ++y) {
       if (cancel && cancel->load()) return false;
       const unsigned char *row = samples + y * stride;
       for (int x = 0; x < w; ++x) {
-        const int si = x * 3;
+        const int si = x * components;
         const int di = (y * w + x) * 4;
         rgba[di + 0] = row[si + 0];
-        rgba[di + 1] = row[si + 1];
-        rgba[di + 2] = row[si + 2];
-        rgba[di + 3] = 255;
+        rgba[di + 1] = row[si + std::min(1, components - 1)];
+        rgba[di + 2] = row[si + std::min(2, components - 1)];
+        rgba[di + 3] = components > 3 ? row[si + 3] : 255;
       }
     }
   }
@@ -324,7 +331,65 @@ bool PdfReader::RenderPageRegionRGBA(int page_index, float scale, int src_x, int
   src_h = std::max(1, src_h);
   if (cancel && cancel->load()) return false;
 
-#if defined(HAVE_POPPLER)
+#if defined(HAVE_MUPDF)
+  fz_pixmap *pix = nullptr;
+  fz_device *dev = nullptr;
+  fz_page *page = nullptr;
+  fz_rect bounds{};
+  fz_irect page_bounds{};
+  fz_irect crop_bounds{};
+  fz_matrix m{};
+  fz_scale(&m, scale, scale);
+
+  fz_try(impl_->ctx) {
+    page = fz_load_page(impl_->ctx, impl_->doc, page_index);
+    fz_bound_page(impl_->ctx, page, &bounds);
+    fz_transform_rect(&bounds, &m);
+    fz_round_rect(&page_bounds, &bounds);
+
+    crop_bounds.x0 = src_x;
+    crop_bounds.y0 = src_y;
+    crop_bounds.x1 = src_x + src_w;
+    crop_bounds.y1 = src_y + src_h;
+    fz_intersect_irect(&crop_bounds, &page_bounds);
+    if (crop_bounds.x1 <= crop_bounds.x0 || crop_bounds.y1 <= crop_bounds.y0) {
+      fz_throw(impl_->ctx, FZ_ERROR_GENERIC, "invalid crop bounds");
+    }
+
+    pix = fz_new_pixmap_with_bbox(impl_->ctx, fz_device_rgb(impl_->ctx), &crop_bounds);
+    fz_clear_pixmap_with_value(impl_->ctx, pix, 255);
+    dev = fz_new_draw_device(impl_->ctx, pix);
+    fz_run_page(impl_->ctx, page, dev, &m, nullptr);
+
+    w = fz_pixmap_width(impl_->ctx, pix);
+    h = fz_pixmap_height(impl_->ctx, pix);
+    const int components = std::max(1, fz_pixmap_components(impl_->ctx, pix));
+    const int stride = w * components;
+    const unsigned char *samples = fz_pixmap_samples(impl_->ctx, pix);
+    rgba.assign(static_cast<size_t>(w * h * 4), 255);
+    for (int y = 0; y < h; ++y) {
+      if (cancel && cancel->load()) return false;
+      const unsigned char *row = samples + y * stride;
+      for (int x = 0; x < w; ++x) {
+        const int si = x * components;
+        const int di = (y * w + x) * 4;
+        rgba[di + 0] = row[si + 0];
+        rgba[di + 1] = row[si + std::min(1, components - 1)];
+        rgba[di + 2] = row[si + std::min(2, components - 1)];
+        rgba[di + 3] = components > 3 ? row[si + 3] : 255;
+      }
+    }
+  }
+  fz_always(impl_->ctx) {
+    if (dev) fz_drop_device(impl_->ctx, dev);
+    if (pix) fz_drop_pixmap(impl_->ctx, pix);
+    if (page) fz_drop_page(impl_->ctx, page);
+  }
+  fz_catch(impl_->ctx) {
+    return false;
+  }
+  return true;
+#elif defined(HAVE_POPPLER)
   std::unique_ptr<poppler::page> page(impl_->doc->create_page(page_index));
   if (!page) return false;
   poppler::page_renderer renderer;
@@ -375,63 +440,6 @@ bool PdfReader::RenderPageRegionRGBA(int page_index, float scale, int src_x, int
         rgba[di + 3] = 255;
       }
     }
-  }
-  return true;
-#elif defined(HAVE_MUPDF)
-  fz_pixmap *pix = nullptr;
-  fz_device *dev = nullptr;
-  fz_page *page = nullptr;
-  fz_rect bounds{};
-  fz_irect page_bounds{};
-  fz_irect crop_bounds{};
-  fz_matrix m = fz_scale(scale, scale);
-
-  fz_try(impl_->ctx) {
-    page = fz_load_page(impl_->ctx, impl_->doc, page_index);
-    bounds = fz_bound_page(impl_->ctx, page);
-    bounds = fz_transform_rect(bounds, m);
-    page_bounds = fz_round_rect(bounds);
-
-    crop_bounds.x0 = src_x;
-    crop_bounds.y0 = src_y;
-    crop_bounds.x1 = src_x + src_w;
-    crop_bounds.y1 = src_y + src_h;
-    crop_bounds = fz_intersect_irect(crop_bounds, page_bounds);
-    if (crop_bounds.x1 <= crop_bounds.x0 || crop_bounds.y1 <= crop_bounds.y0) {
-      fz_throw(impl_->ctx, FZ_ERROR_ARGUMENT, "invalid crop bounds");
-    }
-
-    pix = fz_new_pixmap_with_bbox(impl_->ctx, fz_device_rgb(impl_->ctx), crop_bounds, nullptr, 0);
-    fz_clear_pixmap_with_value(impl_->ctx, pix, 255);
-    dev = fz_new_draw_device(impl_->ctx, m, pix);
-    fz_run_page(impl_->ctx, page, dev, fz_identity, nullptr);
-    fz_close_device(impl_->ctx, dev);
-
-    w = fz_pixmap_width(impl_->ctx, pix);
-    h = fz_pixmap_height(impl_->ctx, pix);
-    const int stride = fz_pixmap_stride(impl_->ctx, pix);
-    const unsigned char *samples = fz_pixmap_samples(impl_->ctx, pix);
-    rgba.assign(static_cast<size_t>(w * h * 4), 255);
-    for (int y = 0; y < h; ++y) {
-      if (cancel && cancel->load()) return false;
-      const unsigned char *row = samples + y * stride;
-      for (int x = 0; x < w; ++x) {
-        const int si = x * 3;
-        const int di = (y * w + x) * 4;
-        rgba[di + 0] = row[si + 0];
-        rgba[di + 1] = row[si + 1];
-        rgba[di + 2] = row[si + 2];
-        rgba[di + 3] = 255;
-      }
-    }
-  }
-  fz_always(impl_->ctx) {
-    if (dev) fz_drop_device(impl_->ctx, dev);
-    if (pix) fz_drop_pixmap(impl_->ctx, pix);
-    if (page) fz_drop_page(impl_->ctx, page);
-  }
-  fz_catch(impl_->ctx) {
-    return false;
   }
   return true;
 #else

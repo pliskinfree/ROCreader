@@ -1,9 +1,10 @@
 #include "cover_resolver.h"
 #include "path_adapter.h"
 
+#include <algorithm>
 #include <array>
-#include <filesystem>
-#include <regex>
+#include <cctype>
+#include "filesystem_compat.h"
 #include <unordered_set>
 
 namespace fs = std::filesystem;
@@ -24,14 +25,43 @@ std::string FirstExistingWithBase(const std::vector<std::string> &roots, const s
   return {};
 }
 
+void RTrim(std::string &s) {
+  while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '-' || s.back() == '_')) {
+    s.pop_back();
+  }
+}
+
+bool AllDigits(const std::string &s) {
+  return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+}
+
 std::string TrimVersionSuffix(std::string name) {
-  // Strip suffixes like "-v2", "_03", "(12)", "[7]".
-  const std::regex suffix_re(R"(([-_][vV]?\d+|[\(\[]\d+[\)\]])$)");
   while (true) {
-    std::smatch m;
-    if (!std::regex_search(name, m, suffix_re) || m.empty()) break;
-    std::string next = name.substr(0, m.position());
-    while (!next.empty() && (next.back() == ' ' || next.back() == '\t')) next.pop_back();
+    if (name.empty()) break;
+    size_t cut = std::string::npos;
+    if ((name.back() == ')' || name.back() == ']') && name.size() >= 3) {
+      const char open = name.back() == ')' ? '(' : '[';
+      const size_t open_pos = name.find_last_of(open);
+      if (open_pos != std::string::npos && open_pos + 1 < name.size() - 1) {
+        const std::string inside = name.substr(open_pos + 1, name.size() - open_pos - 2);
+        if (AllDigits(inside)) cut = open_pos;
+      }
+    }
+    if (cut == std::string::npos) {
+      const size_t pos = name.find_last_of("-_");
+      if (pos != std::string::npos && pos + 1 < name.size()) {
+        size_t digit_start = pos + 1;
+        if (name[digit_start] == 'v' || name[digit_start] == 'V') ++digit_start;
+        if (digit_start < name.size() &&
+            std::all_of(name.begin() + static_cast<std::ptrdiff_t>(digit_start), name.end(),
+                        [](unsigned char c) { return std::isdigit(c) != 0; })) {
+          cut = pos;
+        }
+      }
+    }
+    if (cut == std::string::npos) break;
+    std::string next = name.substr(0, cut);
+    RTrim(next);
     if (next == name) break;
     name = next;
   }
@@ -39,19 +69,32 @@ std::string TrimVersionSuffix(std::string name) {
 }
 
 std::string TrimEpisodeSuffix(std::string name) {
-  // Strip trailing episode/chapter tails like:
-  // " 1-7話", " 23話", " 第3话", " 12-13集", " 95-96", and optional ending tags.
-  static const std::regex ending_tag_re(R"(\s*[\[\(][^)\]]*[\]\)]\s*$)");
-  static const std::regex episode_re(
-      R"(\s*(第\s*)?\d+(\s*[-~—－]\s*\d+)?\s*(話|话|集|章|卷)?\s*$)",
-      std::regex::icase);
-
-  // Remove one trailing [tag]/(tag), then episode pattern, then trim spaces.
-  name = std::regex_replace(name, ending_tag_re, "");
-  name = std::regex_replace(name, episode_re, "");
-  while (!name.empty() && (name.back() == ' ' || name.back() == '\t' || name.back() == '-' || name.back() == '_')) {
-    name.pop_back();
+  if ((name.size() >= 2) && (name.back() == ')' || name.back() == ']')) {
+    const char open = name.back() == ')' ? '(' : '[';
+    const size_t open_pos = name.find_last_of(open);
+    if (open_pos != std::string::npos && open_pos + 1 < name.size()) {
+      name = name.substr(0, open_pos);
+    }
   }
+
+  size_t end = name.size();
+  while (end > 0 && (name[end - 1] == ' ' || name[end - 1] == '\t')) --end;
+  size_t start = end;
+  while (start > 0) {
+    const unsigned char c = static_cast<unsigned char>(name[start - 1]);
+    if (std::isdigit(c) || name[start - 1] == '-' || name[start - 1] == '_' ||
+        name[start - 1] == '~' || name[start - 1] == ' ') {
+      --start;
+      continue;
+    }
+    break;
+  }
+  bool saw_digit = false;
+  for (size_t i = start; i < end; ++i) {
+    saw_digit = saw_digit || std::isdigit(static_cast<unsigned char>(name[i]));
+  }
+  if (saw_digit && start < end) name = name.substr(0, start);
+  RTrim(name);
   return name;
 }
 
@@ -114,7 +157,6 @@ std::string ResolveCoverPathFuzzy(const std::string &item_path,
     }
   }
 
-  // For files inside folder-mode shelves, fallback to parent folder cover.
   if (!is_dir) {
     const fs::path parent = p.parent_path();
     if (!parent.empty()) {

@@ -14,11 +14,18 @@ CXX_CMD="${CROSS_CXX:-${TOOL_PREFIX}-g++}"
 READ_ELF="${CROSS_READELF:-${TOOL_PREFIX}-readelf}"
 PKG_CMD="${CROSS_PKG_CONFIG:-pkg-config}"
 REQUIRE_MUPDF="${REQUIRE_MUPDF:-1}"
+TRIMUI_BRICK_LAYOUT="${TRIMUI_BRICK_LAYOUT:-0}"
 
 DIST_ROOT="${DIST_ROOT:-$SELF_DIR/dist_lowglibc}"
-APPS_OUT="$DIST_ROOT/APPS"
-RUNTIME_DIR="$APPS_OUT/ROCreader"
-LAUNCHER="$APPS_OUT/ROCreader.sh"
+if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+  APPS_OUT="$DIST_ROOT/Apps"
+  RUNTIME_DIR="$APPS_OUT/ROCreader"
+  LAUNCHER="$RUNTIME_DIR/launch.sh"
+else
+  APPS_OUT="$DIST_ROOT/APPS"
+  RUNTIME_DIR="$APPS_OUT/ROCreader"
+  LAUNCHER="$APPS_OUT/ROCreader.sh"
+fi
 TARBALL="$DIST_ROOT/ROCreader_APPS_lowglibc.tar.gz"
 # Release rule: Downloads only keeps final versioned zip files.
 # The zip is assembled from dist_lowglibc/release_stage and contains:
@@ -27,9 +34,15 @@ TARBALL="$DIST_ROOT/ROCreader_APPS_lowglibc.tar.gz"
 # - Roms/APPS/ROCreader/ (with fonts/sounds/lib/lib_system_sdl plus empty books/book_covers/cache)
 DOWNLOADS_ROOT="${DOWNLOADS_ROOT:-$SELF_DIR/Downloads}"
 ZIP_STAGE_ROOT="$DIST_ROOT/release_stage"
-ZIP_STAGE_APPS="$ZIP_STAGE_ROOT/Roms/APPS"
-ZIP_STAGE_RUNTIME="$ZIP_STAGE_APPS/ROCreader"
-ZIP_STAGE_IMGS="$ZIP_STAGE_APPS/Imgs"
+if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+  ZIP_STAGE_APPS="$ZIP_STAGE_ROOT/Apps"
+  ZIP_STAGE_RUNTIME="$ZIP_STAGE_APPS/ROCreader"
+  ZIP_STAGE_IMGS="$ZIP_STAGE_RUNTIME"
+else
+  ZIP_STAGE_APPS="$ZIP_STAGE_ROOT/Roms/APPS"
+  ZIP_STAGE_RUNTIME="$ZIP_STAGE_APPS/ROCreader"
+  ZIP_STAGE_IMGS="$ZIP_STAGE_APPS/Imgs"
+fi
 
 next_download_zip() {
   python3 - "$DOWNLOADS_ROOT" <<'PY'
@@ -62,14 +75,16 @@ PY
 }
 
 next_download_zip_utf8() {
-  python3 - "$DOWNLOADS_ROOT" <<'PY'
+  python3 - "$DOWNLOADS_ROOT" "$TRIMUI_BRICK_LAYOUT" <<'PY'
 import os
 import re
 import sys
 
 downloads = sys.argv[1]
+trimui_brick_layout = sys.argv[2] == "1"
 prefix = "ROC全能漫画阅读器ver"
-pattern = re.compile(r"^" + re.escape(prefix) + r"(\d+)\.(\d+)\.zip$")
+suffix = ".zip" if trimui_brick_layout else " for H700.zip"
+pattern = re.compile(r"^" + re.escape(prefix) + r"(\d+)\.(\d+)" + re.escape(suffix) + r"$")
 best = None
 
 if os.path.isdir(downloads):
@@ -84,11 +99,12 @@ if os.path.isdir(downloads):
             best = value
 
 if best is None:
-    major, minor = 0, 1
+    major, minor = (0, 1) if trimui_brick_layout else (1, 2)
 else:
     major, minor = best[0], best[1] + 1
 
-print(os.path.join(downloads, f"{prefix}{major}.{minor}.zip"))
+version = f"{major}.{minor}" if trimui_brick_layout else f"{major}.{minor:02d}"
+print(os.path.join(downloads, f"{prefix}{version}{suffix}"))
 PY
 }
 
@@ -169,13 +185,37 @@ find_so_in_sysroot() {
       printf "%s/lib%s.so" "$d" "$name"
       return 0
     fi
-    so_ver="$(ls "$d/lib${name}.so."* 2>/dev/null | head -n 1 || true)"
-    if [ -n "$so_ver" ]; then
+    for so_ver in "$d/lib${name}.so."*; do
+      [ -f "$so_ver" ] || continue
       printf "%s" "$so_ver"
+      return 0
+    done
+  done
+  return 1
+}
+
+find_a_in_sysroot() {
+  name="$1"
+  for d in \
+    "$SYSROOT/usr/lib/aarch64-linux-gnu" \
+    "$SYSROOT/lib/aarch64-linux-gnu" \
+    "$SYSROOT/usr/lib/arm-linux-gnueabihf" \
+    "$SYSROOT/lib/arm-linux-gnueabihf" \
+    "$SYSROOT/usr/lib" \
+    "$SYSROOT/lib"; do
+    if [ -f "$d/lib${name}.a" ]; then
+      printf "%s/lib%s.a" "$d" "$name"
       return 0
     fi
   done
   return 1
+}
+
+find_so_dir_in_sysroot() {
+  name="$1"
+  so_path="$(find_so_in_sysroot "$name" || true)"
+  [ -n "$so_path" ] || return 1
+  dirname "$so_path"
 }
 
 find_so_in_libdir() {
@@ -184,11 +224,11 @@ find_so_in_libdir() {
     printf "%s/lib%s.so" "$LIBDIR" "$name"
     return 0
   fi
-  so_ver="$(ls "$LIBDIR/lib${name}.so."* 2>/dev/null | head -n 1 || true)"
-  if [ -n "$so_ver" ]; then
+  for so_ver in "$LIBDIR/lib${name}.so."*; do
+    [ -f "$so_ver" ] || continue
     printf "%s" "$so_ver"
     return 0
-  fi
+  done
   return 1
 }
 
@@ -199,6 +239,7 @@ find_so_in_libdir() {
   echo "[low_glibc] READELF=$READ_ELF"
   echo "[low_glibc] PKG_CONFIG=$PKG_CMD"
   echo "[low_glibc] REQUIRE_MUPDF=$REQUIRE_MUPDF"
+  echo "[low_glibc] TRIMUI_BRICK_LAYOUT=$TRIMUI_BRICK_LAYOUT"
   echo "[low_glibc] DIST_ROOT=$DIST_ROOT"
 
   command -v "$CXX_CMD"
@@ -248,38 +289,48 @@ find_so_in_libdir() {
   FALLBACK_MUPDF_CFLAGS=""
   FALLBACK_MUPDF_LIBS=""
 
-  if [ -f "$SYSROOT/usr/include/SDL2/SDL_image.h" ] && \
-     { [ -f "$LIBDIR/libSDL2_image-2.0.so" ] || [ -f "$LIBDIR/libSDL2_image-2.0.so.0" ]; }; then
+  SDL_IMAGE_LIBDIR="$(find_so_dir_in_sysroot SDL2_image-2.0 || true)"
+  if [ -f "$SYSROOT/usr/include/SDL2/SDL_image.h" ] && [ -n "$SDL_IMAGE_LIBDIR" ]; then
     FALLBACK_IMG_CFLAGS="-I$SYSROOT/usr/include/SDL2"
-    FALLBACK_IMG_LIBS="-L$LIBDIR -lSDL2_image"
+    FALLBACK_IMG_LIBS="-L$SDL_IMAGE_LIBDIR -lSDL2_image"
     echo "[low_glibc] fallback enable: SDL2_image"
   fi
 
-  if [ -f "$SYSROOT/usr/include/SDL2/SDL_ttf.h" ] && \
-     { [ -f "$LIBDIR/libSDL2_ttf-2.0.so" ] || [ -f "$LIBDIR/libSDL2_ttf-2.0.so.0" ]; }; then
+  SDL_TTF_LIBDIR="$(find_so_dir_in_sysroot SDL2_ttf-2.0 || true)"
+  if [ -f "$SYSROOT/usr/include/SDL2/SDL_ttf.h" ] && [ -n "$SDL_TTF_LIBDIR" ]; then
     FALLBACK_TTF_CFLAGS="-I$SYSROOT/usr/include/SDL2"
-    FALLBACK_TTF_LIBS="-L$LIBDIR -lSDL2_ttf"
+    FALLBACK_TTF_LIBS="-L$SDL_TTF_LIBDIR -lSDL2_ttf"
     echo "[low_glibc] fallback enable: SDL2_ttf"
   fi
 
-  if [ -f "$SYSROOT/usr/include/SDL2/SDL_mixer.h" ] && \
-     { [ -f "$LIBDIR/libSDL2_mixer-2.0.so" ] || [ -f "$LIBDIR/libSDL2_mixer-2.0.so.0" ]; }; then
+  SDL_MIXER_LIBDIR="$(find_so_dir_in_sysroot SDL2_mixer-2.0 || true)"
+  if [ -f "$SYSROOT/usr/include/SDL2/SDL_mixer.h" ] && [ -n "$SDL_MIXER_LIBDIR" ]; then
     FALLBACK_MIX_CFLAGS="-I$SYSROOT/usr/include/SDL2"
-    FALLBACK_MIX_LIBS="-L$LIBDIR -lSDL2_mixer"
+    FALLBACK_MIX_LIBS="-L$SDL_MIXER_LIBDIR -lSDL2_mixer"
     echo "[low_glibc] fallback enable: SDL2_mixer"
   fi
 
-  if [ -f "$SYSROOT/usr/include/alsa/asoundlib.h" ] && \
-     { [ -f "$LIBDIR/libasound.so" ] || [ -f "$LIBDIR/libasound.so.2" ]; }; then
+  ALSA_LIBDIR="$(find_so_dir_in_sysroot asound || true)"
+  if [ -f "$SYSROOT/usr/include/alsa/asoundlib.h" ] && [ -n "$ALSA_LIBDIR" ]; then
     FALLBACK_ALSA_CFLAGS="-I$SYSROOT/usr/include"
-    FALLBACK_ALSA_LIBS="-L$LIBDIR -lasound"
+    FALLBACK_ALSA_LIBS="-L$ALSA_LIBDIR -lasound"
     echo "[low_glibc] fallback enable: alsa"
   fi
 
   if [ -f "$SYSROOT/usr/include/poppler/cpp/poppler-document.h" ] && \
      { [ -f "$LIBDIR/libpoppler-cpp.so" ] || [ -f "$LIBDIR/libpoppler-cpp.so.0" ]; }; then
     FALLBACK_POPPLER_CFLAGS="-I$SYSROOT/usr/include/poppler"
-    FALLBACK_POPPLER_LIBS="-L$LIBDIR -lpoppler-cpp -lpoppler"
+    FALLBACK_POPPLER_LIBS="-L$LIBDIR -L$SYSROOT/usr/lib/aarch64-linux-gnu -L$SYSROOT/lib/aarch64-linux-gnu -lpoppler-cpp -lpoppler"
+    for dep in lcms2 tiff jpeg openjp2 fontconfig freetype png12 z expat; do
+      if has_so_in_sysroot "$dep"; then
+        dep_so="$(find_so_in_sysroot "$dep" || true)"
+        if [ -n "$dep_so" ]; then
+          FALLBACK_POPPLER_LIBS="$FALLBACK_POPPLER_LIBS $dep_so"
+        else
+          FALLBACK_POPPLER_LIBS="$FALLBACK_POPPLER_LIBS -l$dep"
+        fi
+      fi
+    done
     echo "[low_glibc] fallback enable: poppler-cpp"
   fi
 
@@ -289,8 +340,9 @@ find_so_in_libdir() {
     echo "[low_glibc] fallback enable: libzip"
   fi
 
+  MUPDF_STATIC_ABS="$(find_a_in_sysroot mupdf || true)"
   if [ -f "$SYSROOT/usr/include/mupdf/fitz.h" ] && \
-     { [ -f "$LIBDIR/libmupdf.so" ] || [ -f "$LIBDIR/libmupdf.so.1" ]; }; then
+     { [ -f "$LIBDIR/libmupdf.so" ] || [ -f "$LIBDIR/libmupdf.so.1" ] || [ -n "$MUPDF_STATIC_ABS" ]; }; then
     FALLBACK_MUPDF_CFLAGS="-I$SYSROOT/usr/include"
     # Use explicit .so paths when available to avoid missing unversioned symlinks.
     MUPDF_SO="$(ls "$LIBDIR"/libmupdf.so* 2>/dev/null | head -n 1 || true)"
@@ -298,6 +350,7 @@ find_so_in_libdir() {
     JBIG2_SO="$(ls "$LIBDIR"/libjbig2dec.so* 2>/dev/null | head -n 1 || true)"
     FALLBACK_MUPDF_LIBS=""
     [ -n "$MUPDF_SO" ] && FALLBACK_MUPDF_LIBS="$FALLBACK_MUPDF_LIBS $MUPDF_SO"
+    [ -z "$MUPDF_SO" ] && [ -n "$MUPDF_STATIC_ABS" ] && FALLBACK_MUPDF_LIBS="$FALLBACK_MUPDF_LIBS $MUPDF_STATIC_ABS"
     [ -n "$MUPDF_THIRD_SO" ] && FALLBACK_MUPDF_LIBS="$FALLBACK_MUPDF_LIBS $MUPDF_THIRD_SO"
     [ -n "$JBIG2_SO" ] && FALLBACK_MUPDF_LIBS="$FALLBACK_MUPDF_LIBS $JBIG2_SO"
     # Keep -L for dependency lookup, but avoid forcing -lmupdf which may fail
@@ -334,23 +387,25 @@ find_so_in_libdir() {
   done
   MUPDF_LIBS_FINAL="$MUPDF_LIBS_FILTERED"
   MUPDF_SO_ABS="$(find_so_in_sysroot mupdf || true)"
+  MUPDF_A_ABS="$(find_a_in_sysroot mupdf || true)"
   MUPDF_THIRD_SO_ABS="$(find_so_in_sysroot mupdf-third || true)"
   JBIG2_SO_ABS="$(find_so_in_sysroot jbig2dec || true)"
   [ -n "$MUPDF_SO_ABS" ] && MUPDF_LIBS_FINAL="$MUPDF_LIBS_FINAL $MUPDF_SO_ABS"
+  [ -z "$MUPDF_SO_ABS" ] && [ -n "$MUPDF_A_ABS" ] && MUPDF_LIBS_FINAL="$MUPDF_LIBS_FINAL $MUPDF_A_ABS"
   [ -n "$MUPDF_THIRD_SO_ABS" ] && MUPDF_LIBS_FINAL="$MUPDF_LIBS_FINAL $MUPDF_THIRD_SO_ABS"
   [ -n "$JBIG2_SO_ABS" ] && MUPDF_LIBS_FINAL="$MUPDF_LIBS_FINAL $JBIG2_SO_ABS"
   # Some distro sysroots ship a mupdf.pc file without the actual libmupdf shared
   # object. In that case, disable MuPDF entirely and let Poppler provide the real
   # renderer instead of failing the final link step on unresolved fz_* symbols.
-  if [ -z "$MUPDF_SO_ABS" ]; then
+  if [ -z "$MUPDF_SO_ABS" ] && [ -z "$MUPDF_A_ABS" ]; then
     MUPDF_CFLAGS_FINAL=""
     MUPDF_LIBS_FINAL=""
-    echo "[low_glibc] disable mupdf: libmupdf shared library not found in sysroot"
+    echo "[low_glibc] disable mupdf: libmupdf library not found in sysroot"
   fi
   # Some sysroot MuPDF packages don't expose full transitive link deps in .pc.
   # Add common runtime deps explicitly when present to avoid "DSO missing".
   if [ -n "$MUPDF_LIBS_FINAL" ]; then
-    for dep in jpeg openjp2 png16 z bz2 harfbuzz freetype gumbo mujs jbig2dec; do
+    for dep in jbig2dec jpeg openjp2 png12 freetype z m; do
       if has_so_in_sysroot "$dep"; then
         dep_so="$(find_so_in_sysroot "$dep" || true)"
         if [ -n "$dep_so" ]; then
@@ -402,7 +457,7 @@ find_so_in_libdir() {
     PKG_CONFIG="$PKG_CMD" \
     REQUIRE_MUPDF="$REQUIRE_MUPDF" \
     SDL_CFLAGS="--sysroot=$SYSROOT -I$SYSROOT/usr/include/SDL2 -I$SYSROOT/usr/include -D_REENTRANT" \
-    SDL_LIBS="-L$LIBDIR -lSDL2" \
+    SDL_LIBS="-L$LIBDIR -L$SYSROOT/usr/lib -lSDL2" \
     IMG_CFLAGS="$FALLBACK_IMG_CFLAGS" \
     IMG_LIBS="$FALLBACK_IMG_LIBS" \
     TTF_CFLAGS="$FALLBACK_TTF_CFLAGS" \
@@ -417,42 +472,76 @@ find_so_in_libdir() {
     LIBZIP_LIBS="$LIBZIP_LIBS_FINAL" \
     MUPDF_CFLAGS="$MUPDF_CFLAGS_FINAL" \
     MUPDF_LIBS="$MUPDF_LIBS_FINAL" \
+    FS_LIBS="-lstdc++fs" \
     EXTRA_CXXFLAGS="--sysroot=$SYSROOT" \
-    EXTRA_LDFLAGS="--sysroot=$SYSROOT"
+    EXTRA_LDFLAGS="--sysroot=$SYSROOT -Wl,-rpath-link,$SYSROOT/usr/lib/aarch64-linux-gnu -Wl,-rpath-link,$SYSROOT/lib/aarch64-linux-gnu -Wl,-rpath-link,$SYSROOT/usr/lib -Wl,-rpath-link,$SYSROOT/lib -Wl,--allow-shlib-undefined"
 
   rm -rf "$APPS_OUT"
   mkdir -p "$APPS_OUT"
   rm -rf "$RUNTIME_DIR"
   mkdir -p "$RUNTIME_DIR/lib"
-  mkdir -p "$RUNTIME_DIR/lib_system_sdl"
   mkdir -p "$RUNTIME_DIR/lib/pulseaudio"
-  mkdir -p "$RUNTIME_DIR/lib_system_sdl/pulseaudio"
-  mkdir -p "$RUNTIME_DIR/books"
+  if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+    mkdir -p "$RUNTIME_DIR/resources/lib_system_sdl/pulseaudio"
+    mkdir -p "$RUNTIME_DIR/resources/fonts"
+    mkdir -p "$RUNTIME_DIR/resources/sounds"
+    mkdir -p "$RUNTIME_DIR/books"
+  else
+    mkdir -p "$RUNTIME_DIR/lib_system_sdl"
+    mkdir -p "$RUNTIME_DIR/lib_system_sdl/pulseaudio"
+    mkdir -p "$RUNTIME_DIR/books"
+  fi
   mkdir -p "$RUNTIME_DIR/book_covers"
   mkdir -p "$RUNTIME_DIR/cache"
-  cp ./build/rocreader_sdl "$RUNTIME_DIR/"
+  if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+    cp ./build/rocreader_sdl "$RUNTIME_DIR/reader"
+  else
+    cp ./build/rocreader_sdl "$RUNTIME_DIR/"
+  fi
   if [ -d "$SELF_DIR/ui" ]; then
     command -v python3 >/dev/null 2>&1
-    rm -f "$RUNTIME_DIR/ui.pack"
-    python3 "$SELF_DIR/scripts/pack_ui_assets.py" "$SELF_DIR/ui" "$RUNTIME_DIR/ui.pack"
+    if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+      rm -f "$RUNTIME_DIR/resources/ui.pack"
+      python3 "$SELF_DIR/scripts/pack_ui_assets.py" "$SELF_DIR/ui" "$RUNTIME_DIR/resources/ui.pack"
+    else
+      rm -f "$RUNTIME_DIR/ui.pack"
+      python3 "$SELF_DIR/scripts/pack_ui_assets.py" "$SELF_DIR/ui" "$RUNTIME_DIR/ui.pack"
+    fi
   fi
   if [ -d "$SELF_DIR/fonts" ]; then
-    rm -rf "$RUNTIME_DIR/fonts"
-    cp -a "$SELF_DIR/fonts" "$RUNTIME_DIR/"
+    if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+      rm -rf "$RUNTIME_DIR/resources/fonts"
+      cp -a "$SELF_DIR/fonts" "$RUNTIME_DIR/resources/"
+    else
+      rm -rf "$RUNTIME_DIR/fonts"
+      cp -a "$SELF_DIR/fonts" "$RUNTIME_DIR/"
+    fi
   fi
-  if [ ! -f "$RUNTIME_DIR/fonts/ui_font.ttf" ]; then
+  if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+    FONT_CHECK="$RUNTIME_DIR/resources/fonts/ui_font.ttf"
+  else
+    FONT_CHECK="$RUNTIME_DIR/fonts/ui_font.ttf"
+  fi
+  if [ ! -f "$FONT_CHECK" ]; then
     echo "[low_glibc] ERROR: packaged font missing in runtime dir: ui_font.ttf"
     exit 1
   fi
   if [ -d "$SELF_DIR/sounds" ]; then
-    rm -rf "$RUNTIME_DIR/sounds"
-    cp -a "$SELF_DIR/sounds" "$RUNTIME_DIR/"
+    if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+      rm -rf "$RUNTIME_DIR/resources/sounds"
+      cp -a "$SELF_DIR/sounds" "$RUNTIME_DIR/resources/"
+    else
+      rm -rf "$RUNTIME_DIR/sounds"
+      cp -a "$SELF_DIR/sounds" "$RUNTIME_DIR/"
+    fi
   fi
   if [ -f "$SELF_DIR/native_keymap.ini" ]; then
-    cp "$SELF_DIR/native_keymap.ini" "$RUNTIME_DIR/"
+    cp "$SELF_DIR/native_keymap.ini" "$RUNTIME_DIR/native_keymap.ini"
+    [ "$TRIMUI_BRICK_LAYOUT" = "1" ] && cp "$SELF_DIR/native_keymap.ini" "$RUNTIME_DIR/reader.gptk"
   fi
   if [ -f "$SELF_DIR/native_config.ini" ]; then
-    cp "$SELF_DIR/native_config.ini" "$RUNTIME_DIR/"
+    cp "$SELF_DIR/native_config.ini" "$RUNTIME_DIR/native_config.ini"
+    [ "$TRIMUI_BRICK_LAYOUT" = "1" ] && cp "$SELF_DIR/native_config.ini" "$RUNTIME_DIR/reader.cfg"
   fi
 
   collect_needed() {
@@ -503,7 +592,7 @@ find_so_in_libdir() {
   while [ "$changed" -eq 1 ] && [ "$pass" -lt 24 ]; do
     changed=0
     pass=$((pass + 1))
-    for src in "$RUNTIME_DIR/rocreader_sdl" "$RUNTIME_DIR"/lib/*.so*; do
+    for src in "$RUNTIME_DIR/rocreader_sdl" "$RUNTIME_DIR/reader" "$RUNTIME_DIR"/lib/*.so*; do
       [ -f "$src" ] || continue
       for need in $(collect_needed "$src" || true); do
         [ -z "$need" ] && continue
@@ -530,63 +619,254 @@ find_so_in_libdir() {
     cp -L "$LIBZIP_SO_ABS" "$RUNTIME_DIR/lib/" || true
   fi
 
-  cp -a "$RUNTIME_DIR/lib/." "$RUNTIME_DIR/lib_system_sdl/"
+  TOOLCHAIN_LIB_DIR="$(dirname "$(dirname "$(command -v "$CXX_CMD")")")/aarch64-linux-gnu/lib64"
+  if [ -f "$TOOLCHAIN_LIB_DIR/libstdc++.so.6" ]; then
+    rm -f "$RUNTIME_DIR/lib/libstdc++.so.6" "$RUNTIME_DIR/lib/libstdc++.so.6."* 2>/dev/null || true
+    cp -L "$TOOLCHAIN_LIB_DIR/libstdc++.so.6" "$RUNTIME_DIR/lib/libstdc++.so.6"
+    echo "[low_glibc] bundled toolchain libstdc++: $TOOLCHAIN_LIB_DIR/libstdc++.so.6"
+  else
+    echo "[low_glibc] WARNING: toolchain libstdc++ not found: $TOOLCHAIN_LIB_DIR/libstdc++.so.6"
+  fi
+  if [ -f "$TOOLCHAIN_LIB_DIR/libgcc_s.so.1" ]; then
+    cp -L "$TOOLCHAIN_LIB_DIR/libgcc_s.so.1" "$RUNTIME_DIR/lib/libgcc_s.so.1"
+    echo "[low_glibc] bundled toolchain libgcc_s: $TOOLCHAIN_LIB_DIR/libgcc_s.so.1"
+  fi
+
+  if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+    SYSTEM_SDL_DIR="$RUNTIME_DIR/resources/lib_system_sdl"
+  else
+    SYSTEM_SDL_DIR="$RUNTIME_DIR/lib_system_sdl"
+  fi
+  mkdir -p "$SYSTEM_SDL_DIR"
+  cp -a "$RUNTIME_DIR/lib/." "$SYSTEM_SDL_DIR/"
   rm -f \
-    "$RUNTIME_DIR/lib_system_sdl/libdrm.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libgbm.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libwayland-client.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libwayland-cursor.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libwayland-egl.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libwayland-server.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libX11.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libXau.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libxcb.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libXcursor.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libXdmcp.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libXext.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libXfixes.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libXi.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libXinerama.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libxkbcommon.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libXrandr.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libXrender.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libXss.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libXxf86vm.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libdecor-0.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libdbus-1.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libsystemd.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libffi.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libSDL2-2.0.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libSDL2_image-2.0.so."* \
-    "$RUNTIME_DIR/lib_system_sdl/libSDL2_ttf-2.0.so."* 2>/dev/null || true
+    "$SYSTEM_SDL_DIR/libdrm.so."* \
+    "$SYSTEM_SDL_DIR/libgbm.so."* \
+    "$SYSTEM_SDL_DIR/libwayland-client.so."* \
+    "$SYSTEM_SDL_DIR/libwayland-cursor.so."* \
+    "$SYSTEM_SDL_DIR/libwayland-egl.so."* \
+    "$SYSTEM_SDL_DIR/libwayland-server.so."* \
+    "$SYSTEM_SDL_DIR/libX11.so."* \
+    "$SYSTEM_SDL_DIR/libXau.so."* \
+    "$SYSTEM_SDL_DIR/libxcb.so."* \
+    "$SYSTEM_SDL_DIR/libXcursor.so."* \
+    "$SYSTEM_SDL_DIR/libXdmcp.so."* \
+    "$SYSTEM_SDL_DIR/libXext.so."* \
+    "$SYSTEM_SDL_DIR/libXfixes.so."* \
+    "$SYSTEM_SDL_DIR/libXi.so."* \
+    "$SYSTEM_SDL_DIR/libXinerama.so."* \
+    "$SYSTEM_SDL_DIR/libxkbcommon.so."* \
+    "$SYSTEM_SDL_DIR/libXrandr.so."* \
+    "$SYSTEM_SDL_DIR/libXrender.so."* \
+    "$SYSTEM_SDL_DIR/libXss.so."* \
+    "$SYSTEM_SDL_DIR/libXxf86vm.so."* \
+    "$SYSTEM_SDL_DIR/libdecor-0.so."* \
+    "$SYSTEM_SDL_DIR/libdbus-1.so."* \
+    "$SYSTEM_SDL_DIR/libsystemd.so."* \
+    "$SYSTEM_SDL_DIR/libffi.so."* \
+    "$SYSTEM_SDL_DIR/libSDL2-2.0.so."* \
+    "$SYSTEM_SDL_DIR/libSDL2_image-2.0.so."* \
+    "$SYSTEM_SDL_DIR/libSDL2_ttf-2.0.so."* 2>/dev/null || true
 
-  cp "$SELF_DIR/ROCreader.sh" "$LAUNCHER"
+  if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+    cat > "$LAUNCHER" <<'EOF'
+#!/bin/sh
+set -eu
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_DIR="$SELF_DIR"
+BIN="$APP_DIR/reader"
+LOG_FILE="${ROC_NATIVE_RUNTIME_LOG:-$APP_DIR/log.txt}"
+LIB_FULL_DIR="$APP_DIR/lib"
+LIB_SYSTEM_SDL_DIR="$APP_DIR/resources/lib_system_sdl"
+LIB_DIR="$LIB_FULL_DIR"
+PACKAGE_TAG="trimui-brick-20260426-system-volume-menu-start-select"
 
-  chmod +x "$RUNTIME_DIR/rocreader_sdl"
+export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-alsa}"
+export SDL_NOMOUSE="${SDL_NOMOUSE:-1}"
+export ROCREADER_ROOT="$APP_DIR"
+export ROCREADER_CARD1_ROOT="/mnt/SDCARD"
+export ROCREADER_CARD2_ROOT="/mnt/sdcard"
+export ROCREADER_SCREEN_PROFILE="${ROCREADER_SCREEN_PROFILE:-1024x768}"
+export ROCREADER_SCREEN_W="${ROCREADER_SCREEN_W:-1024}"
+export ROCREADER_SCREEN_H="${ROCREADER_SCREEN_H:-768}"
+export ROCREADER_PRELOAD_AVATARS="${ROCREADER_PRELOAD_AVATARS:-1}"
+export ROCREADER_SYSTEM_VOLUME_LEVELS="${ROCREADER_SYSTEM_VOLUME_LEVELS:-20}"
+export ROCREADER_SYSTEM_VOLUME_OUTPUT_MAX_PERCENT="${ROCREADER_SYSTEM_VOLUME_OUTPUT_MAX_PERCENT:-75}"
+if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+  export XDG_RUNTIME_DIR="/tmp/rocreader-xdg"
+fi
+mkdir -p "$XDG_RUNTIME_DIR" "$APP_DIR/cache" 2>/dev/null || true
+chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+cd "$APP_DIR"
+
+set_runtime_libs() {
+  lib_dir="$1"
+  if [ -d "$lib_dir" ]; then
+    LIB_DIR="$lib_dir"
+  else
+    LIB_DIR="$LIB_FULL_DIR"
+  fi
+  export LD_LIBRARY_PATH="$LIB_DIR:$LIB_DIR/pulseaudio:/usr/lib:/lib:/mnt/vendor/lib:${LD_LIBRARY_PATH_BASE:-}"
+}
+
+log_line() {
+  printf '%s\n' "$1" >>"$LOG_FILE"
+}
+
+log_cmd() {
+  log_line "[launcher] $*"
+  "$@" >>"$LOG_FILE" 2>&1 || log_line "[launcher] command failed rc=$?: $*"
+}
+
+run_with_driver() {
+  drv="$1"
+  lib_dir="$2"
+  set_runtime_libs "$lib_dir"
+  log_line "[launcher] try SDL_VIDEODRIVER=$drv libs=$LIB_DIR"
+  SDL_VIDEODRIVER="$drv" "$BIN" >>"$LOG_FILE" 2>&1
+  rc=$?
+  log_line "[launcher] exit SDL_VIDEODRIVER=$drv rc=$rc"
+  return "$rc"
+}
+
+run_default() {
+  lib_dir="$1"
+  set_runtime_libs "$lib_dir"
+  log_line "[launcher] try default video libs=$LIB_DIR"
+  "$BIN" >>"$LOG_FILE" 2>&1
+  rc=$?
+  log_line "[launcher] exit default video rc=$rc"
+  return "$rc"
+}
+
+LD_LIBRARY_PATH_BASE="${LD_LIBRARY_PATH:-}"
+set_runtime_libs "$LIB_SYSTEM_SDL_DIR"
+
+if [ ! -x "$BIN" ]; then
+  log_line "[launcher] binary missing: $BIN"
+  exit 4
+fi
+
+log_line "===== $(date '+%F %T %Z') ====="
+log_line "[launcher] package_tag=$PACKAGE_TAG"
+log_line "[launcher] app=$APP_DIR"
+log_line "[launcher] screen=${ROCREADER_SCREEN_W}x${ROCREADER_SCREEN_H}"
+log_line "[launcher] volume_levels=${ROCREADER_SYSTEM_VOLUME_LEVELS} volume_output_max=${ROCREADER_SYSTEM_VOLUME_OUTPUT_MAX_PERCENT}"
+log_line "[launcher] pwd=$(pwd)"
+log_line "[launcher] bin=$BIN"
+log_line "[launcher] log=$LOG_FILE"
+log_line "[launcher] LD_LIBRARY_PATH_BASE=${LD_LIBRARY_PATH_BASE:-}"
+log_cmd uname -a
+log_cmd ls -la "$APP_DIR"
+log_cmd ls -la "$APP_DIR/books"
+log_cmd ls -la "$APP_DIR/lib"
+log_cmd ls -la "$APP_DIR/resources"
+if command -v df >/dev/null 2>&1; then
+  log_cmd df -h
+fi
+if command -v mount >/dev/null 2>&1; then
+  log_cmd mount
+fi
+if command -v ldd >/dev/null 2>&1; then
+  log_cmd ldd "$BIN"
+else
+  log_line "[launcher] ldd not available"
+fi
+
+if [ -n "${SDL_VIDEODRIVER:-}" ]; then
+  run_with_driver "$SDL_VIDEODRIVER" "$LIB_FULL_DIR"
+  exit $?
+fi
+
+try_libs() {
+  lib_dir="$1"
+  if run_default "$lib_dir"; then
+    exit 0
+  else
+    rc=$?
+  fi
+  if [ "$rc" -eq 134 ] || [ "$rc" -eq 137 ]; then
+    log_line "[launcher] process ended with rc=$rc; stop retrying video drivers"
+    exit "$rc"
+  fi
+  for drv in KMSDRM kmsdrm wayland x11 fbcon directfb; do
+    if run_with_driver "$drv" "$lib_dir"; then
+      exit 0
+    else
+      rc=$?
+    fi
+    if [ "$rc" -eq 134 ] || [ "$rc" -eq 137 ]; then
+      log_line "[launcher] process ended with rc=$rc; stop retrying video drivers"
+      exit "$rc"
+    fi
+  done
+}
+
+try_libs "$LIB_SYSTEM_SDL_DIR"
+try_libs "$LIB_FULL_DIR"
+log_line "[launcher] all drivers failed"
+exit 5
+EOF
+    cat > "$RUNTIME_DIR/config.json" <<'EOF'
+{
+  "label": "ROCreader",
+  "launch": "launch.sh",
+  "icon": "icon.png"
+}
+EOF
+    cat > "$RUNTIME_DIR/README.md" <<'EOF'
+# ROCreader for Trimui Brick
+
+Copy the `Apps/ROCreader` folder to the Trimui Brick memory card.
+Place books in `books`.
+EOF
+    : > "$RUNTIME_DIR/log.txt"
+    [ -f "$SELF_DIR/ui/common/ROCreader_trimuibrick.png" ] && cp "$SELF_DIR/ui/common/ROCreader_trimuibrick.png" "$RUNTIME_DIR/icon.png"
+    [ ! -f "$RUNTIME_DIR/icon.png" ] && [ -f "$SELF_DIR/ui/ROCreader.png" ] && cp "$SELF_DIR/ui/ROCreader.png" "$RUNTIME_DIR/icon.png"
+    [ ! -f "$RUNTIME_DIR/icon.png" ] && [ -f "$SELF_DIR/ui/common/ROCreader.png" ] && cp "$SELF_DIR/ui/common/ROCreader.png" "$RUNTIME_DIR/icon.png"
+  else
+    cp "$SELF_DIR/ROCreader.sh" "$LAUNCHER"
+  fi
+
+  chmod +x "$RUNTIME_DIR/rocreader_sdl" 2>/dev/null || true
+  chmod +x "$RUNTIME_DIR/reader" 2>/dev/null || true
   chmod +x "$LAUNCHER"
 
   mkdir -p "$DIST_ROOT"
   rm -f "$TARBALL"
-  tar -C "$DIST_ROOT" -czf "$TARBALL" APPS
+  if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+    tar -C "$DIST_ROOT" -czf "$TARBALL" Apps
+  else
+    tar -C "$DIST_ROOT" -czf "$TARBALL" APPS
+  fi
 
   mkdir -p "$DOWNLOADS_ROOT"
   rm -rf "$ZIP_STAGE_ROOT"
   mkdir -p "$ZIP_STAGE_RUNTIME"
-  mkdir -p "$ZIP_STAGE_IMGS"
+  [ "$TRIMUI_BRICK_LAYOUT" != "1" ] && mkdir -p "$ZIP_STAGE_IMGS"
   cp -a "$RUNTIME_DIR/." "$ZIP_STAGE_RUNTIME/"
-  mkdir -p "$ZIP_STAGE_RUNTIME/books" "$ZIP_STAGE_RUNTIME/book_covers" "$ZIP_STAGE_RUNTIME/cache"
-  find "$ZIP_STAGE_RUNTIME/books" -mindepth 1 -delete 2>/dev/null || true
+  if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+    mkdir -p "$ZIP_STAGE_RUNTIME/books" "$ZIP_STAGE_RUNTIME/book_covers" "$ZIP_STAGE_RUNTIME/cache"
+    find "$ZIP_STAGE_RUNTIME/books" -mindepth 1 -delete 2>/dev/null || true
+    FONT_STAGE_CHECK="$ZIP_STAGE_RUNTIME/resources/fonts/ui_font.ttf"
+  else
+    mkdir -p "$ZIP_STAGE_RUNTIME/books" "$ZIP_STAGE_RUNTIME/book_covers" "$ZIP_STAGE_RUNTIME/cache"
+    find "$ZIP_STAGE_RUNTIME/books" -mindepth 1 -delete 2>/dev/null || true
+    FONT_STAGE_CHECK="$ZIP_STAGE_RUNTIME/fonts/ui_font.ttf"
+  fi
   find "$ZIP_STAGE_RUNTIME/book_covers" -mindepth 1 -delete 2>/dev/null || true
   find "$ZIP_STAGE_RUNTIME/cache" -mindepth 1 -delete 2>/dev/null || true
-  if [ ! -f "$ZIP_STAGE_RUNTIME/fonts/ui_font.ttf" ]; then
+  if [ ! -f "$FONT_STAGE_CHECK" ]; then
     echo "[low_glibc] ERROR: packaged font missing in release stage: ui_font.ttf"
     exit 1
   fi
-  cp "$LAUNCHER" "$ZIP_STAGE_APPS/ROCreader.sh"
-  if [ -f "$SELF_DIR/ui/ROCreader.png" ]; then
-    cp "$SELF_DIR/ui/ROCreader.png" "$ZIP_STAGE_IMGS/ROCreader.png"
-  elif [ -f "$SELF_DIR/ui/common/ROCreader.png" ]; then
-    cp "$SELF_DIR/ui/common/ROCreader.png" "$ZIP_STAGE_IMGS/ROCreader.png"
+  if [ "$TRIMUI_BRICK_LAYOUT" != "1" ]; then
+    cp "$LAUNCHER" "$ZIP_STAGE_APPS/ROCreader.sh"
+    if [ -f "$SELF_DIR/ui/ROCreader.png" ]; then
+      cp "$SELF_DIR/ui/ROCreader.png" "$ZIP_STAGE_IMGS/ROCreader.png"
+    elif [ -f "$SELF_DIR/ui/common/ROCreader.png" ]; then
+      cp "$SELF_DIR/ui/common/ROCreader.png" "$ZIP_STAGE_IMGS/ROCreader.png"
+    fi
   fi
   rm -f "$ZIPFILE"
   ZIP_SRC="$ZIP_STAGE_ROOT" ZIP_DST="$ZIPFILE" python3 - <<'PY'

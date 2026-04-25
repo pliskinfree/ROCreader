@@ -663,8 +663,8 @@ struct EpubRuntime::Impl {
       int page_w = 0;
       int page_h = 0;
       if (!worker_reader.PageSize(task_state.location.page_num, page_w, page_h) || page_w <= 0 || page_h <= 0) {
-        page_w = 720;
-        page_h = 480;
+        page_w = std::max(1, impl->screen_w);
+        page_h = std::max(1, impl->screen_h);
       }
       const int rotation = NormalizeRotation(task_state.view.rotation);
       float fit_scale = 1.0f;

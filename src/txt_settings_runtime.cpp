@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <string>
 
 namespace {
@@ -29,6 +30,10 @@ constexpr std::array<SDL_Color, kColorOptionCount> kFontColors = {{
 constexpr std::array<int, 5> kFontPointSizes = {{18, 20, 22, 24, 26}};
 
 int ColorLuma(SDL_Color color) { return color.r * 299 + color.g * 587 + color.b * 114; }
+
+int ScalePx(float scale, int value) {
+  return std::max(1, static_cast<int>(std::round(static_cast<float>(value) * std::max(0.1f, scale))));
+}
 } // namespace
 
 int ClampTxtColorIndex(int value) { return std::clamp(value, 0, kColorOptionCount - 1); }
@@ -159,25 +164,26 @@ void DrawTxtSettingsPreview(const TxtSettingsRenderDeps &deps) {
     return get_text_entry(text, color);
   };
 
-  const int divider_inset = 10;
-  const int preview_padding_x = 16;
+  const float scale = deps.ui_scale;
+  const int divider_inset = ScalePx(scale, 10);
+  const int preview_padding_x = ScalePx(scale, 16);
   const int row_center0 = deps.first_row_y + deps.row_height / 2;
   const int row_center1 = deps.first_row_y + deps.row_pitch + deps.row_height / 2;
   const int row_center2 = deps.first_row_y + deps.row_pitch * 2 + deps.row_height / 2;
   const int row_center3 = deps.first_row_y + deps.row_pitch * 3 + deps.row_height / 2;
-  const int button_w = 28;
-  const int button_h = 28;
+  const int button_w = ScalePx(scale, 28);
+  const int button_h = ScalePx(scale, 28);
   const int color_block_w = button_w * 2;
   const int color_block_h = button_h;
-  const int color_gap = 8;
-  const int label_control_gap = 18;
-  const int transcode_button_h = 28;
-  const int number_w = 30;
+  const int color_gap = ScalePx(scale, 8);
+  const int label_control_gap = ScalePx(scale, 18);
+  const int transcode_button_h = ScalePx(scale, 28);
+  const int number_w = ScalePx(scale, 30);
 
   deps.draw_rect(deps.preview_rect.x + divider_inset,
-                 deps.first_row_y - 12,
+                 deps.first_row_y - ScalePx(scale, 12),
                  std::max(0, deps.preview_rect.w - divider_inset * 2),
-                 1,
+                 ScalePx(scale, 1),
                  divider_color,
                  true);
 
@@ -197,9 +203,10 @@ void DrawTxtSettingsPreview(const TxtSettingsRenderDeps &deps) {
   }
 
   const int color_controls_w = kColorOptionCount * color_block_w + (kColorOptionCount - 1) * color_gap;
-  const int font_controls_w = button_w + 10 + number_w + 10 + button_w;
-  const int min_transcode_button_w = 82;
-  const int transcode_button_padding = 18;
+  const int mid_gap = ScalePx(scale, 10);
+  const int font_controls_w = button_w + mid_gap + number_w + mid_gap + button_w;
+  const int min_transcode_button_w = ScalePx(scale, 82);
+  const int transcode_button_padding = ScalePx(scale, 18);
   const int transcode_button_w =
       std::max(min_transcode_button_w,
                (get_text_entry(LocalizedAppText(deps.language_index, AppTextId::TxtStartTranscode), text_color)
@@ -221,8 +228,8 @@ void DrawTxtSettingsPreview(const TxtSettingsRenderDeps &deps) {
 
   const int color_left_x = control_right - color_controls_w;
   const int right_btn_x = control_right - button_w;
-  const int number_x = right_btn_x - 10 - number_w;
-  const int left_btn_x = number_x - 10 - button_w;
+  const int number_x = right_btn_x - mid_gap - number_w;
+  const int left_btn_x = number_x - mid_gap - button_w;
   const int button_y = row_center2 - button_h / 2;
   const bool left_selected = deps.state.panel_active && deps.state.selected_row == 2 && deps.state.selected_option == 0;
   const bool right_selected = deps.state.panel_active && deps.state.selected_row == 2 && deps.state.selected_option == 1;
@@ -242,14 +249,16 @@ void DrawTxtSettingsPreview(const TxtSettingsRenderDeps &deps) {
     deps.draw_rect(x, y0, color_block_w, color_block_h,
                    selected_bg ? button_border : (deps.state.background_color == i ? text_color : muted_color), false);
     if (selected_bg && color_block_w > 8 && color_block_h > 8) {
-      deps.draw_rect(x + 2, y0 + 2, color_block_w - 4, color_block_h - 4, bg_contrast, false);
+      deps.draw_rect(x + ScalePx(scale, 2), y0 + ScalePx(scale, 2),
+                     color_block_w - ScalePx(scale, 4), color_block_h - ScalePx(scale, 4), bg_contrast, false);
     }
 
     deps.draw_rect(x, y1, color_block_w, color_block_h, fg_color, true);
     deps.draw_rect(x, y1, color_block_w, color_block_h,
                    selected_fg ? button_border : (deps.state.font_color == i ? text_color : muted_color), false);
     if (selected_fg && color_block_w > 8 && color_block_h > 8) {
-      deps.draw_rect(x + 2, y1 + 2, color_block_w - 4, color_block_h - 4, fg_contrast, false);
+      deps.draw_rect(x + ScalePx(scale, 2), y1 + ScalePx(scale, 2),
+                     color_block_w - ScalePx(scale, 4), color_block_h - ScalePx(scale, 4), fg_contrast, false);
     }
   }
 
@@ -292,10 +301,10 @@ void DrawTxtSettingsPreview(const TxtSettingsRenderDeps &deps) {
 
   if (!deps.txt_transcode_job.active) return;
 
-  const int bar_w = std::max(150, deps.preview_rect.w - 64);
-  const int bar_h = 14;
+  const int bar_w = std::max(ScalePx(scale, 150), deps.preview_rect.w - ScalePx(scale, 64));
+  const int bar_h = ScalePx(scale, 14);
   const int bar_x = deps.preview_rect.x + (deps.preview_rect.w - bar_w) / 2;
-  const int bar_y = row_center3 + 26;
+  const int bar_y = row_center3 + ScalePx(scale, 26);
   const float progress = deps.txt_transcode_job.total > 0
                              ? static_cast<float>(deps.txt_transcode_job.processed) /
                                    static_cast<float>(deps.txt_transcode_job.total)
@@ -310,14 +319,14 @@ void DrawTxtSettingsPreview(const TxtSettingsRenderDeps &deps) {
           std::to_string(deps.txt_transcode_job.processed) + "/" + std::to_string(deps.txt_transcode_job.total),
           text_color);
       entry && entry->texture) {
-    SDL_Rect dst{deps.preview_rect.x + (deps.preview_rect.w - entry->w) / 2, bar_y + bar_h + 8, entry->w, entry->h};
+    SDL_Rect dst{deps.preview_rect.x + (deps.preview_rect.w - entry->w) / 2, bar_y + bar_h + ScalePx(scale, 8), entry->w, entry->h};
     SDL_RenderCopy(deps.renderer, entry->texture, nullptr, &dst);
   }
 
   if (!deps.txt_transcode_job.current_file.empty() && deps.utf8_ellipsize) {
     const std::string file_text = deps.utf8_ellipsize(deps.txt_transcode_job.current_file, 24);
     if (TextCacheEntry *entry = get_text_entry(file_text, muted_color); entry && entry->texture) {
-      SDL_Rect dst{deps.preview_rect.x + (deps.preview_rect.w - entry->w) / 2, bar_y + bar_h + 28, entry->w, entry->h};
+      SDL_Rect dst{deps.preview_rect.x + (deps.preview_rect.w - entry->w) / 2, bar_y + bar_h + ScalePx(scale, 28), entry->w, entry->h};
       SDL_RenderCopy(deps.renderer, entry->texture, nullptr, &dst);
     }
   }

@@ -8,7 +8,7 @@
 
 bool SfxBank::Init(const std::filesystem::path &exe_path) {
   const std::filesystem::path root = ResolveSoundsRoot(exe_path);
-  std::cout << "[native_h700] sound root: " << root.lexically_normal().string() << "\n";
+  std::cout << "[native_h700] sound root: " << filesystem_compat::LexicallyNormal(root).string() << "\n";
 
 #ifdef HAVE_SDL2_MIXER
   if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 1024) == 0) {
@@ -125,13 +125,16 @@ const char *SfxBank::BackendName() const {
 std::filesystem::path SfxBank::ResolveSoundsRoot(const std::filesystem::path &exe_path) {
   const std::vector<std::filesystem::path> roots = {
       exe_path / "sounds",
+      exe_path / "resources" / "sounds",
       exe_path / ".." / "sounds",
+      exe_path / ".." / "resources" / "sounds",
       std::filesystem::current_path() / "sounds",
+      std::filesystem::current_path() / "resources" / "sounds",
   };
   for (const auto &candidate : roots) {
-    if (std::filesystem::exists(candidate / "move.wav")) return candidate.lexically_normal();
+    if (std::filesystem::exists(candidate / "move.wav")) return filesystem_compat::LexicallyNormal(candidate);
   }
-  return (exe_path / "sounds").lexically_normal();
+  return filesystem_compat::LexicallyNormal((exe_path / "sounds"));
 }
 
 #ifdef HAVE_SDL2_MIXER

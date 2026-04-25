@@ -2,7 +2,7 @@
 #include "path_adapter.h"
 
 #include <cstdlib>
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <unordered_set>
 #include <system_error>
 #include <string>
@@ -15,11 +15,11 @@ std::unordered_set<std::string> g_seen_dir_keys;
 
 std::string CanonicalKey(const fs::path &p) {
   std::error_code ec;
-  fs::path canonical = fs::weakly_canonical(p, ec);
+  fs::path canonical = filesystem_compat::WeaklyCanonical(p, ec);
   if (!ec) {
-    return path_adapter::StorePathString(canonical.lexically_normal());
+    return path_adapter::StorePathString(filesystem_compat::LexicallyNormal(canonical));
   }
-  return path_adapter::StorePathString(p.lexically_normal());
+  return path_adapter::StorePathString(filesystem_compat::LexicallyNormal(p));
 }
 
 void AddIfDirExists(std::vector<std::string> &out, const fs::path &p) {
@@ -54,6 +54,7 @@ std::vector<fs::path> Card2Candidates() {
 void AddRocreaderCandidates(std::vector<std::string> &out, const std::vector<fs::path> &roots) {
   for (const auto &root : roots) {
     AddIfDirExists(out, root / "ROCreader");
+    AddIfDirExists(out, root / "Apps" / "ROCreader");
     AddIfDirExists(out, root / "Roms" / "ROCreader");
     AddIfDirExists(out, root / "APPS" / "ROCreader");
     AddIfDirExists(out, root / "Roms" / "APPS" / "ROCreader");
@@ -76,7 +77,7 @@ void AddNamedDirsRecursively(std::vector<std::string> &out,
         ec.clear();
         continue;
       }
-      if (!it->is_directory(ec)) {
+      if (!filesystem_compat::IsDirectory(*it, ec)) {
         ec.clear();
         continue;
       }
@@ -95,9 +96,13 @@ void AddRuntimeCandidates(std::vector<std::string> &out) {
 
   // Common hardcoded locations observed on handheld firmwares.
   AddIfDirExists(out, fs::path("/Roms/APPS/ROCreader"));
+  AddIfDirExists(out, fs::path("/Apps/ROCreader"));
   AddIfDirExists(out, fs::path("/mnt/mmc/Roms/APPS/ROCreader"));
+  AddIfDirExists(out, fs::path("/mnt/mmc/Apps/ROCreader"));
+  AddIfDirExists(out, fs::path("/mnt/SDCARD/Apps/ROCreader"));
   AddIfDirExists(out, fs::path("/mnt/mmc2/Roms/APPS/ROCreader"));
   AddIfDirExists(out, fs::path("/media/mmc/Roms/APPS/ROCreader"));
+  AddIfDirExists(out, fs::path("/media/mmc/Apps/ROCreader"));
   AddIfDirExists(out, fs::path("/media/mmc2/Roms/APPS/ROCreader"));
 
   // Current working directory can be ROCreader or APPS.
@@ -143,7 +148,10 @@ std::string DetectPrimaryRocreaderRoot() {
 
   // Primary runtime data stays on the system card (card1).
   AddIfDirExists(candidates, fs::path("/mnt/mmc/Roms/APPS/ROCreader"));
+  AddIfDirExists(candidates, fs::path("/mnt/mmc/Apps/ROCreader"));
+  AddIfDirExists(candidates, fs::path("/mnt/SDCARD/Apps/ROCreader"));
   AddIfDirExists(candidates, fs::path("/media/mmc/Roms/APPS/ROCreader"));
+  AddIfDirExists(candidates, fs::path("/media/mmc/Apps/ROCreader"));
   AddIfDirExists(candidates, fs::path("/mnt/mmc/ROCreader"));
   AddIfDirExists(candidates, fs::path("/media/mmc/ROCreader"));
   AddIfDirExists(candidates, fs::path("/Roms/APPS/ROCreader"));
@@ -204,11 +212,17 @@ std::vector<std::string> DetectStorageCardRoots() {
 std::vector<std::string> DetectBooksRoots() {
   g_seen_dir_keys.clear();
   std::vector<std::string> out;
+#ifndef _WIN32
+  const std::vector<std::string> app_roots = DetectRocreaderRoots();
+  for (const auto &root : app_roots) {
+    AddIfDirExists(out, fs::path(root) / "books");
+  }
+  return out;
+#else
   const std::vector<fs::path> card1 = Card1Candidates();
   const std::vector<fs::path> card2 = Card2Candidates();
   AddNamedDirsRecursively(out, card1, "books");
   AddNamedDirsRecursively(out, card2, "books");
-#ifdef _WIN32
   // Local dev fallbacks (Windows only).
   std::error_code ec;
   const fs::path cwd = fs::current_path(ec);
@@ -219,18 +233,24 @@ std::vector<std::string> DetectBooksRoots() {
     AddIfDirExists(out, cwd.parent_path() / "ROCreader" / "books");
   }
   AddIfDirExists(out, fs::path("../books"));
-#endif
   return out;
+#endif
 }
 
 std::vector<std::string> DetectCoverRoots() {
   g_seen_dir_keys.clear();
   std::vector<std::string> out;
+#ifndef _WIN32
+  const std::vector<std::string> app_roots = DetectRocreaderRoots();
+  for (const auto &root : app_roots) {
+    AddIfDirExists(out, fs::path(root) / "book_covers");
+  }
+  return out;
+#else
   const std::vector<fs::path> card1 = Card1Candidates();
   const std::vector<fs::path> card2 = Card2Candidates();
   AddNamedDirsRecursively(out, card1, "book_covers");
   AddNamedDirsRecursively(out, card2, "book_covers");
-#ifdef _WIN32
   // Local dev fallbacks (Windows only).
   std::error_code ec;
   const fs::path cwd = fs::current_path(ec);
@@ -241,8 +261,8 @@ std::vector<std::string> DetectCoverRoots() {
     AddIfDirExists(out, cwd.parent_path() / "ROCreader" / "book_covers");
   }
   AddIfDirExists(out, fs::path("../book_covers"));
-#endif
   return out;
+#endif
 }
 
 } // namespace storage_paths

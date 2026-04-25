@@ -8,7 +8,7 @@
 
 #include <atomic>
 #include <cstdint>
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <functional>
 #include <string>
 #include <thread>
@@ -55,6 +55,7 @@ struct VersionUpdateRenderDeps {
   const VersionUpdateState &state;
   bool light_theme = false;
   int language_index = 0;
+  float ui_scale = 1.0f;
   std::function<void(int, int, int, int, SDL_Color, bool)> draw_rect;
   std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_text_texture;
   std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_emphasis_text_texture;

@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -71,6 +71,11 @@ bool ReadEnvScreenProfile(int &out_w, int &out_h) {
   const char *env_profile = std::getenv("ROCREADER_SCREEN_PROFILE");
   if (!env_profile || !*env_profile) return false;
   const std::string profile = ToLowerAscii(env_profile);
+  if (profile == "1024x768" || profile == "brick" || profile == "trimui-brick") {
+    out_w = 1024;
+    out_h = 768;
+    return true;
+  }
   if (profile == "720x720") {
     out_w = 720;
     out_h = 720;
@@ -107,6 +112,11 @@ bool ReadConfigScreenProfile(int &out_w, int &out_h) {
       const std::string key = ToLowerAscii(line.substr(0, eq));
       if (key != "screen_profile") continue;
       const std::string value = ToLowerAscii(line.substr(eq + 1));
+      if (value == "1024x768" || value == "brick" || value == "trimui-brick") {
+        out_w = 1024;
+        out_h = 768;
+        return true;
+      }
       if (value == "720x720") {
         out_w = 720;
         out_h = 720;
@@ -133,6 +143,9 @@ std::string CanonicalModelTokenFromText(const std::string &text) {
   if (compact.empty()) return {};
 
   const std::vector<std::pair<std::string, std::string>> aliases = {
+      {"trimuibrick", "trimui-brick"},
+      {"brick", "trimui-brick"},
+      {"tg3040", "trimui-brick"},
       {"rg34xxsp", "rg34xx-sp"},
       {"34xxsp", "rg34xx-sp"},
       {"rg35xxplus", "rg35xx-plus"},
@@ -170,6 +183,11 @@ bool ApplyProfileFromModelToken(const std::string &model_token, int &out_w, int 
   if (model_token.empty()) return false;
   // Keep machine-to-profile mapping explicit so model-specific panels don't
   // silently fold into the wrong layout.
+  if (model_token == "trimui-brick") {
+    out_w = 1024;
+    out_h = 768;
+    return true;
+  }
   if (model_token == "rgcubexx") {
     out_w = 720;
     out_h = 720;
@@ -337,6 +355,12 @@ bool ReadSdlDisplaySize(int &out_w, int &out_h) {
 }
 
 bool TryApplyProfileFromDetectedSize(ScreenProfile &profile) {
+  if (profile.detected_w == 1024 && profile.detected_h == 768) {
+    profile.screen_w = 1024;
+    profile.screen_h = 768;
+    profile.profile_name = "1024x768";
+    return true;
+  }
   if (profile.detected_w == 720 && profile.detected_h == 720) {
     profile.screen_w = 720;
     profile.screen_h = 720;

@@ -5,7 +5,7 @@
 #include <SDL.h>
 
 #include <algorithm>
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <fstream>
 #include <iostream>
 #include <sstream>

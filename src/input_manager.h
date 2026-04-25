@@ -27,7 +27,15 @@ enum class Button {
   VolDown,
 };
 
+enum class InputProfile {
+  DesktopDefault,
+  H700Default,
+  H70034xxSp,
+  TrimuiBrick,
+};
+
 const char *ButtonName(Button b);
+const char *InputProfileName(InputProfile profile);
 const char *SdlEventName(Uint32 type);
 
 struct BtnState {
@@ -43,7 +51,7 @@ struct BtnState {
 
 class InputManager {
 public:
-  InputManager(const std::string &mapping_path, bool h700_defaults, bool h700_34xx_style);
+  InputManager(const std::string &mapping_path, InputProfile input_profile);
 
   void BeginFrame(float dt);
   void HandleEvent(const SDL_Event &e);
@@ -68,8 +76,8 @@ private:
   static Button KeyToButton(SDL_Keycode k);
   Button PadToButton(uint8_t b) const;
   Button JoyButtonToButton(uint8_t b) const;
-  void LoadDefaultPadMap();
-  void LoadDefaultJoyMap(bool h700_defaults, bool h700_34xx_style);
+  void LoadDefaultPadMap(InputProfile input_profile);
+  void LoadDefaultJoyMap(InputProfile input_profile);
   static std::string Trim(std::string s);
   static bool ParseButtonName(const std::string &raw, Button &out);
   void LoadOverrides(const std::string &mapping_path);
@@ -80,5 +88,10 @@ private:
   std::array<BtnState, kButtonCount> states_{};
   std::array<Button, 32> pad_map_{};
   std::array<Button, 32> joy_map_{};
+  InputProfile input_profile_ = InputProfile::DesktopDefault;
+  std::array<int, 16> last_pad_axis_values_{};
+  std::array<int, 16> last_joy_axis_values_{};
+  std::array<bool, 16> pad_axis_seen_{};
+  std::array<bool, 16> joy_axis_seen_{};
   float dt_ = 1.0f / 60.0f;
 };

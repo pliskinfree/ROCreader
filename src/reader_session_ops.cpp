@@ -1,7 +1,7 @@
 #include "reader_session_ops.h"
 
 #include <algorithm>
-#include <filesystem>
+#include "filesystem_compat.h"
 #include <iostream>
 #include <limits>
 

@@ -10,6 +10,16 @@
 #include <string>
 
 namespace {
+int ScalePx(float scale, int value) {
+  return std::max(1, static_cast<int>(std::round(static_cast<float>(value) * std::max(0.1f, scale))));
+}
+
+int ContactHintDangerTop(const SettingsRuntimeLayout &layout) {
+  if (layout.screen_w == 1024 && layout.screen_h == 768) return 58;
+  if (layout.screen_w == 640 && layout.screen_h == 480) return 36;
+  return layout.top_bar_y + layout.top_bar_h;
+}
+
 std::string SettingLabel(SettingId id, int language_index) {
   switch (id) {
   case SettingId::SystemControls: return LocalizedAppText(language_index, AppTextId::SettingSystemControls);
@@ -144,26 +154,31 @@ void DrawKeyGuidePreview(const SettingsRuntimeRenderDeps &deps, SDL_Rect preview
     return nullptr;
   };
 
-  const int left = preview_rect.x + 22;
-  const int divider_y = first_row_y - 12;
-  const bool use_34xxsp = deps.use_h700_34xx_keymap;
-  const std::string profile_title = LocalizedAppText(
-      language_index, use_34xxsp ? AppTextId::KeyGuideProfile34xxSp : AppTextId::KeyGuideProfileOtherH700);
+  const float scale = deps.layout.ui_scale;
+  const int left = preview_rect.x + ScalePx(scale, 22);
+  const int divider_y = first_row_y - ScalePx(scale, 12);
+  AppTextId profile_text_id = AppTextId::KeyGuideProfileOtherH700;
+  if (deps.input_profile == InputProfile::H70034xxSp) {
+    profile_text_id = AppTextId::KeyGuideProfile34xxSp;
+  } else if (deps.input_profile == InputProfile::TrimuiBrick) {
+    profile_text_id = AppTextId::KeyGuideProfileTrimuiBrick;
+  }
+  const std::string profile_title = LocalizedAppText(language_index, profile_text_id);
   if (TextCacheEntry *profile = get_text(profile_title, title_color, true); profile && profile->texture) {
-    SDL_Rect dst{left, divider_y - profile->h - 8, profile->w, profile->h};
+    SDL_Rect dst{left, divider_y - profile->h - ScalePx(scale, 8), profile->w, profile->h};
     SDL_RenderCopy(deps.renderer, profile->texture, nullptr, &dst);
   }
-  deps.draw_rect(preview_rect.x + 10,
+  deps.draw_rect(preview_rect.x + ScalePx(scale, 10),
                  divider_y,
-                 std::max(0, preview_rect.w - 20),
-                 1,
+                 std::max(0, preview_rect.w - ScalePx(scale, 20)),
+                 ScalePx(scale, 1),
                  divider_color,
                  true);
 
-  const int max_text_w = std::max(0, (preview_rect.x + preview_rect.w - 20) - left);
-  const int line_gap = 4;
-  const int row_gap = 10;
-  const int start_y = divider_y + 16;
+  const int max_text_w = std::max(0, (preview_rect.x + preview_rect.w - ScalePx(scale, 20)) - left);
+  const int line_gap = ScalePx(scale, 4);
+  const int row_gap = ScalePx(scale, 10);
+  const int start_y = divider_y + ScalePx(scale, 16);
   int cursor_y = start_y;
   for (size_t i = 0; i < kKeyGuideLines.size(); ++i) {
     const auto &line = kKeyGuideLines[i];
@@ -189,10 +204,11 @@ void DrawContactMePreview(const SettingsRuntimeRenderDeps &deps, SDL_Rect previe
   const std::string hint_text = LocalizedAppText(language_index, AppTextId::ContactRewardHint);
   if (hint_text.empty()) return;
 
-  const int safe_x = preview_rect.x;
-  const int safe_y = preview_rect.y + 35;
-  const int safe_w = preview_rect.w;
-  const int safe_h = 40;
+  const float scale = deps.layout.ui_scale;
+  const int safe_x = preview_rect.x + ScalePx(scale, 8);
+  const int safe_y = std::max(preview_rect.y + ScalePx(scale, 12), ContactHintDangerTop(deps.layout));
+  const int safe_w = std::max(0, preview_rect.w - ScalePx(scale, 16));
+  const int safe_h = ScalePx(scale, 46);
   if (safe_w <= 0 || safe_h <= 0) return;
 
   using TextGetter = std::function<TextCacheEntry *(const std::string &, SDL_Color)>;
@@ -373,8 +389,14 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
   deps.draw_rect(x, menu_y, menu_width, menu_h, SDL_Color{24, 34, 46, 255}, true);
   deps.draw_rect(x + menu_width - 1, menu_y, 1, menu_h, SDL_Color{82, 125, 158, 255}, true);
 
-  int text_left = x + 32;
-  int y = menu_y + 84 + deps.layout.settings_content_offset_y;
+  const float scale = deps.layout.ui_scale;
+  const int sidebar_margin_x = ScalePx(scale, 12);
+  const int sidebar_text_pad_x = ScalePx(scale, 24);
+  const int sidebar_item_h = ScalePx(scale, 30);
+  const int sidebar_item_pitch = ScalePx(scale, 42);
+  const int sidebar_indicator_w = ScalePx(scale, 3);
+  int text_left = x + sidebar_text_pad_x;
+  int y = menu_y + ScalePx(scale, 84) + deps.layout.settings_content_offset_y;
   int first_menu_item_y = y;
 #ifdef HAVE_SDL2_TTF
   const std::string menu_title = MenuTitleText(language_index);
@@ -386,19 +408,20 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
   if (compact_sidebar && title_tex && title_tex->w > title_max_w && deps.get_text_texture) {
     title_tex = deps.get_text_texture(menu_title, title_color);
   }
-  int divider_y = menu_y + 68 + deps.layout.settings_content_offset_y;
+  int divider_y = menu_y + ScalePx(scale, 68) + deps.layout.settings_content_offset_y;
   if (title_tex && title_tex->texture) {
     const int side_margin = std::max(0, (menu_width - title_tex->w) / 2);
     const int title_x = x + side_margin;
-    const int title_y = menu_y + 8 + deps.layout.settings_content_offset_y;
-    const int title_gap = 8;
+    const int title_y = menu_y + ScalePx(scale, 8) + deps.layout.settings_content_offset_y;
+    const int title_gap = ScalePx(scale, 8);
     divider_y = title_y + title_tex->h + title_gap;
     SDL_Rect td{title_x, title_y, title_tex->w, title_tex->h};
     SDL_RenderCopy(deps.renderer, title_tex->texture, nullptr, &td);
   }
-  deps.draw_rect(x + 8, divider_y, menu_width - 16, 1, SDL_Color{66, 95, 124, 255}, true);
-  y = divider_y + 12;
-  text_left = x + 32;
+  deps.draw_rect(x + ScalePx(scale, 8), divider_y, menu_width - ScalePx(scale, 16), ScalePx(scale, 1),
+                 SDL_Color{66, 95, 124, 255}, true);
+  y = divider_y + ScalePx(scale, 12);
+  text_left = x + sidebar_text_pad_x;
   first_menu_item_y = y;
 #else
   deps.draw_rect(x + 8, 72 + deps.layout.settings_content_offset_y, menu_width - 16, 1,
@@ -408,23 +431,26 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
   for (size_t i = 0; i < deps.menu_items.size(); ++i) {
     const bool sel = static_cast<int>(i) == deps.menu_selected;
     const SDL_Color c = sel ? SDL_Color{63, 119, 158, 255} : SDL_Color{57, 73, 96, 214};
-    deps.draw_rect(x + 12, y, menu_width - 24, 30, c, true);
+    deps.draw_rect(x + sidebar_margin_x, y, menu_width - sidebar_margin_x * 2, sidebar_item_h, c, true);
     if (sel) {
-      deps.draw_rect(x + 12, y, 3, 30, SDL_Color{139, 214, 255, 255}, true);
-      deps.draw_rect(x + 11, y - 1, menu_width - 22, 32, SDL_Color{85, 152, 198, 208}, false);
+      deps.draw_rect(x + sidebar_margin_x, y, sidebar_indicator_w, sidebar_item_h,
+                     SDL_Color{139, 214, 255, 255}, true);
+      deps.draw_rect(x + sidebar_margin_x - ScalePx(scale, 1), y - ScalePx(scale, 1),
+                     menu_width - sidebar_margin_x * 2 + ScalePx(scale, 2),
+                     sidebar_item_h + ScalePx(scale, 2), SDL_Color{85, 152, 198, 208}, false);
     }
 #ifdef HAVE_SDL2_TTF
     const std::string label_text = SettingLabel(deps.menu_items[i], language_index);
     if (!label_text.empty() && deps.get_text_texture) {
       TextCacheEntry *label_tex = deps.get_text_texture(label_text, item_color);
       if (label_tex && label_tex->texture) {
-        const int ty = y + std::max(0, (30 - label_tex->h) / 2);
+        const int ty = y + std::max(0, (sidebar_item_h - label_tex->h) / 2);
         SDL_Rect td{text_left, ty, label_tex->w, label_tex->h};
         SDL_RenderCopy(deps.renderer, label_tex->texture, nullptr, &td);
       }
     }
 #endif
-    y += 42;
+    y += sidebar_item_pitch;
   }
 
   const SettingId selected =
@@ -436,8 +462,9 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
         deps.system_settings_state,
         deps.cfg.theme != 0,
         first_menu_item_y,
-        42,
-        30,
+        sidebar_item_pitch,
+        sidebar_item_h,
+        scale,
         deps.draw_rect,
         deps.get_text_texture,
         deps.get_title_text_texture,
@@ -458,8 +485,9 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
         deps.cfg.theme != 0,
         language_index,
         first_menu_item_y,
-        42,
-        30,
+        sidebar_item_pitch,
+        sidebar_item_h,
+        scale,
         deps.draw_rect,
         deps.get_text_texture,
         deps.get_title_text_texture,
@@ -473,6 +501,7 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
         deps.contributor_avatar_entries,
         deps.contributor_avatar_state,
         language_index,
+        scale,
         deps.draw_rect,
         deps.get_text_texture,
     });
@@ -484,6 +513,7 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
         deps.version_update_state,
         deps.cfg.theme != 0,
         language_index,
+        scale,
         deps.draw_rect,
         deps.get_text_texture,
         deps.get_title_text_texture,
