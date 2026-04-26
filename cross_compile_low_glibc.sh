@@ -691,8 +691,11 @@ export ROCREADER_SCREEN_W="${ROCREADER_SCREEN_W:-1024}"
 export ROCREADER_SCREEN_H="${ROCREADER_SCREEN_H:-768}"
 export ROCREADER_PRELOAD_AVATARS="${ROCREADER_PRELOAD_AVATARS:-1}"
 export ROCREADER_UPDATE_CONTENTS_URL="${ROCREADER_UPDATE_CONTENTS_URL:-https://github.com/LPF970915/ROCreader/tree/main/TrimuiBrick/Downloads}"
+export ROCREADER_PDF_LOW_MEMORY="${ROCREADER_PDF_LOW_MEMORY:-1}"
 export ROCREADER_SYSTEM_VOLUME_LEVELS="${ROCREADER_SYSTEM_VOLUME_LEVELS:-20}"
-export ROCREADER_SYSTEM_VOLUME_OUTPUT_MAX_PERCENT="${ROCREADER_SYSTEM_VOLUME_OUTPUT_MAX_PERCENT:-75}"
+export ROCREADER_TRIMUI_SHMVAR_VOLUME="${ROCREADER_TRIMUI_SHMVAR_VOLUME:-1}"
+export ROCREADER_TRIMUI_SHMVAR_PATH="${ROCREADER_TRIMUI_SHMVAR_PATH:-/usr/trimui/bin/shmvar}"
+export ROCREADER_SYSTEM_VOLUME_OUTPUT_MAX_PERCENT="${ROCREADER_SYSTEM_VOLUME_OUTPUT_MAX_PERCENT:-100}"
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
   export XDG_RUNTIME_DIR="/tmp/rocreader-xdg"
 fi
@@ -719,6 +722,199 @@ log_cmd() {
   "$@" >>"$LOG_FILE" 2>&1 || log_line "[launcher] command failed rc=$?: $*"
 }
 
+write_update_status() {
+  result="$1"
+  version="${2:-}"
+  {
+    printf 'result=%s\n' "$result"
+    [ -n "$version" ] && printf 'version=%s\n' "$version"
+  } >"$APP_DIR/cache/update_boot_status.txt"
+}
+
+read_installed_version() {
+  [ -f "$APP_DIR/version.txt" ] || return 1
+  head -n 1 "$APP_DIR/version.txt"
+}
+
+extract_marker_value() {
+  key="$1"
+  marker="$2"
+  awk -F= -v wanted="$key" '$1 == wanted { print substr($0, index($0, "=") + 1); exit }' "$marker"
+}
+
+extract_version_from_name() {
+  file_name="$(basename "$1")"
+  printf '%s\n' "$file_name" | sed -n 's/.*\(ver[0-9][0-9.]*\).*[.]zip$/\1/p'
+}
+
+version_sort_key() {
+  version="$1"
+  printf '%s\n' "$version" | awk '
+    BEGIN { count = 0 }
+    {
+      n = split($0, parts, /[^0-9]+/)
+      for (i = 1; i <= n; ++i) {
+        if (parts[i] != "") {
+          printf "%06d", parts[i]
+          count++
+        }
+      }
+    }
+    END {
+      if (count == 0) printf "000000"
+    }'
+}
+
+version_is_newer() {
+  candidate="$1"
+  baseline="$2"
+  [ "$(version_sort_key "$candidate")" \> "$(version_sort_key "$baseline")" ]
+}
+
+find_pending_marker() {
+  for root in /mnt/SDCARD /mnt/sdcard /mnt/mmc; do
+    marker="$root/Downloads/ROCreader_update_pending.txt"
+    [ -f "$marker" ] && { printf '%s' "$marker"; return 0; }
+  done
+  return 1
+}
+
+find_latest_download_zip() {
+  best_path=""
+  best_version=""
+  for root in /mnt/SDCARD /mnt/sdcard /mnt/mmc; do
+    downloads_dir="$root/Downloads"
+    [ -d "$downloads_dir" ] || continue
+    for zip_file in "$downloads_dir"/*.zip; do
+      [ -f "$zip_file" ] || continue
+      zip_version="$(extract_version_from_name "$zip_file")"
+      [ -n "$zip_version" ] || continue
+      if [ -z "$best_path" ] || version_is_newer "$zip_version" "$best_version"; then
+        best_path="$zip_file"
+        best_version="$zip_version"
+      fi
+    done
+  done
+  [ -n "$best_path" ] && printf '%s\n' "$best_path"
+}
+
+extract_zip_to_stage() {
+  zip_file="$1"
+  stage_dir="$2"
+  rm -rf "$stage_dir"
+  mkdir -p "$stage_dir"
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -oq "$zip_file" -d "$stage_dir" >>"$LOG_FILE" 2>&1
+    return $?
+  fi
+  if command -v busybox >/dev/null 2>&1; then
+    busybox unzip -o "$zip_file" -d "$stage_dir" >>"$LOG_FILE" 2>&1
+    return $?
+  fi
+  return 127
+}
+
+replace_runtime_entry() {
+  name="$1"
+  src="$2/$name"
+  dst="$APP_DIR/$name"
+  [ -e "$src" ] || return 0
+  rm -rf "$dst"
+  cp -a "$src" "$APP_DIR/"
+}
+
+find_staged_runtime_dir() {
+  stage_dir="$1"
+  for candidate in \
+    "$stage_dir/Apps/ROCreader" \
+    "$stage_dir/Roms/APPS/ROCreader" \
+    "$stage_dir/APPS/ROCreader" \
+    "$stage_dir/ROCreader"; do
+    [ -d "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
+
+perform_pending_update_if_any() {
+  update_stage_dir="$APP_DIR/cache/update_stage"
+  marker="$(find_pending_marker || true)"
+  installed_version="$(read_installed_version || true)"
+  package_path=""
+  package_version=""
+  latest_zip="$(find_latest_download_zip || true)"
+  latest_version=""
+  if [ -n "$latest_zip" ]; then
+    latest_version="$(extract_version_from_name "$latest_zip")"
+  fi
+  if [ -n "$latest_zip" ] && [ -n "$latest_version" ]; then
+    if [ -z "$installed_version" ] || version_is_newer "$latest_version" "$installed_version"; then
+      package_path="$latest_zip"
+      package_version="$latest_version"
+    fi
+  fi
+  if [ -z "$package_path" ] && [ -n "$marker" ]; then
+    package_dir="$(dirname "$marker")"
+    package_name="$(extract_marker_value filename "$marker")"
+    package_version="$(extract_marker_value version "$marker")"
+    package_path="$package_dir/$package_name"
+    [ -n "$package_version" ] || package_version="$(extract_version_from_name "$package_path")"
+  fi
+  [ -n "$package_path" ] || return 0
+
+  log_line "[update] pending marker: ${marker:-none}"
+  log_line "[update] installed version: ${installed_version:-unknown}"
+  log_line "[update] latest zip: ${latest_zip:-none}"
+  log_line "[update] package: $package_path"
+  log_line "[update] package version: ${package_version:-unknown}"
+
+  if [ ! -f "$package_path" ]; then
+    log_line "[update] missing package, skip install"
+    write_update_status "failed" "$package_version"
+    return 0
+  fi
+  if ! extract_zip_to_stage "$package_path" "$update_stage_dir"; then
+    log_line "[update] extract failed"
+    write_update_status "failed" "$package_version"
+    return 0
+  fi
+  staged_runtime="$(find_staged_runtime_dir "$update_stage_dir" || true)"
+  if [ ! -d "$staged_runtime" ]; then
+    log_line "[update] staged runtime missing under: $update_stage_dir"
+    write_update_status "failed" "$package_version"
+    rm -rf "$update_stage_dir"
+    return 0
+  fi
+
+  replace_runtime_entry "reader" "$staged_runtime"
+  replace_runtime_entry "rocreader_sdl" "$staged_runtime"
+  replace_runtime_entry "launch.sh" "$staged_runtime"
+  replace_runtime_entry "config.json" "$staged_runtime"
+  replace_runtime_entry "icon.png" "$staged_runtime"
+  replace_runtime_entry "native_config.ini" "$staged_runtime"
+  replace_runtime_entry "native_keymap.ini" "$staged_runtime"
+  replace_runtime_entry "reader.cfg" "$staged_runtime"
+  replace_runtime_entry "reader.gptk" "$staged_runtime"
+  replace_runtime_entry "resources" "$staged_runtime"
+  replace_runtime_entry "lib" "$staged_runtime"
+  replace_runtime_entry "lib_system_sdl" "$staged_runtime"
+  replace_runtime_entry "fonts" "$staged_runtime"
+  replace_runtime_entry "sounds" "$staged_runtime"
+  chmod +x "$APP_DIR/reader" "$APP_DIR/launch.sh" 2>/dev/null || true
+  chmod +x "$APP_DIR/rocreader_sdl" 2>/dev/null || true
+  printf '%s\n' "$package_version" >"$APP_DIR/version.txt"
+  rm -f /mnt/SDCARD/Downloads/ROCreader_update_pending.txt /mnt/sdcard/Downloads/ROCreader_update_pending.txt /mnt/mmc/Downloads/ROCreader_update_pending.txt
+  rm -rf "$update_stage_dir"
+  write_update_status "success" "$package_version"
+  log_line "[update] install success version=${package_version:-unknown}"
+}
+
+maybe_install_after_exit() {
+  if find_pending_marker >/dev/null 2>&1 || find_latest_download_zip >/dev/null 2>&1; then
+    log_line "[update] checking pending update after app exit"
+    perform_pending_update_if_any
+  fi
+}
+
 run_with_driver() {
   drv="$1"
   lib_dir="$2"
@@ -727,6 +923,9 @@ run_with_driver() {
   SDL_VIDEODRIVER="$drv" "$BIN" >>"$LOG_FILE" 2>&1
   rc=$?
   log_line "[launcher] exit SDL_VIDEODRIVER=$drv rc=$rc"
+  if [ "$rc" -eq 0 ]; then
+    maybe_install_after_exit
+  fi
   return "$rc"
 }
 
@@ -737,6 +936,9 @@ run_default() {
   "$BIN" >>"$LOG_FILE" 2>&1
   rc=$?
   log_line "[launcher] exit default video rc=$rc"
+  if [ "$rc" -eq 0 ]; then
+    maybe_install_after_exit
+  fi
   return "$rc"
 }
 
@@ -749,11 +951,13 @@ if [ ! -x "$BIN" ]; then
 fi
 
 log_line "===== $(date '+%F %T %Z') ====="
+perform_pending_update_if_any
 log_line "[launcher] package_tag=$PACKAGE_TAG"
 log_line "[launcher] app=$APP_DIR"
 log_line "[launcher] screen=${ROCREADER_SCREEN_W}x${ROCREADER_SCREEN_H}"
 log_line "[launcher] update_url=${ROCREADER_UPDATE_CONTENTS_URL}"
-log_line "[launcher] volume_levels=${ROCREADER_SYSTEM_VOLUME_LEVELS} volume_output_max=${ROCREADER_SYSTEM_VOLUME_OUTPUT_MAX_PERCENT}"
+log_line "[launcher] pdf_low_memory=${ROCREADER_PDF_LOW_MEMORY}"
+log_line "[launcher] volume_levels=${ROCREADER_SYSTEM_VOLUME_LEVELS} volume_output_max=${ROCREADER_SYSTEM_VOLUME_OUTPUT_MAX_PERCENT} trimui_shmvar_volume=${ROCREADER_TRIMUI_SHMVAR_VOLUME} shmvar_path=${ROCREADER_TRIMUI_SHMVAR_PATH}"
 log_line "[launcher] pwd=$(pwd)"
 log_line "[launcher] bin=$BIN"
 log_line "[launcher] log=$LOG_FILE"

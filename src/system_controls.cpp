@@ -136,6 +136,16 @@ int UiPercentToOutputPercent(int ui_percent) {
   const int max_output = VolumeOutputMaxPercent();
   return std::clamp((std::clamp(ui_percent, 0, 100) * max_output + 50) / 100, 0, max_output);
 }
+
+std::string ReplaceAll(std::string text, const std::string &from, const std::string &to) {
+  if (from.empty()) return text;
+  size_t pos = 0;
+  while ((pos = text.find(from, pos)) != std::string::npos) {
+    text.replace(pos, from.size(), to);
+    pos += to.size();
+  }
+  return text;
+}
 } // namespace
 
 SystemControlService::SystemControlService(bool prefer_system_volume)
@@ -466,11 +476,89 @@ std::string SystemControlService::RunCommandCapture(const std::string &command) 
   return output;
 }
 
+bool SystemControlService::UseTrimuiShmvarVolume() {
+  const char *env = std::getenv("ROCREADER_TRIMUI_SHMVAR_VOLUME");
+  return env && *env && std::string(env) != "0";
+}
+
+std::string SystemControlService::ShellQuote(const std::string &text) {
+  std::string quoted = "'";
+  for (char ch : text) {
+    if (ch == '\'') {
+      quoted += "'\\''";
+    } else {
+      quoted += ch;
+    }
+  }
+  quoted += "'";
+  return quoted;
+}
+
+bool SystemControlService::TryReadVolumeLevelTrimuiShmvar(int &out_level) {
+  if (!UseTrimuiShmvarVolume()) return false;
+  const char *path_env = std::getenv("ROCREADER_TRIMUI_SHMVAR_PATH");
+  const std::string path = (path_env && *path_env) ? path_env : "/usr/trimui/bin/shmvar";
+  const std::string output = RunCommandCapture(ShellQuote(path) + " vol 2>/dev/null");
+  int raw_level = 0;
+  if (!ParseInt(TrimAscii(output), raw_level)) {
+    LogSystemControl("read volume level via trimui shmvar failed: output=" + TrimAscii(output));
+    return false;
+  }
+  out_level = ClampVolumeLevel(raw_level);
+  LogSystemControl("read volume level success via trimui shmvar: raw_level=" + std::to_string(raw_level) +
+                   " level=" + std::to_string(out_level) +
+                   " max=" + std::to_string(VolumeUiMaxLevel()));
+  return true;
+}
+
+bool SystemControlService::TrySetVolumeLevelTrimuiShmvar(int level) {
+  if (!UseTrimuiShmvarVolume()) return false;
+  const int target_level = ClampVolumeLevel(level);
+  const char *path_env = std::getenv("ROCREADER_TRIMUI_SHMVAR_PATH");
+  const std::string path = (path_env && *path_env) ? path_env : "/usr/trimui/bin/shmvar";
+  const std::string quoted_path = ShellQuote(path);
+  std::vector<std::string> commands;
+  if (const char *template_env = std::getenv("ROCREADER_TRIMUI_SHMVAR_VOLUME_SET_COMMAND");
+      template_env && *template_env) {
+    std::string command = template_env;
+    command = ReplaceAll(command, "{level}", std::to_string(target_level));
+    command = ReplaceAll(command, "%d", std::to_string(target_level));
+    commands.push_back(command);
+  }
+  commands.push_back(quoted_path + " vol " + std::to_string(target_level));
+  commands.push_back(quoted_path + " vol=" + std::to_string(target_level));
+  commands.push_back(quoted_path + " set vol " + std::to_string(target_level));
+
+  for (const std::string &command : commands) {
+    const int rc = std::system((command + " >/dev/null 2>&1").c_str());
+    int read_back = -1;
+    if (TryReadVolumeLevelTrimuiShmvar(read_back) && read_back == target_level) {
+      LogSystemControl("set volume level success via trimui shmvar: level=" + std::to_string(target_level) +
+                       " rc=" + std::to_string(rc) +
+                       " command=" + command);
+      return true;
+    }
+    LogSystemControl("set volume level via trimui shmvar candidate failed: level=" + std::to_string(target_level) +
+                     " rc=" + std::to_string(rc) +
+                     " read_back=" + std::to_string(read_back) +
+                     " command=" + command);
+  }
+  return false;
+}
+
 void SystemControlService::RefreshVolume(SystemControlValue &value) {
   value = {};
   value.max_level = VolumeUiMaxLevel();
   if (!prefer_system_volume_) {
     LogSystemControl("refresh volume skipped: prefer_system_volume=0");
+    return;
+  }
+
+  int shmvar_level = -1;
+  if (TryReadVolumeLevelTrimuiShmvar(shmvar_level)) {
+    value.available = true;
+    value.level = shmvar_level;
+    LogSystemControl("refresh volume success via trimui shmvar: level=" + std::to_string(value.level));
     return;
   }
 
@@ -553,6 +641,16 @@ bool SystemControlService::SetVolumeLevel(int level, SystemControlValue &value) 
                    " output_percent=" + std::to_string(percent) +
                    " output_max_percent=" + std::to_string(VolumeOutputMaxPercent()) +
                    " working_control=" + working_volume_control_);
+
+  if (TrySetVolumeLevelTrimuiShmvar(level)) {
+    RefreshVolume(value);
+    if (value.available) {
+      cached_volume_level_ = value.level;
+      volume_level_initialized_ = true;
+      LogSystemControl("set volume success via trimui shmvar: resulting_level=" + std::to_string(value.level));
+      return true;
+    }
+  }
 
   if (TrySetVolumePercentAlsa(percent)) {
     value.available = true;

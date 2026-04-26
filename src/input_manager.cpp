@@ -377,8 +377,8 @@ void InputManager::LoadDefaultJoyMap(InputProfile input_profile) {
     joy_map_[10] = Button::R2;
     joy_map_[11] = InvalidButton();
     joy_map_[12] = Button::Select;
-    joy_map_[13] = Button::L2;
-    joy_map_[14] = Button::R2;
+    joy_map_[13] = InvalidButton();
+    joy_map_[14] = InvalidButton();
     joy_map_[15] = Button::VolDown;
     joy_map_[16] = Button::VolUp;
   } else {

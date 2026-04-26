@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -22,6 +23,11 @@ constexpr Uint32 kVisualRenderThrottleMs = 75;
 constexpr Uint32 kIdlePrefetchDelayMs = 220;
 constexpr int kDefaultMaxTextureDim = 4096;
 constexpr int64_t kSafeTexturePixelBudget = 5600000;
+
+bool PdfLowMemoryMode() {
+  const char *env = std::getenv("ROCREADER_PDF_LOW_MEMORY");
+  return env && *env && std::string(env) != "0";
+}
 
 struct ViewState {
   float zoom = 1.0f;
@@ -465,11 +471,13 @@ struct PdfRuntime::Impl {
   }
 
   bool ShouldCacheState(const PdfState &state) const {
+    if (PdfLowMemoryMode()) return false;
     return NormalizeRotation(state.view.rotation) == NormalizeRotation(target_state.view.rotation) &&
            std::abs(state.view.zoom - target_state.view.zoom) < 0.0005f;
   }
 
   bool WantsIdlePrefetch(Uint32 now) const {
+    if (PdfLowMemoryMode()) return false;
     if (!reader.IsOpen()) return false;
     if (!display_valid || !visible_source.valid) return false;
     if (!display_state.SameVisualState(target_state)) return false;

@@ -40,6 +40,7 @@ struct VersionUpdateState {
   std::filesystem::path temp_package_path;
   std::string active_download_filename;
   std::string active_download_url;
+  std::string active_download_api_url;
   std::thread download_thread;
   std::atomic<bool> download_thread_done = false;
   std::atomic<bool> download_thread_success = false;

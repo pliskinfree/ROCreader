@@ -36,7 +36,11 @@ private:
   static bool ReadSmallIntFile(const std::filesystem::path &path, int &out_value);
   static bool WriteSmallIntFile(const std::filesystem::path &path, int value);
   static std::string RunCommandCapture(const std::string &command);
+  static bool UseTrimuiShmvarVolume();
+  static std::string ShellQuote(const std::string &text);
 
+  bool TryReadVolumeLevelTrimuiShmvar(int &out_level);
+  bool TrySetVolumeLevelTrimuiShmvar(int level);
   bool TryReadVolumePercentAlsa(int &out_percent);
   bool TrySetVolumePercentAlsa(int percent);
   bool TryReadBrightnessDisp(int &out_brightness) const;

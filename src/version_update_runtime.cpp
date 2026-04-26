@@ -201,9 +201,36 @@ std::string FormatDownloadSpeed(double bytes_per_sec) {
   return oss.str();
 }
 
+bool IsUrlUnreserved(unsigned char ch) {
+  return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+         ch == '-' || ch == '_' || ch == '.' || ch == '~';
+}
+
+std::string UrlEncodePathPreservingSlashes(const std::string &path) {
+  static constexpr char kHex[] = "0123456789ABCDEF";
+  std::string encoded;
+  encoded.reserve(path.size());
+  for (unsigned char ch : path) {
+    if (ch == '/') {
+      encoded.push_back('/');
+    } else if (IsUrlUnreserved(ch)) {
+      encoded.push_back(static_cast<char>(ch));
+    } else {
+      encoded.push_back('%');
+      encoded.push_back(kHex[(ch >> 4) & 0x0F]);
+      encoded.push_back(kHex[ch & 0x0F]);
+    }
+  }
+  return encoded;
+}
+
+void PushUniqueUrl(std::vector<std::string> &urls, const std::string &url) {
+  if (url.empty()) return;
+  if (std::find(urls.begin(), urls.end(), url) == urls.end()) urls.push_back(url);
+}
+
 std::vector<std::string> BuildDownloadUrlCandidates(const std::string &url) {
   std::vector<std::string> urls;
-  if (!url.empty()) urls.push_back(url);
 
   const std::string raw_prefix = "https://raw.githubusercontent.com/";
   if (url.rfind(raw_prefix, 0) == 0) {
@@ -216,9 +243,13 @@ std::vector<std::string> BuildDownloadUrlCandidates(const std::string &url) {
       const std::string repo = rest.substr(first_slash + 1, second_slash - first_slash - 1);
       const std::string branch = rest.substr(second_slash + 1, third_slash - second_slash - 1);
       const std::string path = rest.substr(third_slash + 1);
-      urls.push_back("https://github.com/" + owner + "/" + repo + "/raw/refs/heads/" + branch + "/" + path);
+      const std::string encoded_path = UrlEncodePathPreservingSlashes(path);
+      PushUniqueUrl(urls, "https://github.com/" + owner + "/" + repo + "/raw/refs/heads/" + branch + "/" + encoded_path);
+      PushUniqueUrl(urls, raw_prefix + owner + "/" + repo + "/" + branch + "/" + encoded_path);
+      PushUniqueUrl(urls, "https://github.com/" + owner + "/" + repo + "/raw/refs/heads/" + branch + "/" + path);
     }
   }
+  PushUniqueUrl(urls, url);
   return urls;
 }
 
@@ -308,10 +339,13 @@ bool DownloadFile(const std::string &url, const std::filesystem::path &output_pa
 #else
   const std::string quoted_output = EscapeForPosix(output_path.string());
   const std::string header = EscapeForPosix(std::string("User-Agent: ") + kUserAgent);
+  const std::string raw_header = EscapeForPosix("Accept: application/vnd.github.raw");
+  const bool is_github_contents_api = url.find("://api.github.com/repos/") != std::string::npos &&
+                                      url.find("/contents/") != std::string::npos;
   for (const std::string &candidate_url : BuildDownloadUrlCandidates(url)) {
     const std::string quoted_url = EscapeForPosix(candidate_url);
     AppendUpdateLog("Trying download URL: " + candidate_url);
-    const std::vector<std::string> commands = {
+    std::vector<std::string> commands = {
         "curl -L --fail --silent --show-error --http1.1 --connect-timeout "
             + std::to_string(kDownloadConnectTimeoutSec) + " --max-time "
             + std::to_string(kDownloadMaxTimeSec) + " --speed-limit "
@@ -333,6 +367,24 @@ bool DownloadFile(const std::string &url, const std::filesystem::path &output_pa
         "busybox wget -q -T " + std::to_string(kDownloadConnectTimeoutSec)
             + " -O " + quoted_output + " " + quoted_url,
     };
+    if (is_github_contents_api) {
+      commands.insert(commands.begin(), {
+          "curl -L --fail --silent --show-error --http1.1 --connect-timeout "
+              + std::to_string(kDownloadConnectTimeoutSec) + " --max-time "
+              + std::to_string(kDownloadMaxTimeSec) + " -H " + header + " -H " + raw_header + " "
+              + quoted_url + " -o " + quoted_output,
+          "curl -k -L --fail --silent --show-error --http1.1 --connect-timeout "
+              + std::to_string(kDownloadConnectTimeoutSec) + " --max-time "
+              + std::to_string(kDownloadMaxTimeSec) + " -H " + header + " -H " + raw_header + " "
+              + quoted_url + " -o " + quoted_output,
+          "wget -q --timeout=" + std::to_string(kDownloadConnectTimeoutSec)
+              + " --tries=1 --user-agent=" + EscapeForPosix(kUserAgent)
+              + " --header=" + raw_header + " -O " + quoted_output + " " + quoted_url,
+          "wget -q --no-check-certificate --timeout=" + std::to_string(kDownloadConnectTimeoutSec)
+              + " --tries=1 --user-agent=" + EscapeForPosix(kUserAgent)
+              + " --header=" + raw_header + " -O " + quoted_output + " " + quoted_url,
+      });
+    }
 
     for (const std::string &command : commands) {
       std::error_code remove_ec;
@@ -344,6 +396,18 @@ bool DownloadFile(const std::string &url, const std::filesystem::path &output_pa
   }
   return false;
 #endif
+}
+
+bool LooksLikeZipFile(const std::filesystem::path &path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return false;
+  char magic[4] = {};
+  in.read(magic, sizeof(magic));
+  return in.gcount() == static_cast<std::streamsize>(sizeof(magic)) &&
+         magic[0] == 'P' && magic[1] == 'K' &&
+         ((magic[2] == '\003' && magic[3] == '\004') ||
+          (magic[2] == '\005' && magic[3] == '\006') ||
+          (magic[2] == '\007' && magic[3] == '\010'));
 }
 
 bool ExtractJsonStringField(const std::string &object_text, const std::string &field_name, std::string &out_value) {
@@ -394,6 +458,7 @@ struct RemoteArchiveInfo {
   std::string filename;
   std::string version;
   std::string download_url;
+  std::string api_url;
   uint64_t size_bytes = 0;
 };
 
@@ -424,6 +489,7 @@ bool FetchLatestRemoteArchive(RemoteArchiveInfo &out_info) {
     if (lower_name.size() < 4 || lower_name.substr(lower_name.size() - 4) != ".zip") continue;
     if (!TryExtractVersionToken(candidate.filename, candidate.version)) continue;
     if (!ExtractJsonStringField(object_text, "download_url", candidate.download_url)) continue;
+    ExtractJsonStringField(object_text, "url", candidate.api_url);
     if (!ExtractJsonNumberField(object_text, "size", candidate.size_bytes)) continue;
 
     if (!found || IsVersionNewer(candidate.version, best.version)) {
@@ -556,6 +622,7 @@ bool BeginVersionUpdateDownloadInternal(VersionUpdateState &state) {
 
   state.active_download_filename = remote_info.filename;
   state.active_download_url = remote_info.download_url;
+  state.active_download_api_url = remote_info.api_url;
   state.expected_download_bytes = remote_info.size_bytes;
   state.pending_package_path = downloads_dir / remote_info.filename;
   state.temp_package_path = downloads_dir / kDownloadTempFilename;
@@ -563,6 +630,7 @@ bool BeginVersionUpdateDownloadInternal(VersionUpdateState &state) {
   AppendUpdateLog("Pending package path=" + state.pending_package_path.string());
   AppendUpdateLog("Temp package path=" + state.temp_package_path.string());
   AppendUpdateLog("Download URL=" + state.active_download_url);
+  AppendUpdateLog("Download API URL=" + state.active_download_api_url);
 
   if (std::filesystem::exists(state.pending_package_path, ec) && !ec) {
     const uint64_t existing_size = std::filesystem::file_size(state.pending_package_path, ec);
@@ -588,11 +656,28 @@ bool BeginVersionUpdateDownloadInternal(VersionUpdateState &state) {
   state.status = VersionUpdateStatus::Downloading;
 
   const std::string download_url = state.active_download_url;
+  const std::string download_api_url = state.active_download_api_url;
   const std::filesystem::path temp_path = state.temp_package_path;
   const std::filesystem::path final_path = state.pending_package_path;
 
-  state.download_thread = std::thread([download_url, temp_path, final_path, &state]() {
+  state.download_thread = std::thread([download_url, download_api_url, temp_path, final_path, &state]() {
     bool success = DownloadFile(download_url, temp_path);
+    if (success && !LooksLikeZipFile(temp_path)) {
+      AppendUpdateLog("Downloaded file is not a zip; trying fallback URL.");
+      std::error_code remove_ec;
+      std::filesystem::remove(temp_path, remove_ec);
+      success = false;
+    }
+    if (!success && !download_api_url.empty()) {
+      AppendUpdateLog("Falling back to GitHub contents raw API download.");
+      success = DownloadFile(download_api_url, temp_path);
+      if (success && !LooksLikeZipFile(temp_path)) {
+        AppendUpdateLog("GitHub contents raw API download did not produce a zip.");
+        std::error_code remove_ec;
+        std::filesystem::remove(temp_path, remove_ec);
+        success = false;
+      }
+    }
     if (success) {
       std::error_code move_ec;
       std::filesystem::remove(final_path, move_ec);
