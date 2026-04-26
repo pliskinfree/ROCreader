@@ -14,7 +14,7 @@ constexpr int kTranscodeRow = 3;
 constexpr std::array<SDL_Color, kColorOptionCount> kBackgroundColors = {{
     {248, 246, 239, 255},
     {239, 226, 198, 255},
-    {200, 210, 220, 255},
+    {205, 220, 204, 255},
     {88, 102, 118, 255},
     {22, 26, 32, 255},
 }};

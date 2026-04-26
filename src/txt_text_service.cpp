@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 
@@ -39,6 +40,12 @@ std::filesystem::path GetTxtResumeCacheFile(const TxtTextServiceState &state,
   std::ostringstream oss;
   oss << std::hex << hash_value << ".resume";
   return SelectTxtCacheDir(state, book_path) / oss.str();
+}
+
+bool StoreTxtResumePendingRaw() {
+  const char *env = std::getenv("ROCREADER_TXT_RESUME_STORE_PENDING_RAW");
+  if (!env || !*env) return true;
+  return std::string(env) != "0";
 }
 
 size_t Utf8CharLen(unsigned char c) {
@@ -406,7 +413,11 @@ void SaveTxtResumeCacheToDisk(TxtTextServiceState &state, const std::string &cac
             : 0ULL;
     write_u64(source_offset);
   }
-  write_string(state_to_save.pending_raw);
+  if (StoreTxtResumePendingRaw()) {
+    write_string(state_to_save.pending_raw);
+  } else {
+    write_string(std::string{});
+  }
   write_string(state_to_save.pending_line);
   write_u64(static_cast<uint64_t>(state_to_save.restore_source_offset));
 }

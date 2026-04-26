@@ -408,11 +408,15 @@ constexpr std::array<const char *, kTextCount> kTextVi = {{
     u8"\u0110i\u1ec3m \u0111\u00f3ng g\u00f3p",
 }};
 
-constexpr std::array<const char *, 5> kSleepZh = {
-    u8"30\u79d2", u8"1\u5206\u949f", u8"5\u5206\u949f", u8"10\u5206\u949f", u8"30\u5206\u949f"};
-constexpr std::array<const char *, 5> kSleepZhHant = {
-    u8"30\u79d2", u8"1\u5206\u9418", u8"5\u5206\u9418", u8"10\u5206\u9418", u8"30\u5206\u9418"};
-constexpr std::array<const char *, 5> kSleepEn = {"30 sec", "1 min", "5 min", "10 min", "30 min"};
+constexpr int kSleepIntervalCount = 6;
+constexpr std::array<const char *, kSleepIntervalCount> kSleepZh = {
+    u8"30\u79d2", u8"1\u5206\u949f", u8"3\u5206\u949f", u8"5\u5206\u949f",
+    u8"10\u5206\u949f", u8"30\u5206\u949f"};
+constexpr std::array<const char *, kSleepIntervalCount> kSleepZhHant = {
+    u8"30\u79d2", u8"1\u5206\u9418", u8"3\u5206\u9418", u8"5\u5206\u9418",
+    u8"10\u5206\u9418", u8"30\u5206\u9418"};
+constexpr std::array<const char *, kSleepIntervalCount> kSleepEn = {
+    "30 sec", "1 min", "3 min", "5 min", "10 min", "30 min"};
 
 std::string LowerAscii(std::string value) {
   for (char &ch : value) {
@@ -439,7 +443,7 @@ const std::array<const char *, kTextCount> &LanguageTexts(int language_index) {
   }
 }
 
-const std::array<const char *, 5> &SleepTexts(int language_index) {
+const std::array<const char *, kSleepIntervalCount> &SleepTexts(int language_index) {
   switch (ClampSystemLanguageIndex(language_index)) {
   case 0: return kSleepZh;
   case 1: return kSleepZhHant;
@@ -526,7 +530,7 @@ const char *LocalizedAppText(int language_index, AppTextId text_id) {
 }
 
 const char *LocalizedSleepIntervalLabel(int language_index, int interval_index) {
-  return SleepTexts(language_index)[static_cast<size_t>(std::clamp(interval_index, 0, 4))];
+  return SleepTexts(language_index)[static_cast<size_t>(std::clamp(interval_index, 0, kSleepIntervalCount - 1))];
 }
 
 std::string LocalizedDownloadSpeedText(int language_index, double bytes_per_sec) {

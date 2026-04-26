@@ -16,16 +16,18 @@ constexpr int kSelectableRowCount = 7;
 constexpr int kButtonMinus = 0;
 constexpr int kButtonPlus = 1;
 constexpr int kButtonSingle = 1;
-constexpr std::array<const char *, 5> kSleepIntervalLabels = {{
+constexpr std::array<const char *, 6> kSleepIntervalLabels = {{
     u8"30\u79d2",
     u8"1\u5206\u949f",
+    u8"3\u5206\u949f",
     u8"5\u5206\u949f",
     u8"10\u5206\u949f",
     u8"30\u5206\u949f",
 }};
-constexpr std::array<uint32_t, 5> kSleepIntervalValuesMs = {{
+constexpr std::array<uint32_t, 6> kSleepIntervalValuesMs = {{
     30u * 1000u,
     60u * 1000u,
+    3u * 60u * 1000u,
     5u * 60u * 1000u,
     10u * 60u * 1000u,
     30u * 60u * 1000u,

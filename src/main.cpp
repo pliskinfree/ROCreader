@@ -943,6 +943,7 @@ int main(int, char **argv) {
     runtime_log::Line("main: contributor avatars preload skipped");
   }
   SDL_Texture *selected_avatar_badge_texture = nullptr;
+  int selected_contributor_avatar_index = -1;
   auto destroy_selected_avatar_badge_texture = [&]() {
     if (!selected_avatar_badge_texture) return;
     forget_texture_size(selected_avatar_badge_texture);
@@ -950,6 +951,7 @@ int main(int, char **argv) {
     selected_avatar_badge_texture = nullptr;
   };
   auto update_selected_avatar_badge_texture = [&](int selected_index) {
+    selected_contributor_avatar_index = -1;
     destroy_selected_avatar_badge_texture();
     if (selected_index < 0 || selected_index >= static_cast<int>(contributor_avatar_entries.size())) return;
     SDL_Texture *source = contributor_avatar_entries[selected_index].texture;
@@ -957,6 +959,7 @@ int main(int, char **argv) {
     const int badge_size = ScalePx(28);
     selected_avatar_badge_texture = CreateScaledTextureCache(renderer, source, badge_size, badge_size);
     if (!selected_avatar_badge_texture) return;
+    selected_contributor_avatar_index = selected_index;
     remember_texture_size(selected_avatar_badge_texture, badge_size, badge_size);
   };
   auto find_default_contributor_avatar_index = [&]() -> int {
@@ -973,11 +976,13 @@ int main(int, char **argv) {
     }
     return 0;
   };
-  auto initialize_selected_avatar_badge_texture = [&]() {
-    if (contributor_avatar_entries.empty()) return;
-    update_selected_avatar_badge_texture(find_default_contributor_avatar_index());
+  auto find_contributor_avatar_index_by_label = [&](const std::string &saved_label) -> int {
+    if (saved_label.empty()) return -1;
+    for (size_t i = 0; i < contributor_avatar_entries.size(); ++i) {
+      if (contributor_avatar_entries[i].raw_label == saved_label) return static_cast<int>(i);
+    }
+    return -1;
   };
-  initialize_selected_avatar_badge_texture();
 
   std::vector<std::string> books_roots = storage_paths::DetectBooksRoots();
   runtime_log::Line(std::string("main: DetectBooksRoots count=") + std::to_string(books_roots.size()));
@@ -1078,6 +1083,10 @@ int main(int, char **argv) {
     config.MarkDirty();
     config.Save();
   }
+  {
+    const int saved_index = find_contributor_avatar_index_by_label(config.Get().selected_contributor_avatar_label);
+    update_selected_avatar_badge_texture(saved_index >= 0 ? saved_index : find_default_contributor_avatar_index());
+  }
   ProgressStore progress(progress_path.string());
   RecentPathStore favorites_store(favorites_path.string(), NormalizePathKey);
   RecentPathStore history_store(history_path.string(), NormalizePathKey);
@@ -1086,7 +1095,7 @@ int main(int, char **argv) {
   SystemControlService system_control_service(use_h700_defaults);
   LidPowerController lid_power_controller(power_script_path);
   SystemSettingsState system_settings_state{};
-  system_settings_state.auto_sleep_interval_index = std::clamp(config.Get().auto_sleep_interval_index, 0, 4);
+  system_settings_state.auto_sleep_interval_index = ClampAutoSleepIntervalIndex(config.Get().auto_sleep_interval_index);
   system_settings_state.system_language_index = SystemLanguageIndexFromConfigValue(config.Get().system_language);
   TxtSettingsState txt_settings_state{};
   txt_settings_state.background_color = ClampTxtColorIndex(config.Get().txt_background_color);
@@ -1101,6 +1110,9 @@ int main(int, char **argv) {
     txt_settings_state.font_size_level = clamped;
   };
   ContributorAvatarState contributor_avatar_state{};
+  if (selected_contributor_avatar_index >= 0) {
+    contributor_avatar_state.focus_index = selected_contributor_avatar_index;
+  }
   if (use_h700_defaults) {
     bool changed = false;
     if (input_profile == InputProfile::TrimuiBrick) {
@@ -2221,7 +2233,7 @@ int main(int, char **argv) {
               },
               [&](SystemSettingsState &settings_state) {
                 settings_state.lid_close_screen_off_enabled = config.Get().lid_close_screen_off;
-                settings_state.auto_sleep_interval_index = std::clamp(config.Get().auto_sleep_interval_index, 0, 4);
+                settings_state.auto_sleep_interval_index = ClampAutoSleepIntervalIndex(config.Get().auto_sleep_interval_index);
                 settings_state.system_language_index = SystemLanguageIndexFromConfigValue(config.Get().system_language);
               },
               [&](bool enabled, SystemSettingsState &settings_state) {
@@ -2339,7 +2351,16 @@ int main(int, char **argv) {
           },
           contributor_avatar_state,
           contributor_avatar_entries.size(),
-          [&](int selected_index) { update_selected_avatar_badge_texture(selected_index); },
+          [&](int selected_index) {
+            if (selected_index < 0 || selected_index >= static_cast<int>(contributor_avatar_entries.size())) return;
+            const std::string &selected_label = contributor_avatar_entries[selected_index].raw_label;
+            if (config.Mutable().selected_contributor_avatar_label != selected_label) {
+              config.Mutable().selected_contributor_avatar_label = selected_label;
+              config.MarkDirty();
+              config.Save();
+            }
+            update_selected_avatar_badge_texture(selected_index);
+          },
           version_update_state,
           VersionUpdateCallbacks{
               [&](VersionUpdateState &update_state) { BeginVersionUpdateDownload(update_state); },

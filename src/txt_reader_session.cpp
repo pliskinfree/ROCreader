@@ -194,6 +194,8 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
   const size_t preferred_source_offset = deps.ui.progress.scroll_x > 0
                                              ? static_cast<size_t>(std::max(0, deps.ui.progress.scroll_x))
                                              : 0;
+  size_t initial_restore_source_offset = preferred_source_offset;
+  int initial_target_scroll_px = std::max(0, deps.ui.progress.scroll_y);
 
   auto txt_cache_it = deps.layout_cache.find(next.cache_key);
   if (txt_cache_it != deps.layout_cache.end()) {
@@ -206,7 +208,7 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
     next.truncation_notice_added = true;
     next.loading = false;
     next.restore_source_offset = preferred_source_offset;
-    next.target_scroll_px = std::max(0, deps.ui.progress.scroll_y);
+    next.target_scroll_px = initial_target_scroll_px;
     SyncScrollToRestoreAnchor(next);
     deps.ui.txt_reader = std::move(next);
     deps.ui.mode = ReaderMode::Txt;
@@ -229,7 +231,7 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
     next.truncation_notice_added = true;
     next.loading = false;
     next.restore_source_offset = preferred_source_offset;
-    next.target_scroll_px = std::max(0, deps.ui.progress.scroll_y);
+    next.target_scroll_px = initial_target_scroll_px;
     SyncScrollToRestoreAnchor(next);
     deps.ui.txt_reader = std::move(next);
     deps.ui.mode = ReaderMode::Txt;
@@ -242,30 +244,37 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
   TxtResumeCacheEntry resume_cache_entry;
   if (deps.load_resume_cache_from_disk(next.cache_key, path, resume_cache_entry)) {
     const int restored_scroll_px =
-        std::max(std::max(0, deps.ui.progress.scroll_y), std::max(0, resume_cache_entry.scroll_px));
-    next.lines = std::move(resume_cache_entry.lines);
-    next.line_source_offsets = std::move(resume_cache_entry.line_source_offsets);
-    next.pending_raw = std::move(resume_cache_entry.pending_raw);
-    next.pending_line = std::move(resume_cache_entry.pending_line);
-    next.pending_line_source_offset = resume_cache_entry.pending_line_source_offset;
-    next.content_h = resume_cache_entry.content_h;
-    next.parse_pos = resume_cache_entry.parse_pos;
-    next.restore_source_offset = std::max(preferred_source_offset, resume_cache_entry.restore_source_offset);
-    next.loading = resume_cache_entry.loading;
-    next.truncated = resume_cache_entry.truncated;
-    next.limit_hit = resume_cache_entry.limit_hit;
-    next.truncation_notice_added = resume_cache_entry.truncation_notice_added;
-    next.target_scroll_px = restored_scroll_px;
-    SyncScrollToRestoreAnchor(next);
-    next.last_resume_cache_save = SDL_GetTicks();
-    next.resume_cache_dirty = false;
-    deps.ui.txt_reader = std::move(next);
-    SyncScrollToRestoreAnchor(deps.ui.txt_reader);
-    deps.ui.mode = ReaderMode::Txt;
-    deps.ui.progress_overlay_visible = false;
-    deps.invalidate_all_render_cache();
-    deps.clamp_text_scroll();
-    return true;
+        std::max(initial_target_scroll_px, std::max(0, resume_cache_entry.scroll_px));
+    initial_restore_source_offset = std::max(preferred_source_offset, resume_cache_entry.restore_source_offset);
+    initial_target_scroll_px = restored_scroll_px;
+    if (resume_cache_entry.loading && resume_cache_entry.pending_raw.empty()) {
+      std::cerr << "[reader] txt resume cache is partial without pending raw; rebuilding layout: "
+                << path << "\n";
+    } else {
+      next.lines = std::move(resume_cache_entry.lines);
+      next.line_source_offsets = std::move(resume_cache_entry.line_source_offsets);
+      next.pending_raw = std::move(resume_cache_entry.pending_raw);
+      next.pending_line = std::move(resume_cache_entry.pending_line);
+      next.pending_line_source_offset = resume_cache_entry.pending_line_source_offset;
+      next.content_h = resume_cache_entry.content_h;
+      next.parse_pos = resume_cache_entry.parse_pos;
+      next.restore_source_offset = initial_restore_source_offset;
+      next.loading = resume_cache_entry.loading;
+      next.truncated = resume_cache_entry.truncated;
+      next.limit_hit = resume_cache_entry.limit_hit;
+      next.truncation_notice_added = resume_cache_entry.truncation_notice_added;
+      next.target_scroll_px = initial_target_scroll_px;
+      SyncScrollToRestoreAnchor(next);
+      next.last_resume_cache_save = SDL_GetTicks();
+      next.resume_cache_dirty = false;
+      deps.ui.txt_reader = std::move(next);
+      SyncScrollToRestoreAnchor(deps.ui.txt_reader);
+      deps.ui.mode = ReaderMode::Txt;
+      deps.ui.progress_overlay_visible = false;
+      deps.invalidate_all_render_cache();
+      deps.clamp_text_scroll();
+      return true;
+    }
   }
 
   std::ifstream in(std::filesystem::path(path), std::ios::binary);
@@ -307,13 +316,13 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
   next.pending_line.reserve(256);
   next.pending_line_source_offset = 0;
   next.parse_pos = 0;
-  next.restore_source_offset = preferred_source_offset;
+  next.restore_source_offset = initial_restore_source_offset;
   next.loading = true;
   next.truncated = truncated;
   next.limit_hit = false;
   next.truncation_notice_added = false;
   next.lines.reserve(kTxtInitialLineReserve);
-  next.target_scroll_px = std::max(0, deps.ui.progress.scroll_y);
+  next.target_scroll_px = initial_target_scroll_px;
   next.scroll_px = 0;
   next.last_resume_cache_save = 0;
   next.resume_cache_dirty = true;

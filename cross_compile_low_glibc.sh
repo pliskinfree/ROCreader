@@ -709,7 +709,20 @@ PACKAGE_TAG="trimui-brick-20260426-system-volume-menu-start-select"
 export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-alsa}"
 export SDL_NOMOUSE="${SDL_NOMOUSE:-1}"
 export ROCREADER_ROOT="$APP_DIR"
-export ROCREADER_CACHE_ROOT="$APP_DIR/cache"
+if [ -z "${ROCREADER_CACHE_ROOT:-}" ]; then
+  for cache_candidate in /mnt/UDISK/cache/ROCreader /mnt/UDISK/ROCreader/cache "$APP_DIR/cache"; do
+    mkdir -p "$cache_candidate/txt_layouts" "$cache_candidate/cover_thumbs" 2>/dev/null || true
+    if [ -d "$cache_candidate" ] && [ -w "$cache_candidate" ]; then
+      export ROCREADER_CACHE_ROOT="$cache_candidate"
+      break
+    fi
+  done
+else
+  export ROCREADER_CACHE_ROOT
+fi
+if [ -z "${ROCREADER_CACHE_ROOT:-}" ]; then
+  export ROCREADER_CACHE_ROOT="$APP_DIR/cache"
+fi
 export ROCREADER_CARD1_ROOT="/mnt/SDCARD"
 export ROCREADER_CARD2_ROOT="/mnt/sdcard"
 export ROCREADER_SCREEN_PROFILE="${ROCREADER_SCREEN_PROFILE:-1024x768}"
@@ -717,6 +730,7 @@ export ROCREADER_SCREEN_W="${ROCREADER_SCREEN_W:-1024}"
 export ROCREADER_SCREEN_H="${ROCREADER_SCREEN_H:-768}"
 export ROCREADER_PRELOAD_AVATARS="${ROCREADER_PRELOAD_AVATARS:-1}"
 export ROCREADER_UPDATE_CONTENTS_URL="${ROCREADER_UPDATE_CONTENTS_URL:-https://github.com/LPF970915/ROCreader/tree/main/TrimuiBrick/Downloads}"
+export ROCREADER_TXT_RESUME_STORE_PENDING_RAW="${ROCREADER_TXT_RESUME_STORE_PENDING_RAW:-0}"
 export ROCREADER_PDF_LOW_MEMORY="${ROCREADER_PDF_LOW_MEMORY:-1}"
 export ROCREADER_MUPDF_STORE_MB="${ROCREADER_MUPDF_STORE_MB:-24}"
 export ROCREADER_SYSTEM_VOLUME_LEVELS="${ROCREADER_SYSTEM_VOLUME_LEVELS:-20}"
@@ -727,7 +741,7 @@ export ROCREADER_SYSTEM_VOLUME_SFX_FOLLOWS_HARDWARE="${ROCREADER_SYSTEM_VOLUME_S
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
   export XDG_RUNTIME_DIR="/tmp/rocreader-xdg"
 fi
-mkdir -p "$XDG_RUNTIME_DIR" "$APP_DIR/cache" 2>/dev/null || true
+mkdir -p "$XDG_RUNTIME_DIR" "$APP_DIR/cache" "$ROCREADER_CACHE_ROOT" 2>/dev/null || true
 chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
 cd "$APP_DIR"
 
@@ -938,8 +952,7 @@ perform_pending_update_if_any() {
 
 maybe_install_after_exit() {
   if find_pending_marker >/dev/null 2>&1 || find_latest_download_zip >/dev/null 2>&1; then
-    log_line "[update] checking pending update after app exit"
-    perform_pending_update_if_any
+    log_line "[update] pending package found after app exit; install deferred until next launch"
   fi
 }
 
@@ -982,8 +995,10 @@ log_line "===== $(date '+%F %T %Z') ====="
 perform_pending_update_if_any
 log_line "[launcher] package_tag=$PACKAGE_TAG"
 log_line "[launcher] app=$APP_DIR"
+log_line "[launcher] cache_root=${ROCREADER_CACHE_ROOT}"
 log_line "[launcher] screen=${ROCREADER_SCREEN_W}x${ROCREADER_SCREEN_H}"
 log_line "[launcher] update_url=${ROCREADER_UPDATE_CONTENTS_URL}"
+log_line "[launcher] txt_resume_store_pending_raw=${ROCREADER_TXT_RESUME_STORE_PENDING_RAW}"
 log_line "[launcher] pdf_low_memory=${ROCREADER_PDF_LOW_MEMORY} mupdf_store_mb=${ROCREADER_MUPDF_STORE_MB}"
 log_line "[launcher] volume_levels=${ROCREADER_SYSTEM_VOLUME_LEVELS} volume_output_max=${ROCREADER_SYSTEM_VOLUME_OUTPUT_MAX_PERCENT} trimui_shmvar_volume=${ROCREADER_TRIMUI_SHMVAR_VOLUME} shmvar_path=${ROCREADER_TRIMUI_SHMVAR_PATH}"
 log_line "[launcher] pwd=$(pwd)"
