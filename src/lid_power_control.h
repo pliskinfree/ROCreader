@@ -1,6 +1,7 @@
 #pragma once
 
 #include "filesystem_compat.h"
+#include "input_manager.h"
 #include <string>
 
 class LidPowerController {
@@ -11,6 +12,7 @@ public:
   void SetEnabled(bool enabled);
   bool ScriptAvailable() const;
   bool TriggerAutoIfEnabled() const;
+  bool TriggerPowerKeyScreenOff(InputProfile input_profile) const;
   std::string PowerScriptPath() const;
 
 private:

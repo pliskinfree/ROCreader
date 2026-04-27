@@ -26,6 +26,7 @@ const char *ButtonName(Button b) {
   case Button::Select: return "Select";
   case Button::VolUp: return "VolUp";
   case Button::VolDown: return "VolDown";
+  case Button::Power: return "Power";
   default: return "Invalid";
   }
 }
@@ -295,6 +296,9 @@ Button InputManager::KeyToButton(SDL_Keycode k) {
 #ifdef SDLK_VOLUMEDOWN
   case SDLK_VOLUMEDOWN: return Button::VolDown;
 #endif
+#ifdef SDLK_POWER
+  case SDLK_POWER: return Button::Power;
+#endif
   case kVolumeUpFallback: return Button::VolUp;
   case kVolumeDownFallback: return Button::VolDown;
 #ifdef SDLK_PLUS
@@ -363,6 +367,7 @@ void InputManager::LoadDefaultJoyMap(InputProfile input_profile) {
     joy_map_[11] = Button::R2;
     joy_map_[12] = Button::Select;
     joy_map_[13] = Button::Start;
+    joy_map_[14] = Button::Power;
     joy_map_[15] = Button::VolDown;
     joy_map_[16] = Button::VolUp;
   } else if (input_profile == InputProfile::TrimuiBrick) {
@@ -378,7 +383,21 @@ void InputManager::LoadDefaultJoyMap(InputProfile input_profile) {
     joy_map_[11] = InvalidButton();
     joy_map_[12] = Button::Select;
     joy_map_[13] = InvalidButton();
-    joy_map_[14] = InvalidButton();
+    joy_map_[14] = Button::Power;
+    joy_map_[15] = Button::VolDown;
+    joy_map_[16] = Button::VolUp;
+  } else if (input_profile == InputProfile::H700Default) {
+    joy_map_[2] = Button::Y;
+    joy_map_[3] = Button::X;
+    joy_map_[6] = Button::Select;
+    joy_map_[7] = Button::Start;
+    joy_map_[8] = Button::Menu;
+    joy_map_[9] = Button::L2;
+    joy_map_[10] = Button::R2;
+    joy_map_[11] = Button::Menu;
+    joy_map_[12] = Button::Select;
+    joy_map_[13] = Button::Start;
+    joy_map_[14] = Button::Power;
     joy_map_[15] = Button::VolDown;
     joy_map_[16] = Button::VolUp;
   } else {
@@ -429,6 +448,7 @@ bool InputManager::ParseButtonName(const std::string &raw, Button &out) {
   else if (n == "SELECT") out = Button::Select;
   else if (n == "VOLUP" || n == "VOLUMEUP") out = Button::VolUp;
   else if (n == "VOLDOWN" || n == "VOLUMEDOWN") out = Button::VolDown;
+  else if (n == "POWER") out = Button::Power;
   else if (n == "NONE" || n == "DISABLED" || n == "INVALID") out = InvalidButton();
   else return false;
   return true;

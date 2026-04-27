@@ -5,7 +5,7 @@
 #include <array>
 #include <string>
 
-constexpr int kButtonCount = 17;
+constexpr int kButtonCount = 18;
 
 enum class Button {
   Up,
@@ -25,6 +25,7 @@ enum class Button {
   Select,
   VolUp,
   VolDown,
+  Power,
 };
 
 enum class InputProfile {

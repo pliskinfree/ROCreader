@@ -1986,6 +1986,14 @@ int main(int, char **argv) {
     }
     input.EndFrame();
 
+    if (input.IsJustPressed(Button::Power)) {
+      if (lid_power_controller.TriggerPowerKeyScreenOff(input_profile)) {
+        last_user_input_tick = SDL_GetTicks();
+        auto_sleep_waiting_for_input = true;
+        input.ResetAll();
+      }
+    }
+
     system_status.Poll(now);
 
     if (reader_mode == ReaderMode::Txt && txt_reader.open && txt_reader.loading) {
