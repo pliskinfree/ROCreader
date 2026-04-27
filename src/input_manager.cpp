@@ -7,6 +7,15 @@
 #include <cmath>
 #include <sstream>
 
+#if !defined(_WIN32)
+#include <cerrno>
+#include <cstring>
+#include <dirent.h>
+#include <fcntl.h>
+#include <linux/input.h>
+#include <unistd.h>
+#endif
+
 const char *ButtonName(Button b) {
   switch (b) {
   case Button::Up: return "Up";
@@ -77,6 +86,11 @@ InputManager::InputManager(const std::string &mapping_path, InputProfile input_p
   LoadDefaultPadMap(input_profile);
   LoadDefaultJoyMap(input_profile);
   LoadOverrides(mapping_path);
+  OpenLinuxInputDevices();
+}
+
+InputManager::~InputManager() {
+  CloseLinuxInputDevices();
 }
 
 void InputManager::BeginFrame(float dt) {
@@ -221,6 +235,7 @@ void InputManager::HandleEvent(const SDL_Event &e) {
 }
 
 void InputManager::EndFrame() {
+  PollDeviceInputEvents();
   for (auto &s : states_) {
     if (!s.down) {
       s.hold_time = 0.0f;
@@ -339,6 +354,10 @@ Button InputManager::PadToButton(uint8_t b) const {
 Button InputManager::JoyButtonToButton(uint8_t b) const {
   if (b >= joy_map_.size()) return InvalidButton();
   return joy_map_[b];
+}
+
+void InputManager::PollDeviceInputEvents() {
+  PollLinuxInputDevices();
 }
 
 void InputManager::LoadDefaultPadMap(InputProfile input_profile) {
@@ -551,6 +570,63 @@ bool InputManager::ShouldLogProbeJoyAxis(int axis, int value) {
   const int direction = value > 0 ? 1 : 0;
   return MarkProbeLogged(probe_joy_axis_seen_, axis * 2 + direction);
 }
+
+void InputManager::OpenLinuxInputDevices() {
+#if !defined(_WIN32)
+  if (input_profile_ == InputProfile::DesktopDefault) return;
+  DIR *dir = opendir("/dev/input");
+  if (!dir) return;
+  while (dirent *entry = readdir(dir)) {
+    if (std::strncmp(entry->d_name, "event", 5) != 0) continue;
+    const std::string path = std::string("/dev/input/") + entry->d_name;
+    const int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) continue;
+    linux_input_fds_.push_back(fd);
+    if (full_input_log_enabled_) {
+      std::cout << "[native_h700] input probe: opened linux_input=" << path << "\n";
+    }
+  }
+  closedir(dir);
+#endif
+}
+
+void InputManager::CloseLinuxInputDevices() {
+#if !defined(_WIN32)
+  for (int fd : linux_input_fds_) {
+    if (fd >= 0) close(fd);
+  }
+#endif
+  linux_input_fds_.clear();
+}
+
+void InputManager::PollLinuxInputDevices() {
+#if !defined(_WIN32)
+  for (int fd : linux_input_fds_) {
+    while (true) {
+      input_event event{};
+      const ssize_t n = read(fd, &event, sizeof(event));
+      if (n == static_cast<ssize_t>(sizeof(event))) {
+        if (event.type != EV_KEY) continue;
+        const int code = static_cast<int>(event.code);
+        const bool down = event.value != 0;
+        if (full_input_log_enabled_ && down && MarkProbeLogged(probe_linux_key_seen_, code)) {
+          std::cout << "[native_h700] input probe: type=LINUX_EV_KEY"
+                    << " code=" << code
+                    << " value=" << event.value
+                    << " mapped=" << (code == KEY_POWER ? "Power" : "Invalid") << "\n";
+        }
+        if (code == KEY_POWER) {
+          SetDown(Button::Power, down);
+        }
+        continue;
+      }
+      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+      break;
+    }
+  }
+#endif
+}
+
 
 const BtnState &InputManager::Get(Button b) const {
   static BtnState empty;

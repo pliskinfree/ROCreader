@@ -32,6 +32,10 @@ constexpr float kZoomStep = 0.1f;
 constexpr int kDefaultBaseFontPt = 18;
 constexpr int kMargin = 14;
 constexpr size_t kFlowTextThreshold = 2000;
+constexpr size_t kMaxTextTextureCacheEntries = 768;
+constexpr size_t kInitialFlowDocsToLoad = 8;
+constexpr size_t kMoreFlowDocsToLoad = 4;
+constexpr int kLazyLoadAheadScreens = 3;
 
 enum class FlowBlockType { Paragraph, Header, ListItem, Image, Space };
 
@@ -39,6 +43,7 @@ struct FlowBlock {
   FlowBlockType type = FlowBlockType::Paragraph;
   std::string text;
   std::string resource;
+  std::vector<std::string> lines;
   int heading_level = 0;
   int y = 0;
   int h = 0;
@@ -46,6 +51,13 @@ struct FlowBlock {
   int image_h = 0;
   int draw_w = 0;
   int draw_h = 0;
+};
+
+struct TextTextureEntry {
+  SDL_Texture *texture = nullptr;
+  int w = 0;
+  int h = 0;
+  uint32_t last_use = 0;
 };
 
 struct ManifestItem {
@@ -62,6 +74,9 @@ struct ParsedPackage {
 };
 
 using AttrMap = std::unordered_map<std::string, std::string>;
+
+std::string TagNameFromRaw(const std::string &raw, bool &closing);
+bool IsBlockTag(const std::string &tag);
 
 std::string NormalizeZipPath(std::string path) {
   std::replace(path.begin(), path.end(), '\\', '/');
@@ -152,15 +167,6 @@ size_t Utf8CharLen(unsigned char c) {
   if ((c & 0xF0) == 0xE0) return 3;
   if ((c & 0xF8) == 0xF0) return 4;
   return 1;
-}
-
-size_t Utf8CharCount(const std::string &s) {
-  size_t count = 0;
-  for (size_t i = 0; i < s.size();) {
-    i += std::min(Utf8CharLen(static_cast<unsigned char>(s[i])), s.size() - i);
-    ++count;
-  }
-  return count;
 }
 
 std::vector<std::string> WrapUtf8Text(const std::string &text, int chars_per_line) {
@@ -278,14 +284,75 @@ bool ParsePackage(zip_t *za, ParsedPackage &pkg, std::string &error) {
 #endif
 
 std::string StripTagsToText(std::string html) {
-  html = std::regex_replace(html, std::regex("<script[^>]*>[\\s\\S]*?</script>", std::regex::icase), " ");
-  html = std::regex_replace(html, std::regex("<style[^>]*>[\\s\\S]*?</style>", std::regex::icase), " ");
-  html = std::regex_replace(html, std::regex("<br\\s*/?>", std::regex::icase), "\n");
-  html = std::regex_replace(html, std::regex("<[^>]+>", std::regex::icase), " ");
-  html = DecodeHtmlEntities(std::move(html));
-  html = std::regex_replace(html, std::regex("[ \\t\\r\\f\\v]+"), " ");
-  html = std::regex_replace(html, std::regex("\\n+"), "\n");
-  return TrimSpaces(html);
+  std::string out;
+  out.reserve(html.size());
+  bool in_tag = false;
+  bool last_space = true;
+  for (size_t i = 0; i < html.size();) {
+    const char ch = html[i];
+    if (ch == '<') {
+      const size_t gt = html.find('>', i + 1);
+      if (gt == std::string::npos) break;
+      const std::string raw = html.substr(i + 1, gt - i - 1);
+      bool closing = false;
+      const std::string tag = TagNameFromRaw(raw, closing);
+      if (!closing && (tag == "script" || tag == "style")) {
+        const std::string lower_tail = LowerAscii(html.substr(gt + 1));
+        const std::string close_pat = "</" + tag;
+        const size_t close_pos = lower_tail.find(close_pat);
+        if (close_pos != std::string::npos) {
+          const size_t close_start = gt + 1 + close_pos;
+          const size_t close_end = html.find('>', close_start);
+          i = (close_end == std::string::npos) ? html.size() : close_end + 1;
+          continue;
+        }
+      }
+      if (tag == "br" || IsBlockTag(tag)) {
+        if (!out.empty() && out.back() != '\n') out.push_back('\n');
+        last_space = true;
+      } else if (!last_space) {
+        out.push_back(' ');
+        last_space = true;
+      }
+      i = gt + 1;
+      continue;
+    }
+    in_tag = false;
+    (void)in_tag;
+    if (ch == '&') {
+      const size_t semi = html.find(';', i + 1);
+      if (semi != std::string::npos && semi - i <= 12) {
+        std::string entity = DecodeHtmlEntities(html.substr(i, semi - i + 1));
+        if (entity.size() < semi - i + 1) {
+          for (char ec : entity) {
+            if (std::isspace(static_cast<unsigned char>(ec))) {
+              if (!last_space) out.push_back(' ');
+              last_space = true;
+            } else {
+              out.push_back(ec);
+              last_space = false;
+            }
+          }
+          i = semi + 1;
+          continue;
+        }
+      }
+    }
+    const size_t len = std::min(Utf8CharLen(static_cast<unsigned char>(ch)), html.size() - i);
+    if (std::isspace(static_cast<unsigned char>(ch))) {
+      if (ch == '\n') {
+        if (!out.empty() && out.back() != '\n') out.push_back('\n');
+      } else if (!last_space) {
+        out.push_back(' ');
+      }
+      last_space = true;
+    } else {
+      out.append(html, i, len);
+      last_space = false;
+    }
+    i += len;
+  }
+  return TrimSpaces(out);
 }
 
 void PushTextBlock(std::vector<FlowBlock> &blocks, FlowBlockType type, std::string text, int heading_level = 0) {
@@ -426,9 +493,13 @@ struct EpubFlowReader::Impl {
   float zoom = 1.0f;
   int scroll_y = 0;
   int doc_h = 1;
+  std::vector<std::string> ordered_docs;
+  size_t next_doc_index = 0;
+  bool all_docs_loaded = true;
   std::vector<FlowBlock> source_blocks;
   mutable std::unordered_map<std::string, SDL_Texture *> image_textures;
   mutable std::unordered_map<std::string, SDL_Point> image_sizes;
+  mutable std::unordered_map<std::string, TextTextureEntry> text_textures;
 #ifdef HAVE_SDL2_TTF
   TTF_Font *font = nullptr;
   TTF_Font *header_font = nullptr;
@@ -523,6 +594,25 @@ struct EpubFlowReader::Impl {
     image_sizes.clear();
   }
 
+  void DestroyTextTextures() const {
+    for (auto &kv : text_textures) {
+      if (kv.second.texture) SDL_DestroyTexture(kv.second.texture);
+    }
+    text_textures.clear();
+  }
+
+  void PruneTextTextures() const {
+    while (text_textures.size() > kMaxTextTextureCacheEntries) {
+      auto oldest = text_textures.end();
+      for (auto it = text_textures.begin(); it != text_textures.end(); ++it) {
+        if (oldest == text_textures.end() || it->second.last_use < oldest->second.last_use) oldest = it;
+      }
+      if (oldest == text_textures.end()) break;
+      if (oldest->second.texture) SDL_DestroyTexture(oldest->second.texture);
+      text_textures.erase(oldest);
+    }
+  }
+
   bool ReadImageSize(const std::string &resource, int &w, int &h) {
     w = 0;
     h = 0;
@@ -554,10 +644,15 @@ struct EpubFlowReader::Impl {
 #endif
   }
 
-  void Relayout() {
-    DestroyImages();
-    CloseFonts();
-    EnsureFonts();
+  void Relayout(bool clear_images = true, bool clear_text_cache = true) {
+    if (clear_images) DestroyImages();
+    if (clear_text_cache) {
+      DestroyTextTextures();
+      CloseFonts();
+      EnsureFonts();
+    } else if (!font || !header_font) {
+      EnsureFonts();
+    }
     const int width = LayoutWidth();
     const int image_width = ViewWidth();
     int y = kMargin;
@@ -580,8 +675,9 @@ struct EpubFlowReader::Impl {
         block.h = block.draw_h + line_h / 2;
       } else {
         const int chars_per_line = std::max(4, width / std::max(8, FontPt()));
-        const int lines = std::max(1, static_cast<int>((Utf8CharCount(block.text) + chars_per_line - 1) /
-                                                       static_cast<size_t>(chars_per_line)));
+        std::string prefix = block.type == FlowBlockType::ListItem ? "- " : "";
+        block.lines = WrapUtf8Text(prefix + block.text, chars_per_line);
+        const int lines = std::max(1, static_cast<int>(block.lines.size()));
         const int gap = (block.type == FlowBlockType::Header) ? line_h : line_h / 2;
         block.h = lines * line_h + gap;
         y += block.h;
@@ -603,14 +699,27 @@ struct EpubFlowReader::Impl {
 #ifdef HAVE_SDL2_TTF
     TTF_Font *draw_font = FontForBlock(block);
     if (!draw_font || text.empty()) return;
-    SDL_Surface *surface = TTF_RenderUTF8_Blended(draw_font, text.c_str(), font_color);
-    if (!surface) return;
-    SDL_Texture *texture = SDL_CreateTextureFromSurface(r, surface);
-    SDL_Rect dst{x, y, surface->w, surface->h};
-    SDL_FreeSurface(surface);
-    if (!texture) return;
-    SDL_RenderCopy(r, texture, nullptr, &dst);
-    SDL_DestroyTexture(texture);
+    const char role = block.type == FlowBlockType::Header ? 'h' : 'b';
+    const std::string key = std::string(1, role) + "|" + std::to_string(FontPt()) + "|" +
+                            std::to_string(font_color.r) + "," + std::to_string(font_color.g) + "," +
+                            std::to_string(font_color.b) + "," + text;
+    auto cached = text_textures.find(key);
+    if (cached == text_textures.end()) {
+      SDL_Surface *surface = TTF_RenderUTF8_Blended(draw_font, text.c_str(), font_color);
+      if (!surface) return;
+      TextTextureEntry entry;
+      entry.texture = SDL_CreateTextureFromSurface(r, surface);
+      entry.w = surface->w;
+      entry.h = surface->h;
+      entry.last_use = SDL_GetTicks();
+      SDL_FreeSurface(surface);
+      if (!entry.texture) return;
+      cached = text_textures.emplace(key, entry).first;
+      PruneTextTextures();
+    }
+    cached->second.last_use = SDL_GetTicks();
+    SDL_Rect dst{x, y, cached->second.w, cached->second.h};
+    SDL_RenderCopy(r, cached->second.texture, nullptr, &dst);
 #else
     (void)r;
     (void)text;
@@ -621,13 +730,9 @@ struct EpubFlowReader::Impl {
   }
 
   void DrawTextBlock(SDL_Renderer *r, const FlowBlock &block, int y) const {
-    const int width = LayoutWidth();
     const int line_h = std::max(16, static_cast<int>(std::lround(FontPt() * 1.45f)));
-    const int chars_per_line = std::max(4, width / std::max(8, FontPt()));
-    std::string prefix = block.type == FlowBlockType::ListItem ? "- " : "";
-    std::string text = prefix + block.text;
     int line_y = y;
-    for (const auto &line : WrapUtf8Text(text, chars_per_line)) {
+    for (const auto &line : block.lines) {
       DrawTextLine(r, line, kMargin, line_y, block);
       line_y += line_h;
     }
@@ -662,6 +767,45 @@ struct EpubFlowReader::Impl {
     (void)r;
     return nullptr;
 #endif
+  }
+
+  bool LoadMoreDocs(size_t max_docs) {
+#ifdef HAVE_LIBZIP
+    if (all_docs_loaded || max_docs == 0) return false;
+    int zerr = 0;
+    zip_t *za = zip_open(path.c_str(), ZIP_RDONLY, &zerr);
+    if (!za) return false;
+    const size_t before_blocks = source_blocks.size();
+    size_t loaded = 0;
+    while (next_doc_index < ordered_docs.size() && loaded < max_docs) {
+      const std::string doc = ordered_docs[next_doc_index++];
+      std::string html;
+      if (ReadZipEntry(za, doc, html)) {
+        ParseHtmlBlocks(html, doc, source_blocks);
+        ++loaded;
+      }
+    }
+    zip_close(za);
+    all_docs_loaded = next_doc_index >= ordered_docs.size();
+    if (source_blocks.size() == before_blocks) return false;
+    Relayout(false, false);
+    runtime_log::Line("[epub_flow] lazy loaded docs=" + std::to_string(loaded) +
+                      " blocks=" + std::to_string(source_blocks.size()) +
+                      " next_doc=" + std::to_string(next_doc_index) + "/" +
+                      std::to_string(ordered_docs.size()));
+    return true;
+#else
+    (void)max_docs;
+    return false;
+#endif
+  }
+
+  void LoadAheadIfNeeded() {
+    if (all_docs_loaded) return;
+    const int threshold = ViewHeight() * kLazyLoadAheadScreens;
+    if (doc_h - (scroll_y + ViewHeight()) <= threshold) {
+      LoadMoreDocs(kMoreFlowDocsToLoad);
+    }
   }
 };
 
@@ -698,19 +842,28 @@ bool EpubFlowReader::Open(const std::string &path, SDL_Renderer *renderer, int s
     runtime_log::Line("[epub_flow] package parse failed path=" + path + " error=" + error);
     return false;
   }
+  impl_->path = path;
+  impl_->ordered_docs = pkg.ordered_docs;
+  impl_->next_doc_index = 0;
+  impl_->all_docs_loaded = impl_->ordered_docs.empty();
   std::vector<FlowBlock> blocks;
-  for (const auto &doc : pkg.ordered_docs) {
+  size_t docs_loaded = 0;
+  while (impl_->next_doc_index < impl_->ordered_docs.size() && docs_loaded < kInitialFlowDocsToLoad) {
+    const auto &doc = impl_->ordered_docs[impl_->next_doc_index++];
     std::string html;
     if (!ReadZipEntry(za, doc, html)) continue;
     ParseHtmlBlocks(html, doc, blocks);
-    if (blocks.size() > 5000) break;
+    ++docs_loaded;
+    if (blocks.size() > 1800) break;
   }
+  impl_->all_docs_loaded = impl_->next_doc_index >= impl_->ordered_docs.size();
   zip_close(za);
   if (blocks.empty()) {
     runtime_log::Line("[epub_flow] open failed: no flow blocks path=" + path);
+    impl_->path.clear();
+    impl_->ordered_docs.clear();
     return false;
   }
-  impl_->path = path;
   impl_->renderer = renderer;
   impl_->screen_w = std::max(1, screen_w);
   impl_->screen_h = std::max(1, screen_h);
@@ -719,11 +872,19 @@ bool EpubFlowReader::Open(const std::string &path, SDL_Renderer *renderer, int s
   impl_->font_color = font_color;
   impl_->rotation = NormalizeRotation(initial_progress.rotation);
   impl_->zoom = std::clamp(initial_progress.zoom, kMinZoom, kMaxZoom);
-  impl_->scroll_y = std::max(0, initial_progress.scroll_y);
   impl_->source_blocks = std::move(blocks);
   impl_->Relayout();
+  const int resume_scroll = std::max(initial_progress.scroll_y,
+                                    std::max(0, initial_progress.page) * impl_->ViewHeight());
+  while (!impl_->all_docs_loaded && resume_scroll > impl_->MaxScroll() - impl_->ViewHeight()) {
+    if (!impl_->LoadMoreDocs(kMoreFlowDocsToLoad)) break;
+  }
+  impl_->scroll_y = std::clamp(std::max(0, resume_scroll), 0, impl_->MaxScroll());
+  impl_->LoadAheadIfNeeded();
   runtime_log::Line("[epub_flow] open ok blocks=" + std::to_string(impl_->source_blocks.size()) +
-                    " doc_h=" + std::to_string(impl_->doc_h));
+                    " doc_h=" + std::to_string(impl_->doc_h) +
+                    " docs=" + std::to_string(docs_loaded) + "/" +
+                    std::to_string(impl_->ordered_docs.size()));
   return true;
 #endif
 }
@@ -731,8 +892,12 @@ bool EpubFlowReader::Open(const std::string &path, SDL_Renderer *renderer, int s
 void EpubFlowReader::Close() {
   if (!impl_) return;
   impl_->DestroyImages();
+  impl_->DestroyTextTextures();
   impl_->CloseFonts();
   impl_->path.clear();
+  impl_->ordered_docs.clear();
+  impl_->next_doc_index = 0;
+  impl_->all_docs_loaded = true;
   impl_->source_blocks.clear();
   impl_->scroll_y = 0;
   impl_->doc_h = 1;
@@ -756,7 +921,10 @@ void EpubFlowReader::UpdateViewport(int screen_w, int screen_h) {
   impl_->scroll_y = std::clamp(static_cast<int>(std::lround(pct * impl_->MaxScroll())), 0, impl_->MaxScroll());
 }
 
-void EpubFlowReader::Tick() {}
+void EpubFlowReader::Tick() {
+  if (!IsOpen()) return;
+  impl_->LoadAheadIfNeeded();
+}
 
 void EpubFlowReader::Draw(SDL_Renderer *renderer) const {
   if (!IsOpen() || !renderer) return;
@@ -843,13 +1011,17 @@ void EpubFlowReader::SetBaseFontPointSize(int base_font_pt) {
 
 void EpubFlowReader::SetColors(SDL_Color background_color, SDL_Color font_color) {
   if (!impl_) return;
+  const bool font_changed = impl_->font_color.r != font_color.r || impl_->font_color.g != font_color.g ||
+                            impl_->font_color.b != font_color.b || impl_->font_color.a != font_color.a;
   impl_->background_color = background_color;
   impl_->font_color = font_color;
+  if (font_changed) impl_->DestroyTextTextures();
 }
 
 void EpubFlowReader::ScrollByPixels(int delta_px) {
   if (!IsOpen()) return;
   impl_->scroll_y = std::clamp(impl_->scroll_y + delta_px, 0, impl_->MaxScroll());
+  impl_->LoadAheadIfNeeded();
 }
 
 void EpubFlowReader::JumpByScreen(int direction) {
@@ -859,14 +1031,23 @@ void EpubFlowReader::JumpByScreen(int direction) {
 
 void EpubFlowReader::SetPage(int page_index) {
   if (!IsOpen()) return;
+  while (!impl_->all_docs_loaded &&
+         page_index >= (impl_->doc_h + impl_->ViewHeight() - 1) / std::max(1, impl_->ViewHeight())) {
+    if (!impl_->LoadMoreDocs(kMoreFlowDocsToLoad)) break;
+  }
   const int pages = PageCount();
   const int page = std::clamp(page_index, 0, std::max(0, pages - 1));
   impl_->scroll_y = std::clamp(page * impl_->ViewHeight(), 0, impl_->MaxScroll());
+  impl_->LoadAheadIfNeeded();
 }
 
 int EpubFlowReader::PageCount() const {
   if (!IsOpen()) return 0;
-  return std::max(1, (impl_->doc_h + impl_->ViewHeight() - 1) / impl_->ViewHeight());
+  const int loaded_pages = std::max(1, (impl_->doc_h + impl_->ViewHeight() - 1) / impl_->ViewHeight());
+  if (impl_->all_docs_loaded || impl_->next_doc_index == 0) return loaded_pages;
+  const float docs_ratio = static_cast<float>(impl_->ordered_docs.size()) /
+                           static_cast<float>(std::max<size_t>(1, impl_->next_doc_index));
+  return std::max(loaded_pages, static_cast<int>(std::ceil(loaded_pages * docs_ratio)));
 }
 
 bool EpubFlowReader::PageSize(int page_index, int &w, int &h) const {

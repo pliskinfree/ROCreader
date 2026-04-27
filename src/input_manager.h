@@ -4,6 +4,7 @@
 
 #include <array>
 #include <string>
+#include <vector>
 
 constexpr int kButtonCount = 18;
 
@@ -53,6 +54,7 @@ struct BtnState {
 class InputManager {
 public:
   InputManager(const std::string &mapping_path, InputProfile input_profile);
+  ~InputManager();
 
   void BeginFrame(float dt);
   void HandleEvent(const SDL_Event &e);
@@ -77,6 +79,7 @@ private:
   static Button KeyToButton(SDL_Keycode k);
   Button PadToButton(uint8_t b) const;
   Button JoyButtonToButton(uint8_t b) const;
+  void PollDeviceInputEvents();
   void LoadDefaultPadMap(InputProfile input_profile);
   void LoadDefaultJoyMap(InputProfile input_profile);
   static std::string Trim(std::string s);
@@ -91,6 +94,9 @@ private:
   bool ShouldLogProbeHat(uint8_t hat, uint8_t value);
   bool ShouldLogProbePadAxis(int axis, int value);
   bool ShouldLogProbeJoyAxis(int axis, int value);
+  void OpenLinuxInputDevices();
+  void CloseLinuxInputDevices();
+  void PollLinuxInputDevices();
   const BtnState &Get(Button b) const;
   std::string DescribeMap(const std::array<Button, 32> &map, const char *prefix) const;
 
@@ -108,6 +114,8 @@ private:
   std::array<bool, 512> probe_hat_seen_{};
   std::array<bool, 512> probe_pad_axis_seen_{};
   std::array<bool, 512> probe_joy_axis_seen_{};
+  std::array<bool, 512> probe_linux_key_seen_{};
+  std::vector<int> linux_input_fds_;
   bool full_input_log_enabled_ = false;
   float dt_ = 1.0f / 60.0f;
 };
