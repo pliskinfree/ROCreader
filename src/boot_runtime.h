@@ -7,10 +7,11 @@
 
 #include "filesystem_compat.h"
 #include <functional>
+#include <future>
 #include <string>
 #include <vector>
 
-enum class BootPhase { UpdateReplay, CountBooks, ScanBooks, GenerateCovers, Finalize, Done };
+enum class BootPhase { UpdateInstall, UpdateReplay, CountBooks, ScanBooks, GenerateCovers, Finalize, Done };
 
 struct BootRuntimeState {
   float timer = 0.0f;
@@ -27,6 +28,10 @@ struct BootRuntimeState {
   bool count_iterator_active = false;
   std::string status_text = "Loading resources...(0/0)";
   bool update_replay_success = false;
+  bool update_install_started = false;
+  bool update_install_done = false;
+  bool update_install_success = false;
+  std::future<bool> update_install_future;
   std::string update_replay_version;
   std::filesystem::path update_status_path;
 };
@@ -42,6 +47,8 @@ struct BootRuntimeTickDeps {
   std::function<bool(const std::string &)> has_cached_doc_cover_on_disk;
   std::function<SDL_Texture *(const std::string &)> create_doc_first_page_cover_texture;
   std::function<void(SDL_Texture *)> destroy_generated_cover_texture;
+  std::function<bool()> install_pending_update;
+  std::function<void()> on_update_installed_restart;
   std::function<void(size_t, size_t)> on_finish;
 };
 
@@ -58,3 +65,4 @@ struct BootRuntimeRenderDeps {
 void TickBootRuntime(BootRuntimeState &state, float dt, const BootRuntimeTickDeps &deps);
 void DrawBootRuntime(const BootRuntimeRenderDeps &deps);
 void InitializeBootRuntimeReplay(BootRuntimeState &state, const std::filesystem::path &status_path);
+void InitializeBootRuntimePendingUpdate(BootRuntimeState &state);

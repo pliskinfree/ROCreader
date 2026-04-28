@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <future>
+#include <chrono>
 
 namespace {
 constexpr float kUpdateReplayDurationSec = 1.8f;
@@ -27,6 +29,8 @@ bool StartNextBootCountRoot(BootRuntimeState &state, const std::vector<std::stri
 
 float BootProgressRatio(const BootRuntimeState &state) {
   switch (state.phase) {
+  case BootPhase::UpdateInstall:
+    return state.update_install_done ? 1.0f : std::clamp(0.15f + std::fmod(state.timer * 0.55f, 1.0f) * 0.65f, 0.0f, 0.95f);
   case BootPhase::UpdateReplay:
     return std::clamp(state.timer / kUpdateReplayDurationSec, 0.0f, 1.0f);
   case BootPhase::CountBooks: {
@@ -48,6 +52,11 @@ float BootProgressRatio(const BootRuntimeState &state) {
     return 1.0f;
   }
   return 0.0f;
+}
+
+std::string MakeUpdateInstallText(const BootRuntimeState &state) {
+  const float ratio = state.update_install_done ? 0.95f : std::clamp(0.30f + std::fmod(state.timer * 0.40f, 0.55f), 0.30f, 0.85f);
+  return LocalizedUpdateReplayText(state.language_index, ratio, true, state.update_replay_version);
 }
 
 std::string MakeBootScanText(size_t current, size_t total) {
@@ -95,9 +104,45 @@ void InitializeBootRuntimeReplay(BootRuntimeState &state, const std::filesystem:
       LocalizedUpdateReplayText(state.language_index, 0.0f, state.update_replay_success, state.update_replay_version);
 }
 
+void InitializeBootRuntimePendingUpdate(BootRuntimeState &state) {
+  state.phase = BootPhase::UpdateInstall;
+  state.timer = 0.0f;
+  state.update_install_started = false;
+  state.update_install_done = false;
+  state.update_install_success = false;
+  state.status_text = MakeUpdateInstallText(state);
+}
+
 void TickBootRuntime(BootRuntimeState &state, float dt, const BootRuntimeTickDeps &deps) {
   state.timer += dt;
-  if (state.phase == BootPhase::UpdateReplay) {
+  if (state.phase == BootPhase::UpdateInstall) {
+    if (!state.update_install_started) {
+      state.update_install_started = true;
+      state.status_text = MakeUpdateInstallText(state);
+      state.update_install_future = std::async(std::launch::async, [install_pending_update = deps.install_pending_update]() {
+        return install_pending_update ? install_pending_update() : false;
+      });
+    }
+    if (!state.update_install_done && state.update_install_future.valid() &&
+        state.update_install_future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+      state.update_install_success = state.update_install_future.get();
+      state.update_install_done = true;
+      state.timer = 0.0f;
+    }
+    state.status_text = MakeUpdateInstallText(state);
+    if (state.update_install_done && state.timer >= 0.8f) {
+      state.timer = 0.0f;
+      if (state.update_install_success) {
+        if (deps.on_update_installed_restart) deps.on_update_installed_restart();
+        state.phase = BootPhase::UpdateReplay;
+        state.update_replay_success = true;
+        state.status_text = LocalizedUpdateReplayText(state.language_index, 0.0f, true, state.update_replay_version);
+      } else {
+        state.phase = BootPhase::CountBooks;
+        state.status_text = LocalizedBootScanText(state.language_index, 0, 0);
+      }
+    }
+  } else if (state.phase == BootPhase::UpdateReplay) {
     const float replay_ratio = std::clamp(state.timer / kUpdateReplayDurationSec, 0.0f, 1.0f);
     state.status_text = LocalizedUpdateReplayText(state.language_index, replay_ratio, state.update_replay_success,
                                                   state.update_replay_version);
@@ -221,7 +266,9 @@ void DrawBootRuntime(const BootRuntimeRenderDeps &deps) {
 #ifdef HAVE_SDL2_TTF
   const SDL_Color boot_text_color{232, 236, 244, 255};
   std::string status_text = deps.state.status_text;
-  if (deps.state.phase == BootPhase::UpdateReplay) {
+  if (deps.state.phase == BootPhase::UpdateInstall) {
+    status_text = MakeUpdateInstallText(deps.state);
+  } else if (deps.state.phase == BootPhase::UpdateReplay) {
     const float replay_ratio = std::clamp(deps.state.timer / kUpdateReplayDurationSec, 0.0f, 1.0f);
     status_text = LocalizedUpdateReplayText(deps.language_index, replay_ratio, deps.state.update_replay_success,
                                             deps.state.update_replay_version);

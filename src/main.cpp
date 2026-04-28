@@ -1268,7 +1268,12 @@ int main(int, char **argv) {
     const std::filesystem::path boot_status_path =
         std::filesystem::current_path(ec) / "cache" / "update_boot_status.txt";
     boot_runtime.language_index = SystemLanguageIndexFromConfigValue(config.Get().system_language);
-    if (!ec) InitializeBootRuntimeReplay(boot_runtime, boot_status_path);
+    const char *boot_install_pending = std::getenv("ROCREADER_BOOT_INSTALL_PENDING_UPDATE");
+    if (boot_install_pending && std::string(boot_install_pending) == "1") {
+      InitializeBootRuntimePendingUpdate(boot_runtime);
+    } else if (!ec) {
+      InitializeBootRuntimeReplay(boot_runtime, boot_status_path);
+    }
   }
   std::vector<BookItem> &shelf_items = shelf_runtime.items;
   std::unordered_map<std::string, CoverCacheEntry> cover_textures;
@@ -2168,6 +2173,21 @@ int main(int, char **argv) {
           [&](SDL_Texture *generated) {
             forget_texture_size(generated);
             SDL_DestroyTexture(generated);
+          },
+          [&]() {
+            const char *command = std::getenv("ROCREADER_UPDATE_INSTALL_COMMAND");
+            if (!command || !*command) return false;
+            runtime_log::Line("boot: pending update install begin");
+            const int rc = std::system(command);
+            const bool ok = (rc == 0);
+            runtime_log::Line(std::string("boot: pending update install ") + (ok ? "success" : "failed") +
+                              " rc=" + std::to_string(rc));
+            return ok;
+          },
+          [&]() {
+            runtime_log::Line("boot: pending update installed; restart via launcher");
+            running = false;
+            std::exit(23);
           },
           [&](size_t total_books, size_t cover_generate_count) {
             current_folder.clear();

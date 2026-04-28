@@ -749,6 +749,7 @@ if [ -z "${ROCREADER_CACHE_ROOT:-}" ]; then
 fi
 export ROCREADER_CARD1_ROOT="/mnt/SDCARD"
 export ROCREADER_CARD2_ROOT="/mnt/sdcard"
+export ROCREADER_SCAN_CARD2="${ROCREADER_SCAN_CARD2:-0}"
 export ROCREADER_SCREEN_PROFILE="${ROCREADER_SCREEN_PROFILE:-1024x768}"
 export ROCREADER_SCREEN_W="${ROCREADER_SCREEN_W:-1024}"
 export ROCREADER_SCREEN_H="${ROCREADER_SCREEN_H:-768}"
@@ -770,6 +771,7 @@ fi
 mkdir -p "$XDG_RUNTIME_DIR" "$APP_DIR/cache" "$ROCREADER_CACHE_ROOT" 2>/dev/null || true
 chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
 cd "$APP_DIR"
+LAUNCHER_PATH="$SELF_DIR/launch.sh"
 
 set_runtime_libs() {
   lib_dir="$1"
@@ -993,6 +995,16 @@ perform_pending_update_if_any() {
   log_line "[update] install success version=${package_version:-unknown}"
 }
 
+if [ "${1:-}" = "--install-pending-update" ]; then
+  perform_pending_update_if_any
+  exit 0
+fi
+
+if find_pending_marker >/dev/null 2>&1 || find_latest_download_zip >/dev/null 2>&1; then
+  export ROCREADER_BOOT_INSTALL_PENDING_UPDATE="${ROCREADER_BOOT_INSTALL_PENDING_UPDATE:-1}"
+  export ROCREADER_UPDATE_INSTALL_COMMAND="${ROCREADER_UPDATE_INSTALL_COMMAND:-\"$LAUNCHER_PATH\" --install-pending-update}"
+fi
+
 maybe_install_after_exit() {
   if find_pending_marker >/dev/null 2>&1 || find_latest_download_zip >/dev/null 2>&1; then
     log_line "[update] pending package found after app exit; install deferred until next launch"
@@ -1007,6 +1019,13 @@ run_with_driver() {
   SDL_VIDEODRIVER="$drv" "$BIN" >>"$LOG_FILE" 2>&1
   rc=$?
   log_line "[launcher] exit SDL_VIDEODRIVER=$drv rc=$rc"
+  if [ "$rc" -eq 23 ]; then
+    log_line "[update] installed during boot; restarting app"
+    unset ROCREADER_BOOT_INSTALL_PENDING_UPDATE
+    unset ROCREADER_UPDATE_INSTALL_COMMAND
+    "$LAUNCHER_PATH" >>"$LOG_FILE" 2>&1
+    return $?
+  fi
   if [ "$rc" -eq 0 ]; then
     maybe_install_after_exit
   fi
@@ -1020,6 +1039,13 @@ run_default() {
   "$BIN" >>"$LOG_FILE" 2>&1
   rc=$?
   log_line "[launcher] exit default video rc=$rc"
+  if [ "$rc" -eq 23 ]; then
+    log_line "[update] installed during boot; restarting app"
+    unset ROCREADER_BOOT_INSTALL_PENDING_UPDATE
+    unset ROCREADER_UPDATE_INSTALL_COMMAND
+    "$LAUNCHER_PATH" >>"$LOG_FILE" 2>&1
+    return $?
+  fi
   if [ "$rc" -eq 0 ]; then
     maybe_install_after_exit
   fi
@@ -1038,7 +1064,6 @@ trim_log_if_needed
 if [ "${ROCREADER_VERBOSE_LOG:-0}" = "1" ] || [ "${ROCREADER_DEBUG_LOG:-0}" = "1" ]; then
   log_line "===== $(date '+%F %T %Z') ====="
 fi
-perform_pending_update_if_any
 log_line "[launcher] package_tag=$PACKAGE_TAG"
 log_line "[launcher] app=$APP_DIR"
 log_line "[launcher] cache_root=${ROCREADER_CACHE_ROOT}"

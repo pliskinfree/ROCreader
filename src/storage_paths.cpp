@@ -46,6 +46,10 @@ std::vector<fs::path> Card1Candidates() {
 
 std::vector<fs::path> Card2Candidates() {
   std::vector<fs::path> roots;
+  if (const char *scan_card2 = std::getenv("ROCREADER_SCAN_CARD2");
+      scan_card2 && *scan_card2 && std::string(scan_card2) == "0") {
+    return roots;
+  }
   if (const char *env = std::getenv("ROCREADER_CARD2_ROOT"); env && *env) {
     roots.emplace_back(env);
   }
