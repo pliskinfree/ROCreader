@@ -9,6 +9,7 @@
 #include <functional>
 #include <future>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 enum class BootPhase { UpdateInstall, UpdateReplay, CountBooks, ScanBooks, GenerateCovers, Finalize, Done };
@@ -18,6 +19,7 @@ struct BootRuntimeState {
   BootPhase phase = BootPhase::CountBooks;
   int language_index = 0;
   std::vector<BookItem> scanned_books;
+  std::unordered_set<std::string> scanned_book_keys;
   size_t scan_index = 0;
   std::vector<std::string> cover_generate_queue;
   size_t cover_generate_index = 0;

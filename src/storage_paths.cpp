@@ -246,6 +246,11 @@ std::vector<std::string> DetectBooksRoots() {
   g_seen_dir_keys.clear();
   std::vector<std::string> out;
 #ifndef _WIN32
+  if (const char *strict_brick = std::getenv("ROCREADER_TRIMUI_BRICK_STRICT_APP_ROOT");
+      strict_brick && std::string(strict_brick) == "1") {
+    AddIfDirExists(out, fs::path("/mnt/SDCARD/Apps/ROCreader/books"));
+    return out;
+  }
   const std::vector<std::string> app_roots = DetectRocreaderRoots();
   for (const auto &root : app_roots) {
     AddIfDirExists(out, fs::path(root) / "books");
@@ -278,6 +283,11 @@ std::vector<std::string> DetectCoverRoots() {
   std::vector<std::string> out;
   AddSiblingNamedDirsForRoots(out, books_roots, "books", "book_covers");
 #ifndef _WIN32
+  if (const char *strict_brick = std::getenv("ROCREADER_TRIMUI_BRICK_STRICT_APP_ROOT");
+      strict_brick && std::string(strict_brick) == "1") {
+    AddIfDirExists(out, fs::path("/mnt/SDCARD/Apps/ROCreader/book_covers"));
+    return out;
+  }
   const std::vector<std::string> app_roots = DetectRocreaderRoots();
   for (const auto &root : app_roots) {
     AddIfDirExists(out, fs::path(root) / "book_covers");

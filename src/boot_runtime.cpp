@@ -11,6 +11,14 @@
 namespace {
 constexpr float kUpdateReplayDurationSec = 1.8f;
 
+std::string ScannedBookKey(const std::filesystem::path &path) {
+  std::error_code ec;
+  std::filesystem::path canonical = filesystem_compat::WeaklyCanonical(path, ec);
+  if (ec) canonical = path;
+  canonical = filesystem_compat::LexicallyNormal(canonical);
+  return path_adapter::StorePathString(canonical);
+}
+
 bool StartNextBootCountRoot(BootRuntimeState &state, const std::vector<std::string> &books_roots) {
   const auto opts = std::filesystem::directory_options::skip_permission_denied;
   while (state.count_root_index < books_roots.size()) {
@@ -176,6 +184,8 @@ void TickBootRuntime(BootRuntimeState &state, float dt, const BootRuntimeTickDep
       const std::string readable_path = path_adapter::ResolveReadableFilePath(entry);
       const std::string ext = deps.get_lower_ext ? deps.get_lower_ext(readable_path) : std::string{};
       if (ext == ".pdf" || ext == ".txt" || ext == ".epub") {
+        const std::string book_key = ScannedBookKey(entry.path());
+        if (!state.scanned_book_keys.insert(book_key).second) continue;
         BookItem item;
         item.name = entry.path().filename().string();
         item.path = readable_path;
