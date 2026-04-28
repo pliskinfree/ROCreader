@@ -63,6 +63,9 @@ float BootProgressRatio(const BootRuntimeState &state) {
 }
 
 std::string MakeUpdateInstallText(const BootRuntimeState &state) {
+  if (state.update_install_done && !state.update_install_success) {
+    return LocalizedUpdateReplayText(state.language_index, 0.0f, false, state.update_replay_version);
+  }
   const float ratio = state.update_install_done ? 0.95f : std::clamp(0.30f + std::fmod(state.timer * 0.40f, 0.55f), 0.30f, 0.85f);
   return LocalizedUpdateReplayText(state.language_index, ratio, true, state.update_replay_version);
 }

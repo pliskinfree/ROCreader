@@ -886,6 +886,27 @@ find_latest_download_zip() {
   [ -n "$best_path" ] && printf '%s\n' "$best_path"
 }
 
+cleanup_installed_download_zips() {
+  installed_version="$1"
+  [ -n "$installed_version" ] || return 0
+  for root in /mnt/SDCARD /mnt/sdcard /mnt/mmc; do
+    downloads_dir="$root/Downloads"
+    [ -d "$downloads_dir" ] || continue
+    for zip_file in "$downloads_dir"/*.zip; do
+      [ -f "$zip_file" ] || continue
+      zip_version="$(extract_version_from_name "$zip_file")"
+      [ -n "$zip_version" ] || continue
+      case "$(basename "$zip_file")" in
+        *"Trimui Brick"*.zip|*"trimui brick"*.zip|*"TrimuiBrick"*.zip|*"trimuibrick"*.zip) ;;
+        *) continue ;;
+      esac
+      if [ "$zip_version" = "$installed_version" ] || ! version_is_newer "$zip_version" "$installed_version"; then
+        rm -f "$zip_file" 2>/dev/null || true
+      fi
+    done
+  done
+}
+
 extract_zip_to_stage() {
   zip_file="$1"
   stage_dir="$2"
@@ -947,7 +968,7 @@ perform_pending_update_if_any() {
     package_path="$package_dir/$package_name"
     [ -n "$package_version" ] || package_version="$(extract_version_from_name "$package_path")"
   fi
-  [ -n "$package_path" ] || return 0
+  [ -n "$package_path" ] || return 2
 
   log_line "[update] pending marker: ${marker:-none}"
   log_line "[update] installed version: ${installed_version:-unknown}"
@@ -958,19 +979,19 @@ perform_pending_update_if_any() {
   if [ ! -f "$package_path" ]; then
     log_line "[update] missing package, skip install"
     write_update_status "failed" "$package_version"
-    return 0
+    return 1
   fi
   if ! extract_zip_to_stage "$package_path" "$update_stage_dir"; then
     log_line "[update] extract failed"
     write_update_status "failed" "$package_version"
-    return 0
+    return 1
   fi
   staged_runtime="$(find_staged_runtime_dir "$update_stage_dir" || true)"
   if [ ! -d "$staged_runtime" ]; then
     log_line "[update] staged runtime missing under: $update_stage_dir"
     write_update_status "failed" "$package_version"
     rm -rf "$update_stage_dir"
-    return 0
+    return 1
   fi
 
   replace_runtime_entry "reader" "$staged_runtime"
@@ -991,23 +1012,50 @@ perform_pending_update_if_any() {
   chmod +x "$APP_DIR/rocreader_sdl" 2>/dev/null || true
   printf '%s\n' "$package_version" >"$APP_DIR/version.txt"
   rm -f /mnt/SDCARD/Downloads/ROCreader_update_pending.txt /mnt/sdcard/Downloads/ROCreader_update_pending.txt /mnt/mmc/Downloads/ROCreader_update_pending.txt
+  rm -f "$package_path" 2>/dev/null || true
+  cleanup_installed_download_zips "$package_version"
   rm -rf "$update_stage_dir"
   write_update_status "success" "$package_version"
   log_line "[update] install success version=${package_version:-unknown}"
+  return 0
+}
+
+pending_update_available() {
+  marker="$(find_pending_marker || true)"
+  installed_version="$(read_installed_version || true)"
+  latest_zip="$(find_latest_download_zip || true)"
+  latest_version=""
+  if [ -n "$latest_zip" ]; then
+    latest_version="$(extract_version_from_name "$latest_zip")"
+  fi
+  if [ -n "$latest_zip" ] && [ -n "$latest_version" ]; then
+    if [ -z "$installed_version" ] || version_is_newer "$latest_version" "$installed_version"; then
+      return 0
+    fi
+  fi
+  if [ -n "$marker" ]; then
+    package_version="$(extract_marker_value version "$marker")"
+    [ -n "$package_version" ] || package_version="$(extract_version_from_name "$(dirname "$marker")/$(extract_marker_value filename "$marker")")"
+    if [ -z "$package_version" ] || [ -z "$installed_version" ] || version_is_newer "$package_version" "$installed_version"; then
+      return 0
+    fi
+    rm -f "$marker" 2>/dev/null || true
+  fi
+  return 1
 }
 
 if [ "${1:-}" = "--install-pending-update" ]; then
   perform_pending_update_if_any
-  exit 0
+  exit $?
 fi
 
-if find_pending_marker >/dev/null 2>&1 || find_latest_download_zip >/dev/null 2>&1; then
+if pending_update_available; then
   export ROCREADER_BOOT_INSTALL_PENDING_UPDATE="${ROCREADER_BOOT_INSTALL_PENDING_UPDATE:-1}"
   export ROCREADER_UPDATE_INSTALL_COMMAND="${ROCREADER_UPDATE_INSTALL_COMMAND:-\"$LAUNCHER_PATH\" --install-pending-update}"
 fi
 
 maybe_install_after_exit() {
-  if find_pending_marker >/dev/null 2>&1 || find_latest_download_zip >/dev/null 2>&1; then
+  if pending_update_available; then
     log_line "[update] pending package found after app exit; install deferred until next launch"
   fi
 }
