@@ -470,6 +470,29 @@ find_so_in_libdir() {
   echo "[low_glibc] JPEG_CFLAGS=$JPEG_CFLAGS_FINAL"
   echo "[low_glibc] JPEG_LIBS=$JPEG_LIBS_FINAL"
 
+  WEBP_CFLAGS_FINAL="${WEBP_CFLAGS:-}"
+  WEBP_LIBS_FINAL="${WEBP_LIBS:-}"
+  if [ -z "$WEBP_CFLAGS_FINAL" ] && [ -f "$SYSROOT/usr/include/webp/decode.h" ]; then
+    WEBP_CFLAGS_FINAL="-I$SYSROOT/usr/include"
+  fi
+  if [ -z "$WEBP_LIBS_FINAL" ]; then
+    for webp_lib in \
+      "$SYSROOT/usr/lib/aarch64-linux-gnu/libwebp.a" \
+      "$SYSROOT/lib/aarch64-linux-gnu/libwebp.a" \
+      "$SYSROOT/usr/lib/libwebp.a" \
+      "$SYSROOT/lib/libwebp.a"; do
+      if [ -f "$webp_lib" ]; then
+        WEBP_LIBS_FINAL="$webp_lib"
+        break
+      fi
+    done
+  fi
+  if [ -z "$WEBP_LIBS_FINAL" ]; then
+    WEBP_CFLAGS_FINAL=""
+  fi
+  echo "[low_glibc] WEBP_CFLAGS=$WEBP_CFLAGS_FINAL"
+  echo "[low_glibc] WEBP_LIBS=$WEBP_LIBS_FINAL"
+
   echo "[low_glibc] make clean"
   make clean
   MAKE_JOBS="${MAKE_JOBS:-$(nproc 2>/dev/null || echo 1)}"
@@ -492,8 +515,8 @@ find_so_in_libdir() {
     POPPLER_LIBS="$FALLBACK_POPPLER_LIBS" \
     LIBZIP_CFLAGS="$LIBZIP_CFLAGS_FINAL" \
     LIBZIP_LIBS="$LIBZIP_LIBS_FINAL" \
-    WEBP_CFLAGS="${WEBP_CFLAGS:-}" \
-    WEBP_LIBS="${WEBP_LIBS:-}" \
+    WEBP_CFLAGS="$WEBP_CFLAGS_FINAL" \
+    WEBP_LIBS="$WEBP_LIBS_FINAL" \
     JPEG_CFLAGS="$JPEG_CFLAGS_FINAL" \
     JPEG_LIBS="$JPEG_LIBS_FINAL" \
     MUPDF_CFLAGS="$MUPDF_CFLAGS_FINAL" \

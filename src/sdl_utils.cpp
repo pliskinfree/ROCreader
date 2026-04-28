@@ -8,6 +8,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
+#include <vector>
+
+namespace {
+SDL_Surface *LoadSurfaceFromFileBytes(const std::string &path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return nullptr;
+  std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  if (bytes.empty()) return nullptr;
+  return DecodeSurfaceFromMemory(bytes.data(), bytes.size());
+}
+} // namespace
 
 SDL_Texture *LoadTextureFromFile(SDL_Renderer *renderer, const std::string &path) {
 #ifdef HAVE_SDL2_IMAGE
@@ -15,6 +27,7 @@ SDL_Texture *LoadTextureFromFile(SDL_Renderer *renderer, const std::string &path
 #else
   SDL_Surface *surface = SDL_LoadBMP(path.c_str());
 #endif
+  if (!surface) surface = LoadSurfaceFromFileBytes(path);
   if (!surface) return nullptr;
   SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surface);
   SDL_FreeSurface(surface);
@@ -23,10 +36,11 @@ SDL_Texture *LoadTextureFromFile(SDL_Renderer *renderer, const std::string &path
 
 SDL_Surface *LoadSurfaceFromFile(const std::string &path) {
 #ifdef HAVE_SDL2_IMAGE
-  return IMG_Load(path.c_str());
+  if (SDL_Surface *surface = IMG_Load(path.c_str())) return surface;
 #else
-  return SDL_LoadBMP(path.c_str());
+  if (SDL_Surface *surface = SDL_LoadBMP(path.c_str())) return surface;
 #endif
+  return LoadSurfaceFromFileBytes(path);
 }
 
 SDL_Surface *LoadSurfaceFromMemory(const void *data, size_t size) {
