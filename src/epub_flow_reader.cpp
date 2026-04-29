@@ -32,9 +32,12 @@ constexpr float kZoomStep = 0.1f;
 constexpr int kDefaultBaseFontPt = 18;
 constexpr int kMargin = 14;
 constexpr size_t kNaturalTextThreshold = 1200;
+constexpr size_t kContentTextThreshold = 3000;
 constexpr size_t kNaturalRunThreshold = 80;
 constexpr size_t kLongNaturalRunThreshold = 180;
 constexpr size_t kMinNaturalBlocks = 4;
+constexpr size_t kMeaningfulParagraphThreshold = 24;
+constexpr size_t kMinMeaningfulParagraphs = 20;
 constexpr size_t kImageHeavyThreshold = 24;
 constexpr size_t kMaxTextTextureCacheEntries = 768;
 constexpr size_t kInitialFlowDocsToLoad = 8;
@@ -233,14 +236,19 @@ struct NaturalTextStats {
   size_t natural_chars = 0;
   size_t natural_blocks = 0;
   size_t long_natural_blocks = 0;
+  size_t content_chars = 0;
+  size_t meaningful_paragraphs = 0;
   size_t max_run = 0;
 };
 
 NaturalTextStats MeasureNaturalText(const std::string &text) {
   NaturalTextStats stats;
   size_t run = 0;
+  size_t paragraph_content = 0;
   auto finish_run = [&]() {
     stats.max_run = std::max(stats.max_run, run);
+    stats.content_chars += run;
+    paragraph_content += run;
     if (run >= kNaturalRunThreshold) {
       stats.natural_chars += run;
       ++stats.natural_blocks;
@@ -248,11 +256,18 @@ NaturalTextStats MeasureNaturalText(const std::string &text) {
     }
     run = 0;
   };
+  auto finish_paragraph = [&]() {
+    finish_run();
+    if (paragraph_content >= kMeaningfulParagraphThreshold) ++stats.meaningful_paragraphs;
+    paragraph_content = 0;
+  };
   for (size_t i = 0; i < text.size();) {
     const size_t len = std::min(Utf8CharLen(static_cast<unsigned char>(text[i])), text.size() - i);
     const uint32_t cp = DecodeUtf8Codepoint(text, i, len);
     if (IsLikelyContentCodepoint(cp)) {
       ++run;
+    } else if (cp == '\n') {
+      finish_paragraph();
     } else if (cp == 0x3002 || cp == 0xFF0C || cp == 0xFF1B || cp == '.' || cp == ',' || cp == ';' ||
                std::isspace(static_cast<unsigned char>(text[i]))) {
       if (run > 0 && run < kNaturalRunThreshold && cp != '\n') {
@@ -265,7 +280,7 @@ NaturalTextStats MeasureNaturalText(const std::string &text) {
     }
     i += len;
   }
-  finish_run();
+  finish_paragraph();
   return stats;
 }
 
@@ -1189,26 +1204,38 @@ bool EpubFlowReader::LooksLikeMixedLayout(const std::string &path) {
     natural_stats.natural_chars += doc_stats.natural_chars;
     natural_stats.natural_blocks += doc_stats.natural_blocks;
     natural_stats.long_natural_blocks += doc_stats.long_natural_blocks;
+    natural_stats.content_chars += doc_stats.content_chars;
+    natural_stats.meaningful_paragraphs += doc_stats.meaningful_paragraphs;
     natural_stats.max_run = std::max(natural_stats.max_run, doc_stats.max_run);
     image_count += CountImgTagsLinear(html);
-    if (natural_stats.natural_chars >= kNaturalTextThreshold &&
-        natural_stats.natural_blocks >= kMinNaturalBlocks &&
-        natural_stats.long_natural_blocks > 0) {
+    const bool enough_long_text = natural_stats.natural_chars >= kNaturalTextThreshold &&
+                                  natural_stats.natural_blocks >= kMinNaturalBlocks &&
+                                  natural_stats.long_natural_blocks > 0;
+    const bool enough_paragraph_text = natural_stats.content_chars >= kContentTextThreshold &&
+                                       natural_stats.meaningful_paragraphs >= kMinMeaningfulParagraphs;
+    if (enough_long_text || enough_paragraph_text) {
       break;
     }
     if (docs_read >= 32) break;
   }
   zip_close(za);
-  const bool has_natural_text = natural_stats.natural_chars >= kNaturalTextThreshold &&
+  const bool enough_long_text = natural_stats.natural_chars >= kNaturalTextThreshold &&
                                 natural_stats.natural_blocks >= kMinNaturalBlocks &&
                                 natural_stats.long_natural_blocks > 0;
-  const bool image_heavy_noise = image_count >= kImageHeavyThreshold && !has_natural_text;
+  const bool enough_paragraph_text = natural_stats.content_chars >= kContentTextThreshold &&
+                                     natural_stats.meaningful_paragraphs >= kMinMeaningfulParagraphs;
+  const bool has_natural_text = enough_long_text || enough_paragraph_text;
+  const bool image_heavy_noise = image_count >= kImageHeavyThreshold &&
+                                 natural_stats.meaningful_paragraphs < kMinMeaningfulParagraphs &&
+                                 natural_stats.content_chars < kContentTextThreshold;
   const bool flow = has_natural_text && !image_heavy_noise;
   runtime_log::Line("[epub_flow] probe path=" + path + " docs=" + std::to_string(docs_read) +
                     " text=" + std::to_string(text_chars) + " img=" + std::to_string(image_count) +
                     " natural=" + std::to_string(natural_stats.natural_chars) +
+                    " content=" + std::to_string(natural_stats.content_chars) +
                     " natural_blocks=" + std::to_string(natural_stats.natural_blocks) +
                     " long_blocks=" + std::to_string(natural_stats.long_natural_blocks) +
+                    " paragraphs=" + std::to_string(natural_stats.meaningful_paragraphs) +
                     " max_run=" + std::to_string(natural_stats.max_run) +
                     " result=" + (flow ? "flow" : "comic"));
   return flow;
