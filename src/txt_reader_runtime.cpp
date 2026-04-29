@@ -18,7 +18,7 @@ void SyncOverlayPreviewFromCurrent(ReaderUiState &ui, int current_pct) {
 }
 
 void HandleTxtReaderInput(TxtReaderInputDeps &deps) {
-  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.txt_reader.open) return;
+  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.Txt().open) return;
 
   std::array<Button, 2> vdirs = {Button::Up, Button::Down};
   for (Button b : vdirs) {
@@ -63,15 +63,15 @@ void HandleTxtReaderInput(TxtReaderInputDeps &deps) {
     deps.text_page_by(-1);
   }
 
-  deps.ui.progress.page = (deps.ui.txt_reader.line_h > 0) ? (deps.ui.txt_reader.scroll_px / deps.ui.txt_reader.line_h) : 0;
-  deps.ui.progress.scroll_y = deps.ui.txt_reader.scroll_px;
-  if (!deps.ui.txt_reader.line_source_offsets.empty()) {
+  deps.ui.progress.page = (deps.ui.Txt().line_h > 0) ? (deps.ui.Txt().scroll_px / deps.ui.Txt().line_h) : 0;
+  deps.ui.progress.scroll_y = deps.ui.Txt().scroll_px;
+  if (!deps.ui.Txt().line_source_offsets.empty()) {
     const size_t top_line = std::min(
-        deps.ui.txt_reader.line_source_offsets.size() - 1,
-        static_cast<size_t>(std::max(0, deps.ui.txt_reader.scroll_px /
-                                               std::max(1, deps.ui.txt_reader.line_h))));
+        deps.ui.Txt().line_source_offsets.size() - 1,
+        static_cast<size_t>(std::max(0, deps.ui.Txt().scroll_px /
+                                               std::max(1, deps.ui.Txt().line_h))));
     deps.ui.progress.scroll_x = static_cast<int>(std::min<size_t>(
-        deps.ui.txt_reader.line_source_offsets[top_line], static_cast<size_t>(std::numeric_limits<int>::max())));
+        deps.ui.Txt().line_source_offsets[top_line], static_cast<size_t>(std::numeric_limits<int>::max())));
   } else {
     deps.ui.progress.scroll_x = 0;
   }
@@ -151,23 +151,23 @@ void HandleTxtProgressOverlayInput(TxtProgressOverlayInputDeps &deps) {
 }
 
 void DrawTxtReaderRuntime(TxtReaderRenderDeps &deps) {
-  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.txt_reader.open) return;
+  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.Txt().open) return;
 
   deps.clamp_text_scroll();
   const SDL_Rect clip{
-      deps.ui.txt_reader.viewport_x,
-      deps.ui.txt_reader.viewport_y,
-      deps.ui.txt_reader.viewport_w,
-      deps.ui.txt_reader.viewport_h,
+      deps.ui.Txt().viewport_x,
+      deps.ui.Txt().viewport_y,
+      deps.ui.Txt().viewport_w,
+      deps.ui.Txt().viewport_h,
   };
   deps.set_clip_rect(clip);
-  const int text_x = deps.ui.txt_reader.viewport_x + 2;
-  const int start_line = std::max(0, deps.ui.txt_reader.scroll_px / std::max(1, deps.ui.txt_reader.line_h));
-  int y = deps.ui.txt_reader.viewport_y - (deps.ui.txt_reader.scroll_px % std::max(1, deps.ui.txt_reader.line_h));
-  for (int i = start_line; i < static_cast<int>(deps.ui.txt_reader.lines.size()); ++i) {
-    if (y > deps.ui.txt_reader.viewport_y + deps.ui.txt_reader.viewport_h) break;
-    deps.draw_text_line(deps.ui.txt_reader.lines[i], text_x, y);
-    y += deps.ui.txt_reader.line_h;
+  const int text_x = deps.ui.Txt().viewport_x + 2;
+  const int start_line = std::max(0, deps.ui.Txt().scroll_px / std::max(1, deps.ui.Txt().line_h));
+  int y = deps.ui.Txt().viewport_y - (deps.ui.Txt().scroll_px % std::max(1, deps.ui.Txt().line_h));
+  for (int i = start_line; i < static_cast<int>(deps.ui.Txt().lines.size()); ++i) {
+    if (y > deps.ui.Txt().viewport_y + deps.ui.Txt().viewport_h) break;
+    deps.draw_text_line(deps.ui.Txt().lines[i], text_x, y);
+    y += deps.ui.Txt().line_h;
   }
   deps.clear_clip_rect();
 }

@@ -44,7 +44,7 @@ int EpubTapPageActionForButton(int rotation, Button button) {
 
 void HandleReaderInput(ReaderInputRouterDeps &deps) {
   ReaderMode &reader_mode = deps.ui.mode;
-  TxtReaderState &txt_reader = deps.ui.txt_reader;
+  TxtReaderState &txt_reader = deps.ui.Txt();
   bool &reader_progress_overlay_visible = deps.ui.progress_overlay_visible;
   auto &long_fired = deps.ui.long_fired;
   auto &hold_speed = deps.ui.hold_speed;
@@ -182,7 +182,7 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
     const bool zoom_in_pressed = deps.input.IsJustPressed(Button::R1);
     if (flow_epub && (rotate_left_pressed || rotate_right_pressed || zoom_out_pressed || zoom_in_pressed)) {
       if (!deps.transient_message_dismissed_this_frame && deps.show_transient_message) {
-        deps.show_transient_message("EPUB图文混排模式禁用旋转和缩放", 3000, true);
+        deps.show_transient_message("EPUB flow mode disables rotate and zoom", 3000, true);
       }
     } else {
       if (rotate_left_pressed) {

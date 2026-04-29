@@ -167,20 +167,20 @@ void CloseReaderSession(ReaderCloseDeps &deps) {
     deps.ui.progress.scroll_y = active_zip.scroll_y;
     deps.ui.progress.zoom = active_zip.zoom;
     deps.ui.progress.rotation = active_zip.rotation;
-  } else if (deps.ui.mode == ReaderMode::Txt && deps.ui.txt_reader.open) {
-    if (!deps.ui.txt_reader.line_source_offsets.empty()) {
+  } else if (deps.ui.mode == ReaderMode::Txt && deps.ui.Txt().open) {
+    if (!deps.ui.Txt().line_source_offsets.empty()) {
       const size_t top_line = std::min(
-          deps.ui.txt_reader.line_source_offsets.size() - 1,
-          static_cast<size_t>(std::max(0, deps.ui.txt_reader.scroll_px /
-                                                 std::max(1, deps.ui.txt_reader.line_h))));
+          deps.ui.Txt().line_source_offsets.size() - 1,
+          static_cast<size_t>(std::max(0, deps.ui.Txt().scroll_px /
+                                                 std::max(1, deps.ui.Txt().line_h))));
       deps.ui.progress.scroll_x = static_cast<int>(std::min<size_t>(
-          deps.ui.txt_reader.line_source_offsets[top_line], static_cast<size_t>(std::numeric_limits<int>::max())));
+          deps.ui.Txt().line_source_offsets[top_line], static_cast<size_t>(std::numeric_limits<int>::max())));
     } else {
       deps.ui.progress.scroll_x = 0;
     }
-    deps.ui.progress.page = (deps.ui.txt_reader.line_h > 0) ? (deps.ui.txt_reader.scroll_px / deps.ui.txt_reader.line_h) : 0;
-    deps.ui.progress.scroll_y = deps.ui.txt_reader.scroll_px;
-    deps.ui.txt_reader.resume_cache_dirty = true;
+    deps.ui.progress.page = (deps.ui.Txt().line_h > 0) ? (deps.ui.Txt().scroll_px / deps.ui.Txt().line_h) : 0;
+    deps.ui.progress.scroll_y = deps.ui.Txt().scroll_px;
+    deps.ui.Txt().resume_cache_dirty = true;
     deps.persist_current_txt_resume_snapshot(deps.ui.current_book, true);
   }
 

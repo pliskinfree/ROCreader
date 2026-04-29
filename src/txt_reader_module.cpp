@@ -7,7 +7,21 @@
 #include <utility>
 
 TxtReaderModule::TxtReaderModule(ReaderUiState &ui, TxtReaderModuleCallbacks callbacks)
-    : ui_(ui), callbacks_(std::move(callbacks)) {}
+    : ui_(ui), callbacks_(std::move(callbacks)) {
+  ui_.BindTxtReaderState(&state_);
+}
+
+TxtReaderModule::~TxtReaderModule() {
+  ui_.BindTxtReaderState(nullptr);
+}
+
+TxtReaderState &TxtReaderModule::State() {
+  return state_;
+}
+
+const TxtReaderState &TxtReaderModule::State() const {
+  return state_;
+}
 
 bool TxtReaderModule::Open(const ReaderOpenRequest &request) {
   return callbacks_.open_text_book ? callbacks_.open_text_book(request.path) : false;
@@ -18,12 +32,12 @@ void TxtReaderModule::Close() {
 }
 
 bool TxtReaderModule::IsOpen() const {
-  return ui_.mode == ReaderMode::Txt && ui_.txt_reader.open;
+  return ui_.mode == ReaderMode::Txt && ui_.Txt().open;
 }
 
 void TxtReaderModule::UpdateViewport(int w, int h) {
-  ui_.txt_reader.viewport_w = w;
-  ui_.txt_reader.viewport_h = h;
+  ui_.Txt().viewport_w = w;
+  ui_.Txt().viewport_h = h;
 }
 
 void TxtReaderModule::Tick(float dt) {
@@ -41,17 +55,17 @@ void TxtReaderModule::HandleInput(const InputManager &input, float dt) {
 
 ReaderProgress TxtReaderModule::Progress() const {
   ReaderProgress progress = ui_.progress;
-  if (!ui_.txt_reader.line_source_offsets.empty()) {
+  if (!ui_.Txt().line_source_offsets.empty()) {
     const size_t top_line = std::min(
-        ui_.txt_reader.line_source_offsets.size() - 1,
-        static_cast<size_t>(std::max(0, ui_.txt_reader.scroll_px / std::max(1, ui_.txt_reader.line_h))));
+        ui_.Txt().line_source_offsets.size() - 1,
+        static_cast<size_t>(std::max(0, ui_.Txt().scroll_px / std::max(1, ui_.Txt().line_h))));
     progress.scroll_x = static_cast<int>(std::min<size_t>(
-        ui_.txt_reader.line_source_offsets[top_line], static_cast<size_t>(std::numeric_limits<int>::max())));
+        ui_.Txt().line_source_offsets[top_line], static_cast<size_t>(std::numeric_limits<int>::max())));
   } else {
     progress.scroll_x = 0;
   }
-  progress.page = (ui_.txt_reader.line_h > 0) ? (ui_.txt_reader.scroll_px / ui_.txt_reader.line_h) : 0;
-  progress.scroll_y = ui_.txt_reader.scroll_px;
+  progress.page = (ui_.Txt().line_h > 0) ? (ui_.Txt().scroll_px / ui_.Txt().line_h) : 0;
+  progress.scroll_y = ui_.Txt().scroll_px;
   return progress;
 }
 
@@ -60,13 +74,13 @@ void TxtReaderModule::RestoreProgress(const ReaderProgress &progress) {
 }
 
 int TxtReaderModule::PageCount() const {
-  const int viewport_h = std::max(1, ui_.txt_reader.viewport_h);
-  return std::max(1, (ui_.txt_reader.content_h + viewport_h - 1) / viewport_h);
+  const int viewport_h = std::max(1, ui_.Txt().viewport_h);
+  return std::max(1, (ui_.Txt().content_h + viewport_h - 1) / viewport_h);
 }
 
 int TxtReaderModule::CurrentPage() const {
-  const int viewport_h = std::max(1, ui_.txt_reader.viewport_h);
-  return std::max(0, ui_.txt_reader.scroll_px / viewport_h);
+  const int viewport_h = std::max(1, ui_.Txt().viewport_h);
+  return std::max(0, ui_.Txt().scroll_px / viewport_h);
 }
 
 ReaderCapabilities TxtReaderModule::Capabilities() const {

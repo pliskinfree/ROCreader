@@ -16,6 +16,10 @@ struct TxtReaderModuleCallbacks {
 class TxtReaderModule final : public IReaderModule {
 public:
   TxtReaderModule(ReaderUiState &ui, TxtReaderModuleCallbacks callbacks);
+  ~TxtReaderModule() override;
+
+  TxtReaderState &State();
+  const TxtReaderState &State() const;
 
   bool Open(const ReaderOpenRequest &request) override;
   void Close() override;
@@ -32,6 +36,6 @@ public:
 
 private:
   ReaderUiState &ui_;
+  TxtReaderState state_;
   TxtReaderModuleCallbacks callbacks_;
 };
-

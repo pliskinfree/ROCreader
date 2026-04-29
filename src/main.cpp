@@ -1338,7 +1338,6 @@ int main(int, char **argv) {
   std::string &current_book = reader_ui.current_book;
   ReaderProgress &reader = reader_ui.progress;
   ReaderMode &reader_mode = reader_ui.mode;
-  TxtReaderState &txt_reader = reader_ui.txt_reader;
   bool &reader_progress_overlay_visible = reader_ui.progress_overlay_visible;
   float &hold_cooldown = reader_ui.hold_cooldown;
   int nav_selected_index = 0; // 0: ALL COMICS, 1: ALL BOOKS, 2: COLLECTIONS, 3: HISTORY
@@ -1723,7 +1722,7 @@ int main(int, char **argv) {
   auto invalidate_all_render_cache = [&]() {};
 
   auto close_text_reader = [&]() {
-    txt_reader = TxtReaderState{};
+    reader_ui.Txt() = TxtReaderState{};
     reader_progress_overlay_visible = false;
     if (reader_mode == ReaderMode::Txt) {
       reader_mode = ReaderMode::None;
@@ -1731,16 +1730,16 @@ int main(int, char **argv) {
   };
 
   auto clamp_text_scroll = [&]() {
-    const int max_scroll = std::max(0, txt_reader.content_h - txt_reader.viewport_h);
-    txt_reader.scroll_px = ClampInt(txt_reader.scroll_px, 0, max_scroll);
-    if (!txt_reader.loading) {
-      reader.scroll_y = txt_reader.scroll_px;
-      if (!txt_reader.line_source_offsets.empty()) {
+    const int max_scroll = std::max(0, reader_ui.Txt().content_h - reader_ui.Txt().viewport_h);
+    reader_ui.Txt().scroll_px = ClampInt(reader_ui.Txt().scroll_px, 0, max_scroll);
+    if (!reader_ui.Txt().loading) {
+      reader.scroll_y = reader_ui.Txt().scroll_px;
+      if (!reader_ui.Txt().line_source_offsets.empty()) {
         const size_t top_line = std::min(
-            txt_reader.line_source_offsets.size() - 1,
-            static_cast<size_t>(std::max(0, txt_reader.scroll_px / std::max(1, txt_reader.line_h))));
+            reader_ui.Txt().line_source_offsets.size() - 1,
+            static_cast<size_t>(std::max(0, reader_ui.Txt().scroll_px / std::max(1, reader_ui.Txt().line_h))));
         reader.scroll_x = static_cast<int>(std::min<size_t>(
-            txt_reader.line_source_offsets[top_line], static_cast<size_t>(std::numeric_limits<int>::max())));
+            reader_ui.Txt().line_source_offsets[top_line], static_cast<size_t>(std::numeric_limits<int>::max())));
       } else {
         reader.scroll_x = 0;
       }
@@ -1941,7 +1940,7 @@ int main(int, char **argv) {
     const bool has_active_animation =
         state == State::Boot || input.AnyPressed() ||
         txt_transcode_job.active ||
-        (reader_mode == ReaderMode::Txt && txt_reader.open && txt_reader.loading) ||
+        (reader_mode == ReaderMode::Txt && reader_ui.Txt().open && reader_ui.Txt().loading) ||
         version_update_download_active ||
         contributor_marquee_active ||
         (animate_enabled && (menu_anim.IsAnimating() || scene_flash.IsAnimating() || page_animating || any_grid_animating));
@@ -2034,7 +2033,7 @@ int main(int, char **argv) {
 
     system_status.Poll(now);
 
-    if (reader_mode == ReaderMode::Txt && txt_reader.open && txt_reader.loading) {
+    if (reader_mode == ReaderMode::Txt && reader_ui.Txt().open && reader_ui.Txt().loading) {
       auto deps = make_txt_session_deps();
       TickTextBookSession(current_book, deps, 5, 24576);
     }
@@ -2409,18 +2408,8 @@ int main(int, char **argv) {
                 const int next_level = ClampTxtFontSizeLevel(settings_state.font_size_level + delta);
                 if (next_level == settings_state.font_size_level) return false;
                 apply_txt_font_size_level(next_level);
-                if (reader_mode == ReaderMode::Txt && txt_reader.open && !current_book.empty()) {
-                  if (!txt_reader.line_source_offsets.empty()) {
-                    const size_t top_line = std::min(
-                        txt_reader.line_source_offsets.size() - 1,
-                        static_cast<size_t>(std::max(0, txt_reader.scroll_px / std::max(1, txt_reader.line_h))));
-                    reader.scroll_x = static_cast<int>(std::min<size_t>(
-                        txt_reader.line_source_offsets[top_line], static_cast<size_t>(std::numeric_limits<int>::max())));
-                  } else {
-                    reader.scroll_x = 0;
-                  }
-                  reader.page = (txt_reader.line_h > 0) ? (txt_reader.scroll_px / txt_reader.line_h) : 0;
-                  reader.scroll_y = txt_reader.scroll_px;
+                if (reader_mode == ReaderMode::Txt && reader_ui.Txt().open && !current_book.empty()) {
+                  reader = txt_reader_module.Progress();
                   open_text_book(current_book);
                 }
                 settings_state.font_size_level = next_level;
@@ -2668,11 +2657,11 @@ int main(int, char **argv) {
 
       if (state == State::Reader) {
         const SDL_Color reader_bg =
-            (reader_mode == ReaderMode::Txt && txt_reader.open)
+            (reader_mode == ReaderMode::Txt && reader_ui.Txt().open)
                 ? GetTxtBackgroundColor(config.Get().txt_background_color)
                 : SDL_Color{12, 12, 12, 255};
         DrawRect(renderer, 0, 0, Layout().screen_w, Layout().screen_h, reader_bg);
-        if (reader_mode == ReaderMode::Txt && txt_reader.open) {
+        if (reader_mode == ReaderMode::Txt && reader_ui.Txt().open) {
           TxtReaderRenderDeps txt_render_deps{
               renderer,
               reader_ui,
@@ -2827,19 +2816,9 @@ int main(int, char **argv) {
       reader.scroll_y = active_zip.scroll_y;
       reader.zoom = active_zip.zoom;
       reader.rotation = active_zip.rotation;
-    } else if (reader_mode == ReaderMode::Txt && txt_reader.open) {
-      if (!txt_reader.line_source_offsets.empty()) {
-        const size_t top_line = std::min(
-            txt_reader.line_source_offsets.size() - 1,
-            static_cast<size_t>(std::max(0, txt_reader.scroll_px / std::max(1, txt_reader.line_h))));
-        reader.scroll_x = static_cast<int>(std::min<size_t>(
-            txt_reader.line_source_offsets[top_line], static_cast<size_t>(std::numeric_limits<int>::max())));
-      } else {
-        reader.scroll_x = 0;
-      }
-      reader.page = (txt_reader.line_h > 0) ? (txt_reader.scroll_px / txt_reader.line_h) : 0;
-      reader.scroll_y = txt_reader.scroll_px;
-      txt_reader.resume_cache_dirty = true;
+    } else if (reader_mode == ReaderMode::Txt && reader_ui.Txt().open) {
+      reader = txt_reader_module.Progress();
+      reader_ui.Txt().resume_cache_dirty = true;
       persist_current_txt_resume_snapshot(current_book, true);
     } else if (state != State::Reader) {
       // Not actively reading anymore.

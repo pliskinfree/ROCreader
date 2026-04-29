@@ -44,7 +44,7 @@ int ReaderPageIndexForPercent(int current_page, int target_pct, int page_count) 
 
 void ReaderJumpToPercent(ReaderProgressControllerDeps &deps, int pct) {
   ReaderMode reader_mode = deps.ui.mode;
-  TxtReaderState &txt_reader = deps.ui.txt_reader;
+  TxtReaderState &txt_reader = deps.ui.Txt();
   if (reader_mode == ReaderMode::Txt && txt_reader.open) {
     if (deps.text_jump_to_percent) deps.text_jump_to_percent(pct);
     return;
@@ -70,7 +70,7 @@ void ReaderJumpToPercent(ReaderProgressControllerDeps &deps, int pct) {
 
 int CurrentReaderProgressPercent(const ReaderProgressControllerDeps &deps) {
   ReaderMode reader_mode = deps.ui.mode;
-  const TxtReaderState &txt_reader = deps.ui.txt_reader;
+  const TxtReaderState &txt_reader = deps.ui.Txt();
   if (reader_mode == ReaderMode::Txt && txt_reader.open) {
     return TxtReaderProgressPercent(txt_reader);
   }
@@ -99,11 +99,11 @@ int CurrentReaderProgressPercent(const ReaderProgressControllerDeps &deps) {
 }
 
 int CurrentTxtLayoutProgressPercent(const ReaderUiState &ui) {
-  if (!(ui.mode == ReaderMode::Txt && ui.txt_reader.open)) return 0;
-  if (!ui.txt_reader.loading) return 100;
-  const size_t total = ui.txt_reader.pending_raw.size();
+  if (!(ui.mode == ReaderMode::Txt && ui.Txt().open)) return 0;
+  if (!ui.Txt().loading) return 100;
+  const size_t total = ui.Txt().pending_raw.size();
   if (total == 0) return 0;
-  return ClampIntLocal(static_cast<int>((static_cast<int64_t>(ui.txt_reader.parse_pos) * 100) / total), 0, 100);
+  return ClampIntLocal(static_cast<int>((static_cast<int64_t>(ui.Txt().parse_pos) * 100) / total), 0, 100);
 }
 
 void DrawReaderProgressOverlay(ReaderProgressOverlayRenderDeps &deps) {
@@ -113,7 +113,7 @@ void DrawReaderProgressOverlay(ReaderProgressOverlayRenderDeps &deps) {
 
   ReaderUiState &ui = deps.progress.ui;
   const ReaderMode reader_mode = ui.mode;
-  const TxtReaderState &txt_reader = ui.txt_reader;
+  const TxtReaderState &txt_reader = ui.Txt();
   const int actual_pct = CurrentReaderProgressPercent(deps.progress);
   const int txt_layout_pct = CurrentTxtLayoutProgressPercent(ui);
   const bool txt_progress_computing = (reader_mode == ReaderMode::Txt && txt_reader.open && txt_reader.loading);

@@ -76,10 +76,17 @@ struct TxtTranscodeJob {
 };
 
 struct ReaderUiState {
+  ReaderUiState() : txt_reader_ptr(&txt_reader_storage) {}
+
+  TxtReaderState &Txt() { return *txt_reader_ptr; }
+  const TxtReaderState &Txt() const { return *txt_reader_ptr; }
+  void BindTxtReaderState(TxtReaderState *state) {
+    txt_reader_ptr = state ? state : &txt_reader_storage;
+  }
+
   std::string current_book;
   ReaderProgress progress;
   ReaderMode mode = ReaderMode::None;
-  TxtReaderState txt_reader;
   bool progress_overlay_visible = false;
   bool progress_overlay_scrubbing = false;
   bool progress_overlay_dirty = false;
@@ -92,6 +99,10 @@ struct ReaderUiState {
   std::array<bool, kButtonCount> progress_overlay_long_fired{};
   bool warned_mock_pdf_backend = false;
   bool warned_epub_backend = false;
+
+private:
+  TxtReaderState txt_reader_storage;
+  TxtReaderState *txt_reader_ptr = nullptr;
 };
 
 inline void ResetReaderInputState(ReaderUiState &state) {

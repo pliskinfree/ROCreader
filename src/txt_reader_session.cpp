@@ -159,8 +159,8 @@ void WarmTextReaderToTarget(TxtReaderState &state, const std::string *cache_key,
 
 void TickTextBookSession(const std::string &book_path, TxtReaderSessionDeps &deps,
                          uint32_t budget_ms, size_t byte_budget) {
-  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.txt_reader.open || !deps.ui.txt_reader.loading) return;
-  ProcessTextLayoutChunk(deps.ui.txt_reader, budget_ms, byte_budget, &deps.ui.txt_reader.cache_key, deps);
+  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.Txt().open || !deps.ui.Txt().loading) return;
+  ProcessTextLayoutChunk(deps.ui.Txt(), budget_ms, byte_budget, &deps.ui.Txt().cache_key, deps);
   deps.clamp_text_scroll();
   PersistCurrentTxtResumeSnapshot(book_path, false, deps);
 }
@@ -210,7 +210,7 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
     next.restore_source_offset = preferred_source_offset;
     next.target_scroll_px = initial_target_scroll_px;
     SyncScrollToRestoreAnchor(next);
-    deps.ui.txt_reader = std::move(next);
+    deps.ui.Txt() = std::move(next);
     deps.ui.mode = ReaderMode::Txt;
     deps.ui.progress_overlay_visible = false;
     deps.invalidate_all_render_cache();
@@ -233,7 +233,7 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
     next.restore_source_offset = preferred_source_offset;
     next.target_scroll_px = initial_target_scroll_px;
     SyncScrollToRestoreAnchor(next);
-    deps.ui.txt_reader = std::move(next);
+    deps.ui.Txt() = std::move(next);
     deps.ui.mode = ReaderMode::Txt;
     deps.ui.progress_overlay_visible = false;
     deps.invalidate_all_render_cache();
@@ -267,8 +267,8 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
       SyncScrollToRestoreAnchor(next);
       next.last_resume_cache_save = SDL_GetTicks();
       next.resume_cache_dirty = false;
-      deps.ui.txt_reader = std::move(next);
-      SyncScrollToRestoreAnchor(deps.ui.txt_reader);
+      deps.ui.Txt() = std::move(next);
+      SyncScrollToRestoreAnchor(deps.ui.Txt());
       deps.ui.mode = ReaderMode::Txt;
       deps.ui.progress_overlay_visible = false;
       deps.invalidate_all_render_cache();
@@ -327,11 +327,11 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
   next.last_resume_cache_save = 0;
   next.resume_cache_dirty = true;
 
-  deps.ui.txt_reader = std::move(next);
-  ProcessTextLayoutChunk(deps.ui.txt_reader, 8, 32768, &deps.ui.txt_reader.cache_key, deps);
-  WarmTextReaderToTarget(deps.ui.txt_reader, &deps.ui.txt_reader.cache_key, deps);
-  if (!deps.ui.txt_reader.loading) FinalizeTextReaderLoading(deps.ui.txt_reader, &deps.ui.txt_reader.cache_key, deps);
-  SyncScrollToRestoreAnchor(deps.ui.txt_reader);
+  deps.ui.Txt() = std::move(next);
+  ProcessTextLayoutChunk(deps.ui.Txt(), 8, 32768, &deps.ui.Txt().cache_key, deps);
+  WarmTextReaderToTarget(deps.ui.Txt(), &deps.ui.Txt().cache_key, deps);
+  if (!deps.ui.Txt().loading) FinalizeTextReaderLoading(deps.ui.Txt(), &deps.ui.Txt().cache_key, deps);
+  SyncScrollToRestoreAnchor(deps.ui.Txt());
   deps.ui.mode = ReaderMode::Txt;
   deps.ui.progress_overlay_visible = false;
   deps.invalidate_all_render_cache();
@@ -379,7 +379,7 @@ bool OpenTextBufferSession(const std::string &path, std::string raw, uintmax_t l
     next.restore_source_offset = preferred_source_offset;
     next.target_scroll_px = std::max(0, deps.ui.progress.scroll_y);
     SyncScrollToRestoreAnchor(next);
-    deps.ui.txt_reader = std::move(next);
+    deps.ui.Txt() = std::move(next);
     deps.ui.mode = ReaderMode::Txt;
     deps.ui.progress_overlay_visible = false;
     deps.invalidate_all_render_cache();
@@ -402,7 +402,7 @@ bool OpenTextBufferSession(const std::string &path, std::string raw, uintmax_t l
     next.restore_source_offset = preferred_source_offset;
     next.target_scroll_px = std::max(0, deps.ui.progress.scroll_y);
     SyncScrollToRestoreAnchor(next);
-    deps.ui.txt_reader = std::move(next);
+    deps.ui.Txt() = std::move(next);
     deps.ui.mode = ReaderMode::Txt;
     deps.ui.progress_overlay_visible = false;
     deps.invalidate_all_render_cache();
@@ -428,11 +428,11 @@ bool OpenTextBufferSession(const std::string &path, std::string raw, uintmax_t l
   next.last_resume_cache_save = 0;
   next.resume_cache_dirty = true;
 
-  deps.ui.txt_reader = std::move(next);
-  ProcessTextLayoutChunk(deps.ui.txt_reader, 8, 32768, &deps.ui.txt_reader.cache_key, deps);
-  WarmTextReaderToTarget(deps.ui.txt_reader, &deps.ui.txt_reader.cache_key, deps);
-  if (!deps.ui.txt_reader.loading) FinalizeTextReaderLoading(deps.ui.txt_reader, &deps.ui.txt_reader.cache_key, deps);
-  SyncScrollToRestoreAnchor(deps.ui.txt_reader);
+  deps.ui.Txt() = std::move(next);
+  ProcessTextLayoutChunk(deps.ui.Txt(), 8, 32768, &deps.ui.Txt().cache_key, deps);
+  WarmTextReaderToTarget(deps.ui.Txt(), &deps.ui.Txt().cache_key, deps);
+  if (!deps.ui.Txt().loading) FinalizeTextReaderLoading(deps.ui.Txt(), &deps.ui.Txt().cache_key, deps);
+  SyncScrollToRestoreAnchor(deps.ui.Txt());
   deps.ui.mode = ReaderMode::Txt;
   deps.ui.progress_overlay_visible = false;
   deps.invalidate_all_render_cache();
@@ -442,17 +442,17 @@ bool OpenTextBufferSession(const std::string &path, std::string raw, uintmax_t l
 
 void PersistCurrentTxtResumeSnapshot(const std::string &book_path, bool force, TxtReaderSessionDeps &deps) {
   if (book_path.empty()) return;
-  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.txt_reader.open) return;
-  if (!force && !deps.ui.txt_reader.resume_cache_dirty) return;
+  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.Txt().open) return;
+  if (!force && !deps.ui.Txt().resume_cache_dirty) return;
   const uint32_t now = SDL_GetTicks();
-  if (!force && deps.ui.txt_reader.last_resume_cache_save != 0 &&
-      now - deps.ui.txt_reader.last_resume_cache_save < deps.txt_resume_save_delay_ms) {
+  if (!force && deps.ui.Txt().last_resume_cache_save != 0 &&
+      now - deps.ui.Txt().last_resume_cache_save < deps.txt_resume_save_delay_ms) {
     return;
   }
 
-  TxtReaderState snapshot = deps.ui.txt_reader;
-  snapshot.scroll_px = deps.ui.txt_reader.scroll_px;
-  snapshot.target_scroll_px = deps.ui.txt_reader.scroll_px;
+  TxtReaderState snapshot = deps.ui.Txt();
+  snapshot.scroll_px = deps.ui.Txt().scroll_px;
+  snapshot.target_scroll_px = deps.ui.Txt().scroll_px;
   snapshot.restore_source_offset = TopVisibleSourceOffset(snapshot);
   snapshot.resume_cache_dirty = false;
   snapshot.last_resume_cache_save = now;
@@ -466,29 +466,29 @@ void PersistCurrentTxtResumeSnapshot(const std::string &book_path, bool force, T
   }
   if (snapshot.cache_key.empty()) return;
   deps.save_resume_cache_to_disk(snapshot.cache_key, book_path, snapshot);
-  deps.ui.txt_reader.last_resume_cache_save = now;
-  deps.ui.txt_reader.resume_cache_dirty = false;
+  deps.ui.Txt().last_resume_cache_save = now;
+  deps.ui.Txt().resume_cache_dirty = false;
 }
 
 void TextScrollBy(int delta_px, const std::string &book_path, TxtReaderSessionDeps &deps) {
-  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.txt_reader.open) return;
-  deps.ui.txt_reader.restore_source_offset = 0;
-  deps.ui.txt_reader.scroll_px += delta_px;
-  deps.ui.txt_reader.target_scroll_px = deps.ui.txt_reader.scroll_px;
+  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.Txt().open) return;
+  deps.ui.Txt().restore_source_offset = 0;
+  deps.ui.Txt().scroll_px += delta_px;
+  deps.ui.Txt().target_scroll_px = deps.ui.Txt().scroll_px;
   deps.clamp_text_scroll();
-  deps.ui.txt_reader.resume_cache_dirty = true;
+  deps.ui.Txt().resume_cache_dirty = true;
   PersistCurrentTxtResumeSnapshot(book_path, false, deps);
 }
 
 void TextPageBy(int dir, const std::string &book_path, TxtReaderSessionDeps &deps) {
-  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.txt_reader.open) return;
-  const int step = std::max(80, deps.ui.txt_reader.viewport_h - deps.ui.txt_reader.line_h);
+  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.Txt().open) return;
+  const int step = std::max(80, deps.ui.Txt().viewport_h - deps.ui.Txt().line_h);
   TextScrollBy(dir * step, book_path, deps);
 }
 
 void TextJumpToPercent(int pct, const std::string &book_path, TxtReaderSessionDeps &deps) {
-  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.txt_reader.open) return;
-  TxtReaderState &state = deps.ui.txt_reader;
+  if (deps.ui.mode != ReaderMode::Txt || !deps.ui.Txt().open) return;
+  TxtReaderState &state = deps.ui.Txt();
   const int clamped_pct = ClampIntLocal(pct, 0, 100);
   const int current_max_scroll = std::max(0, state.content_h - state.viewport_h);
   int target_scroll = ScrollForPercent(clamped_pct, current_max_scroll);
