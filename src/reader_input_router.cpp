@@ -45,6 +45,10 @@ int EpubTapPageActionForButton(int rotation, Button button) {
 void HandleReaderInput(ReaderInputRouterDeps &deps) {
   ReaderMode &reader_mode = deps.ui.mode;
   TxtReaderState &txt_reader = deps.ui.Txt();
+  IReaderModule *epub_module = deps.reader_manager ? deps.reader_manager->Module(ReaderMode::Epub) : nullptr;
+  auto epub_is_open = [&]() {
+    return epub_module ? epub_module->IsOpen() : deps.epub_runtime.IsOpen();
+  };
   bool &reader_progress_overlay_visible = deps.ui.progress_overlay_visible;
   auto &long_fired = deps.ui.long_fired;
   auto &hold_speed = deps.ui.hold_speed;
@@ -66,7 +70,7 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
   if (reader_progress_overlay_visible &&
       ((reader_mode == ReaderMode::Txt && txt_reader.open) ||
        (reader_mode == ReaderMode::Pdf && deps.pdf_runtime.IsOpen()) ||
-       (reader_mode == ReaderMode::Epub && deps.epub_runtime.IsOpen()) ||
+       (reader_mode == ReaderMode::Epub && epub_is_open()) ||
        (reader_mode == ReaderMode::ZipImage && deps.zip_image_runtime.IsOpen()))) {
     TxtProgressOverlayInputDeps txt_overlay_input_deps{
         deps.input,
@@ -166,9 +170,46 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
       }
     }
   } else if (reader_mode == ReaderMode::Epub) {
-    const int epub_rotation = deps.epub_runtime.Progress().rotation;
-    const auto epub_progress = deps.epub_runtime.Progress();
-    const bool flow_epub = std::string(deps.epub_runtime.BackendName()) == "epub-flow";
+    auto epub_progress_for_input = [&]() {
+      if (epub_module) return epub_module->Progress();
+      const auto progress = deps.epub_runtime.Progress();
+      return ReaderProgress{progress.page, progress.rotation, progress.zoom, progress.scroll_x, progress.scroll_y};
+    };
+    auto epub_rotate_left = [&]() {
+      if (epub_module) epub_module->RotateLeft();
+      else deps.epub_runtime.RotateLeft();
+    };
+    auto epub_rotate_right = [&]() {
+      if (epub_module) epub_module->RotateRight();
+      else deps.epub_runtime.RotateRight();
+    };
+    auto epub_zoom_out = [&]() {
+      if (epub_module) epub_module->ZoomOut();
+      else deps.epub_runtime.ZoomOut();
+    };
+    auto epub_zoom_in = [&]() {
+      if (epub_module) epub_module->ZoomIn();
+      else deps.epub_runtime.ZoomIn();
+    };
+    auto epub_reset_view = [&]() {
+      if (epub_module) epub_module->ResetView();
+      else deps.epub_runtime.ResetView();
+    };
+    auto epub_pan_horizontal = [&](int delta_px) {
+      return epub_module ? epub_module->PanHorizontalByPixels(delta_px)
+                         : deps.epub_runtime.PanHorizontalByPixels(delta_px);
+    };
+    auto epub_scroll_by = [&](int delta_px) {
+      if (epub_module) epub_module->ScrollByPixels(delta_px);
+      else deps.epub_runtime.ScrollByPixels(delta_px);
+    };
+    auto epub_jump_by_screen = [&](int direction) {
+      if (epub_module) epub_module->JumpByScreen(direction);
+      else deps.epub_runtime.JumpByScreen(direction);
+    };
+    const ReaderProgress epub_progress = epub_progress_for_input();
+    const int epub_rotation = epub_progress.rotation;
+    const bool flow_epub = std::string(epub_module ? epub_module->BackendName() : deps.epub_runtime.BackendName()) == "epub-flow";
     const bool epub_zoomed = !flow_epub && epub_progress.zoom > 1.0005f;
     auto epub_pan_delta_for_page_button = [&](Button button) -> int {
       const int page_action = EpubTapPageActionForButton(epub_rotation, button);
@@ -186,20 +227,20 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
       }
     } else {
       if (rotate_left_pressed) {
-        deps.epub_runtime.RotateLeft();
+        epub_rotate_left();
       }
       if (rotate_right_pressed) {
-        deps.epub_runtime.RotateRight();
+        epub_rotate_right();
       }
       if (zoom_out_pressed) {
-        deps.epub_runtime.ZoomOut();
+        epub_zoom_out();
       }
       if (zoom_in_pressed) {
-        deps.epub_runtime.ZoomIn();
+        epub_zoom_in();
       }
     }
     if (deps.input.IsJustPressed(Button::A)) {
-      deps.epub_runtime.ResetView();
+      epub_reset_view();
     }
 
     if (flow_epub) {
@@ -209,7 +250,7 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
         const int long_dir = (b == Button::Down) ? 1 : -1;
         if (deps.input.IsPressed(b) && deps.input.HoldTime(b) >= 0.28f) {
           long_fired[bi] = true;
-          deps.epub_runtime.ScrollByPixels(long_dir * 20);
+          epub_scroll_by(long_dir * 20);
         } else if (!deps.input.IsPressed(b)) {
           hold_speed[bi] = 0.0f;
         }
@@ -223,13 +264,13 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
           continue;
         }
         const int tap_dir = (b == Button::Down) ? 1 : -1;
-        deps.epub_runtime.ScrollByPixels(tap_dir * 60);
+        epub_scroll_by(tap_dir * 60);
       }
 
       if (deps.input.IsJustPressed(Button::Right)) {
-        deps.epub_runtime.JumpByScreen(1);
+        epub_jump_by_screen(1);
       } else if (deps.input.IsJustPressed(Button::Left)) {
-        deps.epub_runtime.JumpByScreen(-1);
+        epub_jump_by_screen(-1);
       }
     } else {
       std::array<Button, 4> dirs = {Button::Up, Button::Down, Button::Left, Button::Right};
@@ -241,7 +282,7 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
             const int pan_delta = epub_pan_delta_for_page_button(b);
             if (pan_delta != 0 && deps.input.IsPressed(b) && deps.input.HoldTime(b) >= 0.28f) {
               long_fired[bi] = true;
-              deps.epub_runtime.PanHorizontalByPixels(pan_delta > 0 ? 20 : -20);
+              epub_pan_horizontal(pan_delta > 0 ? 20 : -20);
             }
           }
           hold_speed[bi] = 0.0f;
@@ -249,7 +290,7 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
         }
         if (deps.input.IsPressed(b) && deps.input.HoldTime(b) >= 0.28f) {
           long_fired[bi] = true;
-          deps.epub_runtime.ScrollByPixels(long_dir * 20);
+          epub_scroll_by(long_dir * 20);
         } else if (!deps.input.IsPressed(b)) {
           hold_speed[bi] = 0.0f;
         }
@@ -264,18 +305,18 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
         }
         const int tap_dir = EpubScrollDirForButton(epub_rotation, b);
         if (tap_dir != 0) {
-          deps.epub_runtime.ScrollByPixels(tap_dir * 60);
+          epub_scroll_by(tap_dir * 60);
         } else {
           if (epub_zoomed) {
             const int pan_delta = epub_pan_delta_for_page_button(b);
             if (pan_delta != 0) {
-              deps.epub_runtime.PanHorizontalByPixels(pan_delta);
+              epub_pan_horizontal(pan_delta);
               continue;
             }
           }
           const int page_action = EpubTapPageActionForButton(epub_rotation, b);
           if (page_action != 0) {
-            deps.epub_runtime.JumpByScreen(page_action);
+            epub_jump_by_screen(page_action);
           }
         }
       }
@@ -355,4 +396,3 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
     }
   }
 }
-

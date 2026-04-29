@@ -1,5 +1,6 @@
 #include "pdf_runtime.h"
 
+#include "async_image_render_queue.h"
 #include "pdf_reader.h"
 
 #include <SDL.h>
@@ -52,6 +53,33 @@ struct PdfState {
            std::abs(view.zoom - other.view.zoom) < 0.0005f;
   }
 };
+
+AsyncImageRenderJob MakeAsyncJobForState(const std::string &path,
+                                         const PdfState &state,
+                                         float render_scale,
+                                         bool prefetch) {
+  AsyncImageRenderJob job;
+  job.active = true;
+  job.prefetch = prefetch;
+  job.source_key = path;
+  job.page = state.location.page_num;
+  job.scale = render_scale;
+  job.rotation = state.view.rotation;
+  job.zoom = state.view.zoom;
+  job.scroll_x = state.location.x_offset;
+  job.scroll_y = state.location.y_offset;
+  return job;
+}
+
+PdfState StateFromAsyncJob(const AsyncImageRenderJob &job) {
+  PdfState state;
+  state.location.page_num = job.page;
+  state.location.x_offset = job.scroll_x;
+  state.location.y_offset = job.scroll_y;
+  state.view.rotation = job.rotation;
+  state.view.zoom = job.zoom;
+  return state;
+}
 
 struct RenderResult {
   bool ready = false;
@@ -166,16 +194,11 @@ struct PdfRuntime::Impl {
   uint64_t cache_stamp = 0;
 
   SDL_mutex *mutex = SDL_CreateMutex();
-  SDL_cond *cond = SDL_CreateCond();
-  SDL_Thread *worker = nullptr;
-  bool worker_running = false;
   bool request_active = false;
   bool prefetch_active = false;
   PdfState requested_state;
   PdfState prefetched_state;
-  RenderResult result;
-  std::atomic<bool> cancel_requested{false};
-  uint64_t target_serial = 0;
+  AsyncImageRenderQueue render_queue;
   int preferred_prefetch_dir = 1;
   bool visual_render_delay_active = false;
   Uint32 visual_render_due_ms = 0;
@@ -186,19 +209,10 @@ struct PdfRuntime::Impl {
   int reusable_texture_h = 0;
 
   ~Impl() {
-    if (worker) {
-      SDL_LockMutex(mutex);
-      worker_running = false;
-      cancel_requested.store(true);
-      SDL_CondSignal(cond);
-      SDL_UnlockMutex(mutex);
-      SDL_WaitThread(worker, nullptr);
-      worker = nullptr;
-    }
+    render_queue.Shutdown();
     DestroyTexture();
     ClearTextureCache();
     DestroyReusableTexture();
-    if (cond) SDL_DestroyCond(cond);
     if (mutex) SDL_DestroyMutex(mutex);
   }
 
@@ -468,6 +482,27 @@ struct PdfRuntime::Impl {
     return true;
   }
 
+  bool RenderAsyncJob(const AsyncImageRenderJob &job,
+                      std::atomic<bool> &cancel,
+                      AsyncImageRenderResult &out) {
+    PdfReader worker_reader;
+    if (!worker_reader.Open(job.source_key)) return false;
+
+    std::vector<unsigned char> rgba;
+    int raw_w = 0;
+    int raw_h = 0;
+    const bool ok = worker_reader.RenderPageRGBA(job.page, job.scale, rgba, raw_w, raw_h, &cancel);
+    worker_reader.Close();
+    if (!ok) return false;
+
+    int rotated_w = 0;
+    int rotated_h = 0;
+    out.rgba = RotateRgba(rgba, raw_w, raw_h, job.rotation, rotated_w, rotated_h);
+    out.width = rotated_w;
+    out.height = rotated_h;
+    return true;
+  }
+
   SDL_Texture *CreateTextureFromResult(const RenderResult &ready) {
     SDL_Texture *next = nullptr;
     if (reusable_texture && reusable_texture_w == ready.texture_w &&
@@ -530,7 +565,7 @@ struct PdfRuntime::Impl {
     if (!reader.IsOpen()) return false;
     if (!display_valid || !visible_source.valid) return false;
     if (!display_state.SameVisualState(target_state)) return false;
-    if (request_active || prefetch_active || visual_render_delay_active || result.ready) return false;
+    if (request_active || prefetch_active || visual_render_delay_active) return false;
     if (!SDL_TICKS_PASSED(now, last_interaction_ticks + kIdlePrefetchDelayMs)) return false;
 
     PdfState candidate = target_state;
@@ -646,18 +681,17 @@ struct PdfRuntime::Impl {
     ClampPage(candidate.location);
     if (HasVisualTextureForState(candidate)) return;
     prefetched_state = candidate;
-    prefetch_active = true;
-    SDL_CondSignal(cond);
+    prefetch_active =
+        render_queue.Request(MakeAsyncJobForState(path, candidate, RenderScaleForState(candidate), true), true);
   }
 
   void MarkInteraction() { last_interaction_ticks = SDL_GetTicks(); }
 
   void MarkTargetChangedLocked() {
-    ++target_serial;
     request_active = false;
     prefetch_active = false;
     visual_render_delay_active = false;
-    cancel_requested.store(true);
+    render_queue.CancelTarget();
   }
 
   void RequestRenderLocked() {
@@ -665,8 +699,8 @@ struct PdfRuntime::Impl {
     if (visual_render_delay_active && delayed_state.SameVisualState(target_state)) return;
     MarkTargetChangedLocked();
     requested_state = target_state;
-    request_active = true;
-    SDL_CondSignal(cond);
+    request_active =
+        render_queue.Request(MakeAsyncJobForState(path, target_state, RenderScaleForState(target_state), false), false);
   }
 
   void DelayVisualRenderLocked() {
@@ -685,9 +719,9 @@ struct PdfRuntime::Impl {
     if (!visual_render_delay_active) return;
     if (SDL_TICKS_PASSED(now, visual_render_due_ms)) {
       requested_state = delayed_state;
-      request_active = true;
       visual_render_delay_active = false;
-      SDL_CondSignal(cond);
+      request_active =
+          render_queue.Request(MakeAsyncJobForState(path, delayed_state, RenderScaleForState(delayed_state), false), false);
     }
   }
 
@@ -711,123 +745,8 @@ struct PdfRuntime::Impl {
       return;
     }
     prefetched_state = candidate;
-    prefetch_active = true;
-    SDL_CondSignal(cond);
-  }
-
-  static int WorkerMain(void *userdata) {
-    auto *impl = static_cast<Impl *>(userdata);
-    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
-
-    PdfReader worker_reader;
-    if (!worker_reader.Open(impl->path)) {
-      return 0;
-    }
-
-    while (true) {
-      SDL_LockMutex(impl->mutex);
-      while (impl->worker_running &&
-             ((!impl->request_active && !impl->prefetch_active) || impl->result.ready)) {
-        SDL_CondWait(impl->cond, impl->mutex);
-      }
-      if (!impl->worker_running) {
-        SDL_UnlockMutex(impl->mutex);
-        break;
-      }
-
-      const bool prefetch = !impl->request_active && impl->prefetch_active;
-      const PdfState task_state = prefetch ? impl->prefetched_state : impl->requested_state;
-      const uint64_t task_serial = impl->target_serial;
-      if (prefetch) {
-        impl->prefetch_active = false;
-      } else {
-        impl->request_active = false;
-      }
-      impl->cancel_requested.store(false);
-      SDL_UnlockMutex(impl->mutex);
-
-      RenderResult ready;
-      ready.serial = task_serial;
-      ready.state = task_state;
-      ready.prefetch = prefetch;
-
-      if (task_serial == 0) continue;
-      if (impl->cancel_requested.load()) continue;
-
-      int page_w = 0;
-      int page_h = 0;
-      if (!worker_reader.PageSize(task_state.location.page_num, page_w, page_h) || page_w <= 0 || page_h <= 0) {
-        page_w = std::max(1, impl->screen_w);
-        page_h = std::max(1, impl->screen_h);
-      }
-      const float render_scale = impl->SafeRenderScaleForPageMetrics(page_w, page_h, task_state.view);
-      const int64_t estimated_pixels = std::max<int64_t>(
-          1, static_cast<int64_t>(std::llround(static_cast<double>(page_w) * render_scale))) *
-          std::max<int64_t>(1, static_cast<int64_t>(std::llround(static_cast<double>(page_h) * render_scale)));
-      const bool verbose_pdf_log = [] {
-        auto enabled = [](const char *value) {
-          return value && *value && std::string(value) != "0";
-        };
-        return enabled(std::getenv("ROCREADER_PDF_RENDER_LOG")) ||
-               enabled(std::getenv("ROCREADER_VERBOSE_LOG")) ||
-               enabled(std::getenv("ROCREADER_DEBUG_LOG"));
-      }();
-      if (PdfLowMemoryMode() && verbose_pdf_log) {
-        std::cout << "[native_h700][pdf] render begin page=" << task_state.location.page_num
-                  << " prefetch=" << (prefetch ? "1" : "0")
-                  << " page_size=" << page_w << "x" << page_h
-                  << " scale=" << render_scale
-                  << " est_pixels=" << estimated_pixels << "\n";
-      }
-
-      std::vector<unsigned char> rgba;
-      int raw_w = 0;
-      int raw_h = 0;
-      if (!worker_reader.RenderPageRGBA(task_state.location.page_num,
-                                        render_scale,
-                                        rgba,
-                                        raw_w,
-                                        raw_h,
-                                        &impl->cancel_requested)) {
-        SDL_LockMutex(impl->mutex);
-        if (!prefetch && impl->target_serial == task_serial) {
-          ready.ready = true;
-          ready.success = false;
-          impl->result = std::move(ready);
-        }
-        SDL_UnlockMutex(impl->mutex);
-        continue;
-      }
-
-      int rotated_w = 0;
-      int rotated_h = 0;
-      std::vector<unsigned char> rotated =
-          RotateRgba(rgba, raw_w, raw_h, task_state.view.rotation, rotated_w, rotated_h);
-      rgba.clear();
-      rgba.shrink_to_fit();
-      if (PdfLowMemoryMode() && verbose_pdf_log) {
-        std::cout << "[native_h700][pdf] render done page=" << task_state.location.page_num
-                  << " raw=" << raw_w << "x" << raw_h
-                  << " texture=" << rotated_w << "x" << rotated_h
-                  << " bytes=" << static_cast<unsigned long long>(rotated.size()) << "\n";
-      }
-
-      SDL_LockMutex(impl->mutex);
-      const bool obsolete = !impl->worker_running || impl->cancel_requested.load() ||
-                            task_serial != impl->target_serial;
-      if (!obsolete) {
-        ready.ready = true;
-        ready.success = true;
-        ready.texture_w = rotated_w;
-        ready.texture_h = rotated_h;
-        ready.rgba = std::move(rotated);
-        impl->result = std::move(ready);
-      }
-      SDL_UnlockMutex(impl->mutex);
-    }
-
-    worker_reader.Close();
-    return 0;
+    prefetch_active =
+        render_queue.Request(MakeAsyncJobForState(path, candidate, RenderScaleForState(candidate), true), true);
   }
 
   ViewportLayout ComputeViewportLayout(const PdfState &state, int content_w, int content_h) const {
@@ -1035,17 +954,17 @@ bool PdfRuntime::Open(SDL_Renderer *renderer,
   impl_->ready_state = impl_->target_state;
   impl_->display_valid = true;
   impl_->ready_valid = true;
-  impl_->result = RenderResult{};
   impl_->request_active = false;
   impl_->prefetch_active = false;
-  impl_->cancel_requested.store(false);
-  impl_->target_serial = 0;
   impl_->last_interaction_ticks = SDL_GetTicks();
-  impl_->worker_running = true;
-  impl_->worker = SDL_CreateThread(Impl::WorkerMain, "pdf_runtime_worker", impl_);
-  if (!impl_->worker) {
-    impl_->worker_running = false;
-  } else {
+  const bool queue_started = impl_->render_queue.Start(
+      "pdf_runtime_worker",
+      [impl = impl_](const AsyncImageRenderJob &job,
+                     std::atomic<bool> &cancel,
+                     AsyncImageRenderResult &out) {
+        return impl->RenderAsyncJob(job, cancel, out);
+      });
+  if (queue_started) {
     SDL_LockMutex(impl_->mutex);
     impl_->SchedulePrefetchLocked();
     SDL_UnlockMutex(impl_->mutex);
@@ -1055,15 +974,7 @@ bool PdfRuntime::Open(SDL_Renderer *renderer,
 
 void PdfRuntime::Close() {
   if (!impl_) return;
-  if (impl_->worker) {
-    SDL_LockMutex(impl_->mutex);
-    impl_->worker_running = false;
-    impl_->cancel_requested.store(true);
-    SDL_CondSignal(impl_->cond);
-    SDL_UnlockMutex(impl_->mutex);
-    SDL_WaitThread(impl_->worker, nullptr);
-    impl_->worker = nullptr;
-  }
+  impl_->render_queue.Shutdown();
   impl_->DestroyTexture();
   impl_->reader.Close();
   impl_->path.clear();
@@ -1075,9 +986,6 @@ void PdfRuntime::Close() {
   impl_->request_active = false;
   impl_->prefetch_active = false;
   impl_->visual_render_delay_active = false;
-  impl_->result = RenderResult{};
-  impl_->cancel_requested.store(false);
-  impl_->target_serial = 0;
   impl_->ClearTextureCache();
   impl_->DestroyReusableTexture();
 }
@@ -1092,7 +1000,7 @@ bool PdfRuntime::IsRenderPending() const {
   if (!impl_->display_state.SameVisualState(impl_->target_state)) return true;
   SDL_LockMutex(impl_->mutex);
   const bool pending = impl_->request_active || impl_->prefetch_active || impl_->visual_render_delay_active ||
-                       impl_->result.ready || impl_->WantsIdlePrefetch(SDL_GetTicks());
+                       impl_->render_queue.IsBusyOrReady() || impl_->WantsIdlePrefetch(SDL_GetTicks());
   SDL_UnlockMutex(impl_->mutex);
   return pending;
 }
@@ -1120,24 +1028,32 @@ void PdfRuntime::Tick() {
 
   SDL_LockMutex(impl_->mutex);
   impl_->FlushDelayedRenderLocked(SDL_GetTicks());
-  if (!impl_->request_active && !impl_->result.ready) {
+  if (!impl_->request_active) {
     impl_->SchedulePrefetchLocked();
   }
   SDL_UnlockMutex(impl_->mutex);
 
   RenderResult ready;
   bool have_ready = false;
-  SDL_LockMutex(impl_->mutex);
-  if (impl_->result.ready) {
-    ready = std::move(impl_->result);
-    impl_->result = RenderResult{};
+  AsyncImageRenderResult async_ready;
+  if (impl_->render_queue.TakeReady(async_ready)) {
+    ready.ready = async_ready.ready;
+    ready.success = async_ready.success;
+    ready.prefetch = async_ready.job.prefetch;
+    ready.serial = async_ready.job.serial;
+    ready.state = StateFromAsyncJob(async_ready.job);
+    ready.texture_w = async_ready.width;
+    ready.texture_h = async_ready.height;
+    ready.rgba = std::move(async_ready.rgba);
     have_ready = true;
-    SDL_CondSignal(impl_->cond);
+    if (ready.prefetch) {
+      impl_->prefetch_active = false;
+    } else {
+      impl_->request_active = false;
+    }
   }
-  SDL_UnlockMutex(impl_->mutex);
 
   if (!have_ready || !ready.success) return;
-  if (ready.serial != impl_->target_serial) return;
 
   if (ready.prefetch) {
     SDL_Texture *texture = impl_->CreateTextureFromResult(ready);

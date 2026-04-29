@@ -84,7 +84,8 @@ bool OpenReaderSession(const std::string &book_path, const std::string &ext, Rea
       deps.ui.mode = ReaderMode::Epub;
       opened = true;
     }
-    if (!opened && !deps.epub_runtime.HasRealRenderer()) {
+    const IReaderModule *epub_module = deps.reader_manager ? deps.reader_manager->Module(ReaderMode::Epub) : nullptr;
+    if (!opened && !deps.reader_manager && !deps.epub_runtime.HasRealRenderer()) {
       if (!deps.ui.warned_epub_backend) {
         std::cerr << "[reader] blocked: current build has no epub comic backend. "
                      "Please rebuild with libzip (pkg-config libzip) available.\n";
@@ -92,7 +93,8 @@ bool OpenReaderSession(const std::string &book_path, const std::string &ext, Rea
       }
     }
     if (!opened) {
-      std::cerr << "[reader][epub] runtime open failed backend=" << deps.epub_runtime.BackendName()
+      std::cerr << "[reader][epub] runtime open failed backend="
+                << (epub_module ? epub_module->BackendName() : deps.epub_runtime.BackendName())
                 << " path=" << book_path << "\n";
     }
   } else if (ext == ".zip" || ext == ".cbz") {
@@ -152,14 +154,25 @@ void CloseReaderSession(ReaderCloseDeps &deps) {
     deps.ui.progress.scroll_y = active_pdf.scroll_y;
     deps.ui.progress.zoom = active_pdf.zoom;
     deps.ui.progress.rotation = active_pdf.rotation;
-  } else if (deps.ui.mode == ReaderMode::Epub && deps.epub_runtime.IsOpen()) {
-    const EpubRuntimeProgress active_epub = deps.epub_runtime.Progress();
-    deps.ui.progress.page = active_epub.page;
-    deps.ui.progress.scroll_x =
-        std::string(deps.epub_runtime.BackendName()) == "epub-flow" ? 0 : active_epub.scroll_x;
-    deps.ui.progress.scroll_y = active_epub.scroll_y;
-    deps.ui.progress.zoom = active_epub.zoom;
-    deps.ui.progress.rotation = active_epub.rotation;
+  } else if (deps.ui.mode == ReaderMode::Epub) {
+    const IReaderModule *epub_module = deps.reader_manager ? deps.reader_manager->Module(ReaderMode::Epub) : nullptr;
+    if (epub_module && epub_module->IsOpen()) {
+      const ReaderProgress active_epub = epub_module->Progress();
+      deps.ui.progress.page = active_epub.page;
+      deps.ui.progress.scroll_x =
+          std::string(epub_module->BackendName()) == "epub-flow" ? 0 : active_epub.scroll_x;
+      deps.ui.progress.scroll_y = active_epub.scroll_y;
+      deps.ui.progress.zoom = active_epub.zoom;
+      deps.ui.progress.rotation = active_epub.rotation;
+    } else if (!deps.reader_manager && deps.epub_runtime.IsOpen()) {
+      const EpubRuntimeProgress active_epub = deps.epub_runtime.Progress();
+      deps.ui.progress.page = active_epub.page;
+      deps.ui.progress.scroll_x =
+          std::string(deps.epub_runtime.BackendName()) == "epub-flow" ? 0 : active_epub.scroll_x;
+      deps.ui.progress.scroll_y = active_epub.scroll_y;
+      deps.ui.progress.zoom = active_epub.zoom;
+      deps.ui.progress.rotation = active_epub.rotation;
+    }
   } else if (deps.ui.mode == ReaderMode::ZipImage && deps.zip_image_runtime.IsOpen()) {
     const ZipImageRuntimeProgress active_zip = deps.zip_image_runtime.Progress();
     deps.ui.progress.page = active_zip.page;

@@ -49,6 +49,25 @@ public:
   virtual int CurrentPage() const = 0;
 
   virtual ReaderCapabilities Capabilities() const = 0;
+  virtual bool IsRenderPending() const { return false; }
+  virtual const char *BackendName() const { return "reader-module"; }
+  virtual void RotateLeft() {}
+  virtual void RotateRight() {}
+  virtual void ZoomOut() {}
+  virtual void ZoomIn() {}
+  virtual void ResetView() {}
+  virtual bool PanHorizontalByPixels(int delta_px) {
+    (void)delta_px;
+    return false;
+  }
+  virtual void ScrollByPixels(int delta_px) { (void)delta_px; }
+  virtual void JumpByScreen(int direction) { (void)direction; }
+  virtual void SetPage(int page_index) { (void)page_index; }
+  virtual void SetFlowBaseFontPointSize(int base_font_pt) { (void)base_font_pt; }
+  virtual void SetFlowColors(SDL_Color background_color, SDL_Color font_color) {
+    (void)background_color;
+    (void)font_color;
+  }
 };
 
 class NullReaderModule final : public IReaderModule {
@@ -69,4 +88,3 @@ public:
 
   ReaderCapabilities Capabilities() const override;
 };
-

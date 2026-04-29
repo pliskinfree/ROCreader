@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include "filesystem_compat.h"
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <vector>
@@ -94,8 +95,34 @@ bool ReadZipEntry(zip_t *za, const std::string &name, std::vector<unsigned char>
   return !out.empty();
 }
 
-SDL_Surface *LoadSurfaceFromMemory(const unsigned char *data, size_t size) {
-  return DecodeSurfaceFromMemory(data, size);
+bool ReadZipEntryPrefix(zip_t *za, const std::string &name, size_t max_bytes, std::vector<unsigned char> &out) {
+  zip_int64_t index = zip_name_locate(za, name.c_str(), 0);
+  if (index < 0) {
+    index = zip_name_locate(za, name.c_str(), ZIP_FL_NOCASE);
+  }
+  if (index < 0) return false;
+  zip_file_t *zf = zip_fopen_index(za, static_cast<zip_uint64_t>(index), 0);
+  if (!zf) return false;
+  out.resize(max_bytes);
+  size_t total = 0;
+  while (total < out.size()) {
+    const zip_int64_t rd = zip_fread(zf, out.data() + total, out.size() - total);
+    if (rd < 0) {
+      zip_fclose(zf);
+      out.clear();
+      return false;
+    }
+    if (rd == 0) break;
+    total += static_cast<size_t>(rd);
+  }
+  zip_fclose(zf);
+  out.resize(total);
+  return !out.empty();
+}
+
+bool ImagePerfLogEnabled() {
+  const char *env = std::getenv("ROCREADER_IMAGE_PERF_LOG");
+  return env && *env && std::string(env) != "0";
 }
 
 struct PageEntry {
@@ -239,23 +266,23 @@ bool ZipImageReader::PageSize(int page_index, int &w, int &h) const {
   }
 
   std::vector<unsigned char> bytes;
-  if (!ReadZipEntry(impl_->zip, entry.image_entry, bytes)) {
+  if (!ReadZipEntryPrefix(impl_->zip, entry.image_entry, 64 * 1024, bytes)) {
     runtime_log::Line("[zip_image] page size read failed page=" + std::to_string(page_index) +
                       " entry=" + entry.image_entry);
     return false;
   }
-  SDL_Surface *surface = LoadSurfaceFromMemory(bytes.data(), bytes.size());
-  if (!surface) {
-    runtime_log::Line("[zip_image] page size decode failed page=" + std::to_string(page_index) +
+  int probed_w = 0;
+  int probed_h = 0;
+  if (!ProbeImageSizeFromMemory(bytes.data(), bytes.size(), probed_w, probed_h)) {
+    runtime_log::Line("[zip_image] page size probe failed page=" + std::to_string(page_index) +
                       " entry=" + entry.image_entry +
                       " bytes=" + std::to_string(bytes.size()));
     return false;
   }
   PageEntry &mutable_entry = impl_->pages[page_index];
-  mutable_entry.width = surface->w;
-  mutable_entry.height = surface->h;
+  mutable_entry.width = probed_w;
+  mutable_entry.height = probed_h;
   mutable_entry.size_known = (mutable_entry.width > 0 && mutable_entry.height > 0);
-  SDL_FreeSurface(surface);
   if (!mutable_entry.size_known) return false;
   w = mutable_entry.width;
   h = mutable_entry.height;
@@ -277,20 +304,30 @@ bool ZipImageReader::RenderPageRGBA(int page_index, float scale, std::vector<uns
   if (cancel && cancel->load()) return false;
 #ifdef HAVE_LIBZIP
   PageEntry &entry = impl_->pages[page_index];
+  const uint32_t perf_begin = SDL_GetTicks();
   std::vector<unsigned char> bytes;
   if (!ReadZipEntry(impl_->zip, entry.image_entry, bytes)) {
     runtime_log::Line("[zip_image] render read failed page=" + std::to_string(page_index) +
                       " entry=" + entry.image_entry);
     return false;
   }
+  const uint32_t perf_read = SDL_GetTicks();
   if (cancel && cancel->load()) return false;
-  SDL_Surface *surface = LoadSurfaceFromMemory(bytes.data(), bytes.size());
+  int source_w = entry.width;
+  int source_h = entry.height;
+  if (!entry.size_known || source_w <= 0 || source_h <= 0) {
+    ProbeImageSizeFromMemory(bytes.data(), bytes.size(), source_w, source_h);
+  }
+  const int target_w = source_w > 0 ? std::max(1, static_cast<int>(std::round(static_cast<float>(source_w) * scale))) : 0;
+  const int target_h = source_h > 0 ? std::max(1, static_cast<int>(std::round(static_cast<float>(source_h) * scale))) : 0;
+  SDL_Surface *surface = DecodeSurfaceFromMemoryFit(bytes.data(), bytes.size(), target_w, target_h);
   if (!surface) {
     runtime_log::Line("[zip_image] render decode failed page=" + std::to_string(page_index) +
                       " entry=" + entry.image_entry +
                       " bytes=" + std::to_string(bytes.size()));
     return false;
   }
+  const uint32_t perf_decode = SDL_GetTicks();
 
   SDL_Surface *rgba_surface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
   SDL_FreeSurface(surface);
@@ -300,13 +337,19 @@ bool ZipImageReader::RenderPageRGBA(int page_index, float scale, std::vector<uns
                       " err=" + SDL_GetError());
     return false;
   }
+  const uint32_t perf_convert = SDL_GetTicks();
 
-  entry.width = rgba_surface->w;
-  entry.height = rgba_surface->h;
+  if (source_w > 0 && source_h > 0) {
+    entry.width = source_w;
+    entry.height = source_h;
+  } else {
+    entry.width = rgba_surface->w;
+    entry.height = rgba_surface->h;
+  }
   entry.size_known = (entry.width > 0 && entry.height > 0);
 
-  w = std::max(1, static_cast<int>(std::round(static_cast<float>(rgba_surface->w) * scale)));
-  h = std::max(1, static_cast<int>(std::round(static_cast<float>(rgba_surface->h) * scale)));
+  w = target_w > 0 ? target_w : std::max(1, static_cast<int>(std::round(static_cast<float>(rgba_surface->w) * scale)));
+  h = target_h > 0 ? target_h : std::max(1, static_cast<int>(std::round(static_cast<float>(rgba_surface->h) * scale)));
 
   SDL_Surface *scaled = rgba_surface;
   if (w != rgba_surface->w || h != rgba_surface->h) {
@@ -334,6 +377,7 @@ bool ZipImageReader::RenderPageRGBA(int page_index, float scale, std::vector<uns
     }
     SDL_FreeSurface(rgba_surface);
   }
+  const uint32_t perf_scale = SDL_GetTicks();
 
   rgba.assign(static_cast<size_t>(w * h * 4), 0);
   for (int y = 0; y < h; ++y) {
@@ -347,6 +391,17 @@ bool ZipImageReader::RenderPageRGBA(int page_index, float scale, std::vector<uns
     std::memcpy(dst_row, src_row, static_cast<size_t>(w * 4));
   }
   SDL_FreeSurface(scaled);
+  if (ImagePerfLogEnabled()) {
+    runtime_log::Line("[zip_image_perf] page=" + std::to_string(page_index) +
+                      " bytes=" + std::to_string(bytes.size()) +
+                      " source=" + std::to_string(entry.width) + "x" + std::to_string(entry.height) +
+                      " target=" + std::to_string(w) + "x" + std::to_string(h) +
+                      " read_ms=" + std::to_string(perf_read - perf_begin) +
+                      " decode_ms=" + std::to_string(perf_decode - perf_read) +
+                      " convert_ms=" + std::to_string(perf_convert - perf_decode) +
+                      " scale_ms=" + std::to_string(perf_scale - perf_convert) +
+                      " copy_ms=" + std::to_string(SDL_GetTicks() - perf_scale));
+  }
   return true;
 #else
   (void)rgba;

@@ -4,6 +4,8 @@
 
 #include <string>
 
+enum class EpubRuntimeOpenMode;
+
 struct EpubRuntimeProgress {
   int page = 0;
   int rotation = 0;
@@ -21,6 +23,11 @@ public:
             const EpubRuntimeProgress &initial_progress, int flow_base_font_pt = 18,
             SDL_Color flow_background_color = SDL_Color{250, 249, 244, 255},
             SDL_Color flow_font_color = SDL_Color{28, 28, 28, 255});
+  bool OpenWithMode(SDL_Renderer *renderer, const std::string &path, int screen_w, int screen_h,
+                    const EpubRuntimeProgress &initial_progress, EpubRuntimeOpenMode mode,
+                    int flow_base_font_pt = 18,
+                    SDL_Color flow_background_color = SDL_Color{250, 249, 244, 255},
+                    SDL_Color flow_font_color = SDL_Color{28, 28, 28, 255});
   void Close();
 
   bool IsOpen() const;

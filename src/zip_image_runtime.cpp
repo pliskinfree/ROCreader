@@ -1,5 +1,6 @@
 #include "zip_image_runtime.h"
 
+#include "async_image_render_queue.h"
 #include "zip_image_reader.h"
 #include "runtime_log.h"
 
@@ -10,6 +11,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -21,6 +23,18 @@ constexpr float kZoomStep = 0.1f;
 constexpr size_t kTextureCacheSize = 3;
 constexpr Uint32 kVisualRenderThrottleMs = 75;
 constexpr Uint32 kIdlePrefetchDelayMs = 220;
+constexpr int64_t kSafeTexturePixelBudget = 5600000;
+constexpr int64_t kLowMemoryTexturePixelBudget = 3600000;
+
+bool ZipLowMemoryMode() {
+  const char *env = std::getenv("ROCREADER_ZIP_LOW_MEMORY");
+  return env && *env && std::string(env) != "0";
+}
+
+bool ZipImagePerfLogEnabled() {
+  const char *env = std::getenv("ROCREADER_IMAGE_PERF_LOG");
+  return env && *env && std::string(env) != "0";
+}
 
 struct ViewState {
   float zoom = 1.0f;
@@ -43,6 +57,33 @@ struct ZipImageState {
            std::abs(view.zoom - other.view.zoom) < 0.0005f;
   }
 };
+
+AsyncImageRenderJob MakeAsyncJobForState(const std::string &path,
+                                         const ZipImageState &state,
+                                         float render_scale,
+                                         bool prefetch) {
+  AsyncImageRenderJob job;
+  job.active = true;
+  job.prefetch = prefetch;
+  job.source_key = path;
+  job.page = state.location.page_num;
+  job.scale = render_scale;
+  job.rotation = state.view.rotation;
+  job.zoom = state.view.zoom;
+  job.scroll_x = state.location.x_offset;
+  job.scroll_y = state.location.y_offset;
+  return job;
+}
+
+ZipImageState StateFromAsyncJob(const AsyncImageRenderJob &job) {
+  ZipImageState state;
+  state.location.page_num = job.page;
+  state.location.x_offset = job.scroll_x;
+  state.location.y_offset = job.scroll_y;
+  state.view.rotation = job.rotation;
+  state.view.zoom = job.zoom;
+  return state;
+}
 
 struct RenderResult {
   bool ready = false;
@@ -157,16 +198,11 @@ struct ZipImageRuntime::Impl {
   uint64_t cache_stamp = 0;
 
   SDL_mutex *mutex = SDL_CreateMutex();
-  SDL_cond *cond = SDL_CreateCond();
-  SDL_Thread *worker = nullptr;
-  bool worker_running = false;
   bool request_active = false;
   bool prefetch_active = false;
   ZipImageState requested_state;
   ZipImageState prefetched_state;
-  RenderResult result;
-  std::atomic<bool> cancel_requested{false};
-  uint64_t target_serial = 0;
+  AsyncImageRenderQueue render_queue;
   int preferred_prefetch_dir = 1;
   bool visual_render_delay_active = false;
   Uint32 visual_render_due_ms = 0;
@@ -177,19 +213,10 @@ struct ZipImageRuntime::Impl {
   int reusable_texture_h = 0;
 
   ~Impl() {
-    if (worker) {
-      SDL_LockMutex(mutex);
-      worker_running = false;
-      cancel_requested.store(true);
-      SDL_CondSignal(cond);
-      SDL_UnlockMutex(mutex);
-      SDL_WaitThread(worker, nullptr);
-      worker = nullptr;
-    }
+    render_queue.Shutdown();
     DestroyTexture();
     ClearTextureCache();
     DestroyReusableTexture();
-    if (cond) SDL_DestroyCond(cond);
     if (mutex) SDL_DestroyMutex(mutex);
   }
 
@@ -261,17 +288,29 @@ struct ZipImageRuntime::Impl {
       fit_scale = std::max(0.1f, static_cast<float>(screen_w) /
                                     static_cast<float>(std::max(1, page_w)));
     }
-    float render_scale = std::max(kMinZoom, std::min(kMaxZoom, fit_scale * state.view.zoom));
+    const float ideal_scale = std::max(kMinZoom, std::min(kMaxZoom, fit_scale * state.view.zoom));
+    float render_scale = ideal_scale;
+    const int64_t ideal_raw_w =
+        std::max<int64_t>(1, static_cast<int64_t>(std::llround(static_cast<double>(page_w) * ideal_scale)));
+    const int64_t ideal_raw_h =
+        std::max<int64_t>(1, static_cast<int64_t>(std::llround(static_cast<double>(page_h) * ideal_scale)));
+    const int64_t ideal_final_w = (rotation == 90 || rotation == 270) ? ideal_raw_h : ideal_raw_w;
+    const int64_t ideal_final_h = (rotation == 90 || rotation == 270) ? ideal_raw_w : ideal_raw_h;
     const int max_w = max_texture_w > 0 ? max_texture_w : 0;
     const int max_h = max_texture_h > 0 ? max_texture_h : 0;
-    if (max_w > 0 && max_h > 0) {
-      if (rotation == 90 || rotation == 270) {
-        render_scale = std::min(render_scale, static_cast<float>(max_w) / static_cast<float>(std::max(1, page_h)));
-        render_scale = std::min(render_scale, static_cast<float>(max_h) / static_cast<float>(std::max(1, page_w)));
-      } else {
-        render_scale = std::min(render_scale, static_cast<float>(max_w) / static_cast<float>(std::max(1, page_w)));
-        render_scale = std::min(render_scale, static_cast<float>(max_h) / static_cast<float>(std::max(1, page_h)));
-      }
+    if (max_w > 0 && ideal_final_w > max_w) {
+      render_scale = std::min(render_scale,
+                              ideal_scale * static_cast<float>(max_w) / static_cast<float>(ideal_final_w));
+    }
+    if (max_h > 0 && ideal_final_h > max_h) {
+      render_scale = std::min(render_scale,
+                              ideal_scale * static_cast<float>(max_h) / static_cast<float>(ideal_final_h));
+    }
+    const int64_t total_pixels = ideal_final_w * ideal_final_h;
+    const int64_t pixel_budget = ZipLowMemoryMode() ? kLowMemoryTexturePixelBudget : kSafeTexturePixelBudget;
+    if (total_pixels > pixel_budget && total_pixels > 0) {
+      const double ratio = std::sqrt(static_cast<double>(pixel_budget) / static_cast<double>(total_pixels));
+      render_scale = std::min(render_scale, ideal_scale * static_cast<float>(ratio));
     }
     return std::max(0.05f, render_scale);
   }
@@ -438,7 +477,32 @@ struct ZipImageRuntime::Impl {
     return true;
   }
 
+  bool RenderAsyncJob(const AsyncImageRenderJob &job,
+                      std::atomic<bool> &cancel,
+                      AsyncImageRenderResult &out) {
+    ZipImageReader worker_reader;
+    if (!worker_reader.Open(job.source_key)) return false;
+
+    std::vector<unsigned char> rgba;
+    int raw_w = 0;
+    int raw_h = 0;
+    const bool ok = worker_reader.RenderPageRGBA(job.page, job.scale, rgba, raw_w, raw_h, &cancel);
+    worker_reader.Close();
+    if (!ok) {
+      runtime_log::Line("[zip_image_runtime] async render failed page=" + std::to_string(job.page));
+      return false;
+    }
+
+    int rotated_w = 0;
+    int rotated_h = 0;
+    out.rgba = RotateRgba(rgba, raw_w, raw_h, job.rotation, rotated_w, rotated_h);
+    out.width = rotated_w;
+    out.height = rotated_h;
+    return true;
+  }
+
   SDL_Texture *CreateTextureFromResult(const RenderResult &ready) {
+    const Uint32 perf_begin = ZipImagePerfLogEnabled() ? SDL_GetTicks() : 0;
     SDL_Texture *next = nullptr;
     if (reusable_texture && reusable_texture_w == ready.texture_w &&
         reusable_texture_h == ready.texture_h) {
@@ -455,12 +519,22 @@ struct ZipImageRuntime::Impl {
                         std::to_string(ready.texture_h) + " err=" + SDL_GetError());
       return nullptr;
     }
+    const Uint32 perf_create = ZipImagePerfLogEnabled() ? SDL_GetTicks() : 0;
     SDL_SetTextureBlendMode(next, SDL_BLENDMODE_BLEND);
     if (SDL_UpdateTexture(next, nullptr, ready.rgba.data(), ready.texture_w * 4) != 0) {
       runtime_log::Line("[zip_image_runtime] SDL_UpdateTexture failed size=" + std::to_string(ready.texture_w) + "x" +
                         std::to_string(ready.texture_h) + " err=" + SDL_GetError());
       SDL_DestroyTexture(next);
       return nullptr;
+    }
+    if (ZipImagePerfLogEnabled()) {
+      const Uint32 perf_update = SDL_GetTicks();
+      runtime_log::Line("[zip_image_perf] texture page=" + std::to_string(ready.state.location.page_num) +
+                        " size=" + std::to_string(ready.texture_w) + "x" +
+                        std::to_string(ready.texture_h) +
+                        " reused=" + std::string((perf_create == perf_begin) ? "yes" : "no") +
+                        " create_ms=" + std::to_string(perf_create - perf_begin) +
+                        " update_ms=" + std::to_string(perf_update - perf_create));
     }
     return next;
   }
@@ -502,10 +576,11 @@ struct ZipImageRuntime::Impl {
   }
 
   bool WantsIdlePrefetch(Uint32 now) const {
+    if (ZipLowMemoryMode()) return false;
     if (!reader.IsOpen()) return false;
     if (!display_valid || !visible_source.valid) return false;
     if (!display_state.SameVisualState(target_state)) return false;
-    if (request_active || prefetch_active || visual_render_delay_active || result.ready) return false;
+    if (request_active || prefetch_active || visual_render_delay_active) return false;
     if (!SDL_TICKS_PASSED(now, last_interaction_ticks + kIdlePrefetchDelayMs)) return false;
 
     ZipImageState candidate = target_state;
@@ -621,18 +696,17 @@ struct ZipImageRuntime::Impl {
     ClampPage(candidate.location);
     if (HasVisualTextureForState(candidate)) return;
     prefetched_state = candidate;
-    prefetch_active = true;
-    SDL_CondSignal(cond);
+    prefetch_active =
+        render_queue.Request(MakeAsyncJobForState(path, candidate, RenderScaleForState(candidate), true), true);
   }
 
   void MarkInteraction() { last_interaction_ticks = SDL_GetTicks(); }
 
   void MarkTargetChangedLocked() {
-    ++target_serial;
     request_active = false;
     prefetch_active = false;
     visual_render_delay_active = false;
-    cancel_requested.store(true);
+    render_queue.CancelTarget();
   }
 
   void RequestRenderLocked() {
@@ -640,8 +714,8 @@ struct ZipImageRuntime::Impl {
     if (visual_render_delay_active && delayed_state.SameVisualState(target_state)) return;
     MarkTargetChangedLocked();
     requested_state = target_state;
-    request_active = true;
-    SDL_CondSignal(cond);
+    request_active =
+        render_queue.Request(MakeAsyncJobForState(path, target_state, RenderScaleForState(target_state), false), false);
   }
 
   void DelayVisualRenderLocked() {
@@ -660,9 +734,9 @@ struct ZipImageRuntime::Impl {
     if (!visual_render_delay_active) return;
     if (SDL_TICKS_PASSED(now, visual_render_due_ms)) {
       requested_state = delayed_state;
-      request_active = true;
       visual_render_delay_active = false;
-      SDL_CondSignal(cond);
+      request_active =
+          render_queue.Request(MakeAsyncJobForState(path, delayed_state, RenderScaleForState(delayed_state), false), false);
     }
   }
 
@@ -686,109 +760,8 @@ struct ZipImageRuntime::Impl {
       return;
     }
     prefetched_state = candidate;
-    prefetch_active = true;
-    SDL_CondSignal(cond);
-  }
-
-  static int WorkerMain(void *userdata) {
-    auto *impl = static_cast<Impl *>(userdata);
-    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
-
-    ZipImageReader worker_reader;
-    if (!worker_reader.Open(impl->path)) {
-      return 0;
-    }
-
-    while (true) {
-      SDL_LockMutex(impl->mutex);
-      while (impl->worker_running &&
-             ((!impl->request_active && !impl->prefetch_active) || impl->result.ready)) {
-        SDL_CondWait(impl->cond, impl->mutex);
-      }
-      if (!impl->worker_running) {
-        SDL_UnlockMutex(impl->mutex);
-        break;
-      }
-
-      const bool prefetch = !impl->request_active && impl->prefetch_active;
-      const ZipImageState task_state = prefetch ? impl->prefetched_state : impl->requested_state;
-      const uint64_t task_serial = impl->target_serial;
-      if (prefetch) {
-        impl->prefetch_active = false;
-      } else {
-        impl->request_active = false;
-      }
-      impl->cancel_requested.store(false);
-      SDL_UnlockMutex(impl->mutex);
-
-      RenderResult ready;
-      ready.serial = task_serial;
-      ready.state = task_state;
-      ready.prefetch = prefetch;
-
-      if (task_serial == 0) continue;
-      if (impl->cancel_requested.load()) continue;
-
-      int page_w = 0;
-      int page_h = 0;
-      if (!worker_reader.PageSize(task_state.location.page_num, page_w, page_h) || page_w <= 0 || page_h <= 0) {
-        page_w = std::max(1, impl->screen_w);
-        page_h = std::max(1, impl->screen_h);
-      }
-      const int rotation = NormalizeRotation(task_state.view.rotation);
-      float fit_scale = 1.0f;
-      if (rotation == 90 || rotation == 270) {
-        fit_scale = std::max(0.1f, static_cast<float>(impl->screen_h) /
-                                      static_cast<float>(std::max(1, page_w)));
-      } else {
-        fit_scale = std::max(0.1f, static_cast<float>(impl->screen_w) /
-                                      static_cast<float>(std::max(1, page_w)));
-      }
-      const float render_scale =
-          std::max(kMinZoom, std::min(kMaxZoom, fit_scale * task_state.view.zoom));
-
-      std::vector<unsigned char> rgba;
-      int raw_w = 0;
-      int raw_h = 0;
-      if (!worker_reader.RenderPageRGBA(task_state.location.page_num,
-                                        render_scale,
-                                        rgba,
-                                        raw_w,
-                                        raw_h,
-                                        &impl->cancel_requested)) {
-        runtime_log::Line("[zip_image_runtime] worker render failed page=" +
-                          std::to_string(task_state.location.page_num));
-        SDL_LockMutex(impl->mutex);
-        if (!prefetch && impl->target_serial == task_serial) {
-          ready.ready = true;
-          ready.success = false;
-          impl->result = std::move(ready);
-        }
-        SDL_UnlockMutex(impl->mutex);
-        continue;
-      }
-
-      int rotated_w = 0;
-      int rotated_h = 0;
-      std::vector<unsigned char> rotated =
-          RotateRgba(rgba, raw_w, raw_h, task_state.view.rotation, rotated_w, rotated_h);
-
-      SDL_LockMutex(impl->mutex);
-      const bool obsolete = !impl->worker_running || impl->cancel_requested.load() ||
-                            task_serial != impl->target_serial;
-      if (!obsolete) {
-        ready.ready = true;
-        ready.success = true;
-        ready.texture_w = rotated_w;
-        ready.texture_h = rotated_h;
-        ready.rgba = std::move(rotated);
-        impl->result = std::move(ready);
-      }
-      SDL_UnlockMutex(impl->mutex);
-    }
-
-    worker_reader.Close();
-    return 0;
+    prefetch_active =
+        render_queue.Request(MakeAsyncJobForState(path, candidate, RenderScaleForState(candidate), true), true);
   }
 
   ViewportLayout ComputeViewportLayout(const ZipImageState &state, int content_w, int content_h) const {
@@ -1005,17 +978,17 @@ bool ZipImageRuntime::Open(SDL_Renderer *renderer,
   impl_->ready_state = impl_->target_state;
   impl_->display_valid = true;
   impl_->ready_valid = true;
-  impl_->result = RenderResult{};
   impl_->request_active = false;
   impl_->prefetch_active = false;
-  impl_->cancel_requested.store(false);
-  impl_->target_serial = 0;
   impl_->last_interaction_ticks = SDL_GetTicks();
-  impl_->worker_running = true;
-  impl_->worker = SDL_CreateThread(Impl::WorkerMain, "zip_image_runtime_worker", impl_);
-  if (!impl_->worker) {
-    impl_->worker_running = false;
-  } else {
+  const bool queue_started = impl_->render_queue.Start(
+      "zip_image_runtime_worker",
+      [impl = impl_](const AsyncImageRenderJob &job,
+                     std::atomic<bool> &cancel,
+                     AsyncImageRenderResult &out) {
+        return impl->RenderAsyncJob(job, cancel, out);
+      });
+  if (queue_started) {
     SDL_LockMutex(impl_->mutex);
     impl_->SchedulePrefetchLocked();
     SDL_UnlockMutex(impl_->mutex);
@@ -1025,15 +998,7 @@ bool ZipImageRuntime::Open(SDL_Renderer *renderer,
 
 void ZipImageRuntime::Close() {
   if (!impl_) return;
-  if (impl_->worker) {
-    SDL_LockMutex(impl_->mutex);
-    impl_->worker_running = false;
-    impl_->cancel_requested.store(true);
-    SDL_CondSignal(impl_->cond);
-    SDL_UnlockMutex(impl_->mutex);
-    SDL_WaitThread(impl_->worker, nullptr);
-    impl_->worker = nullptr;
-  }
+  impl_->render_queue.Shutdown();
   impl_->DestroyTexture();
   impl_->reader.Close();
   impl_->path.clear();
@@ -1045,9 +1010,6 @@ void ZipImageRuntime::Close() {
   impl_->request_active = false;
   impl_->prefetch_active = false;
   impl_->visual_render_delay_active = false;
-  impl_->result = RenderResult{};
-  impl_->cancel_requested.store(false);
-  impl_->target_serial = 0;
   impl_->ClearTextureCache();
   impl_->DestroyReusableTexture();
 }
@@ -1073,7 +1035,7 @@ bool ZipImageRuntime::IsRenderPending() const {
   if (!impl_->display_state.SameVisualState(impl_->target_state)) return true;
   SDL_LockMutex(impl_->mutex);
   const bool pending = impl_->request_active || impl_->prefetch_active || impl_->visual_render_delay_active ||
-                       impl_->result.ready || impl_->WantsIdlePrefetch(SDL_GetTicks());
+                       impl_->render_queue.IsBusyOrReady() || impl_->WantsIdlePrefetch(SDL_GetTicks());
   SDL_UnlockMutex(impl_->mutex);
   return pending;
 }
@@ -1101,24 +1063,32 @@ void ZipImageRuntime::Tick() {
 
   SDL_LockMutex(impl_->mutex);
   impl_->FlushDelayedRenderLocked(SDL_GetTicks());
-  if (!impl_->request_active && !impl_->result.ready) {
+  if (!impl_->request_active) {
     impl_->SchedulePrefetchLocked();
   }
   SDL_UnlockMutex(impl_->mutex);
 
   RenderResult ready;
   bool have_ready = false;
-  SDL_LockMutex(impl_->mutex);
-  if (impl_->result.ready) {
-    ready = std::move(impl_->result);
-    impl_->result = RenderResult{};
+  AsyncImageRenderResult async_ready;
+  if (impl_->render_queue.TakeReady(async_ready)) {
+    ready.ready = async_ready.ready;
+    ready.success = async_ready.success;
+    ready.prefetch = async_ready.job.prefetch;
+    ready.serial = async_ready.job.serial;
+    ready.state = StateFromAsyncJob(async_ready.job);
+    ready.texture_w = async_ready.width;
+    ready.texture_h = async_ready.height;
+    ready.rgba = std::move(async_ready.rgba);
     have_ready = true;
-    SDL_CondSignal(impl_->cond);
+    if (ready.prefetch) {
+      impl_->prefetch_active = false;
+    } else {
+      impl_->request_active = false;
+    }
   }
-  SDL_UnlockMutex(impl_->mutex);
 
   if (!have_ready || !ready.success) return;
-  if (ready.serial != impl_->target_serial) return;
 
   if (ready.prefetch) {
     SDL_Texture *texture = impl_->CreateTextureFromResult(ready);

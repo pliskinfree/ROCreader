@@ -18,6 +18,7 @@ extern "C" {
 
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -139,6 +140,63 @@ SDL_Surface *DecodeJpegSurface(const uint8_t *data, size_t size, int max_w = 0, 
 #endif
 
 } // namespace
+
+bool ProbeImageSizeFromMemory(const void *data, size_t size, int &w, int &h) {
+  w = 0;
+  h = 0;
+  if (!data || size < 10) return false;
+  const auto *p = static_cast<const uint8_t *>(data);
+
+  if (size >= 24 && p[0] == 0x89 && p[1] == 'P' && p[2] == 'N' && p[3] == 'G') {
+    w = (static_cast<int>(p[16]) << 24) | (static_cast<int>(p[17]) << 16) |
+        (static_cast<int>(p[18]) << 8) | static_cast<int>(p[19]);
+    h = (static_cast<int>(p[20]) << 24) | (static_cast<int>(p[21]) << 16) |
+        (static_cast<int>(p[22]) << 8) | static_cast<int>(p[23]);
+    return w > 0 && h > 0;
+  }
+
+  if (size >= 10 && p[0] == 'G' && p[1] == 'I' && p[2] == 'F') {
+    w = static_cast<int>(p[6]) | (static_cast<int>(p[7]) << 8);
+    h = static_cast<int>(p[8]) | (static_cast<int>(p[9]) << 8);
+    return w > 0 && h > 0;
+  }
+
+#ifdef HAVE_WEBP
+  if (size >= 16 && p[0] == 'R' && p[1] == 'I' && p[2] == 'F' && p[3] == 'F' &&
+      p[8] == 'W' && p[9] == 'E' && p[10] == 'B' && p[11] == 'P') {
+    return WebPGetInfo(p, size, &w, &h) && w > 0 && h > 0;
+  }
+#endif
+
+  if (size >= 4 && p[0] == 0xFF && p[1] == 0xD8) {
+    size_t pos = 2;
+    while (pos + 9 < size) {
+      if (p[pos] != 0xFF) {
+        ++pos;
+        continue;
+      }
+      while (pos < size && p[pos] == 0xFF) ++pos;
+      if (pos >= size) break;
+      const uint8_t marker = p[pos++];
+      if (marker == 0xD8 || marker == 0xD9 || marker == 0x01) continue;
+      if (pos + 2 > size) break;
+      const size_t segment_len = (static_cast<size_t>(p[pos]) << 8) | static_cast<size_t>(p[pos + 1]);
+      if (segment_len < 2 || pos + segment_len > size) break;
+      const bool sof = (marker >= 0xC0 && marker <= 0xC3) ||
+                       (marker >= 0xC5 && marker <= 0xC7) ||
+                       (marker >= 0xC9 && marker <= 0xCB) ||
+                       (marker >= 0xCD && marker <= 0xCF);
+      if (sof && segment_len >= 7) {
+        h = (static_cast<int>(p[pos + 3]) << 8) | static_cast<int>(p[pos + 4]);
+        w = (static_cast<int>(p[pos + 5]) << 8) | static_cast<int>(p[pos + 6]);
+        return w > 0 && h > 0;
+      }
+      pos += segment_len;
+    }
+  }
+
+  return false;
+}
 
 SDL_Surface *DecodeSurfaceFromMemory(const void *data, size_t size) {
   if (!data || size == 0) return nullptr;

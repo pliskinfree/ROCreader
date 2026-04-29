@@ -40,6 +40,8 @@
 #include <vector>
 
 #include "app_runtime.h"
+#include "app_context.h"
+#include "app_layout.h"
 #include "app_stores.h"
 #include "audio_runtime.h"
 #include "book_scanner.h"
@@ -62,6 +64,7 @@
 #include "reader_session_ops.h"
 #include "reader_session_state.h"
 #include "runtime_log.h"
+#include "scene_manager.h"
 #include "screen_profile.h"
 #include "system_controls.h"
 #include "system_settings_runtime.h"
@@ -83,6 +86,7 @@
 #include "zip_image_reader_module.h"
 #include "zip_image_runtime.h"
 #include "animation.h"
+#include "app_shell.h"
 
 namespace {
 bool VerboseLogEnabled() {
@@ -92,138 +96,6 @@ bool VerboseLogEnabled() {
   return enabled(std::getenv("ROCREADER_VERBOSE_LOG")) || enabled(std::getenv("ROCREADER_DEBUG_LOG"));
 }
 
-struct LayoutMetrics {
-  int screen_w = 720;
-  int screen_h = 480;
-  int safe_margin_x = 20;
-  int top_bar_y = 0;
-  int top_bar_h = 30;
-  int nav_bar_y = 30;
-  int nav_bar_h = 50;
-  int main_grid_y = 80;
-  int main_grid_h = 350;
-  int bottom_bar_y = 430;
-  int bottom_bar_h = 50;
-  int cover_w = 140;
-  int cover_h = 210;
-  int card_frame_w = 180;
-  int card_frame_h = 250;
-  int grid_gap_x = 33;
-  int grid_gap_y = 43;
-  int grid_start_x = 33;
-  int grid_start_y = 100;
-  int title_overlay_h = 36;
-  int title_text_pad_x = 2;
-  int title_text_pad_bottom = 4;
-  int title_marquee_gap_px = 24;
-  int settings_sidebar_w = 240;
-  int settings_y_offset = 0;
-  int settings_content_offset_y = 35;
-  int txt_margin_x = 32;
-  int txt_margin_y = 20;
-  int nav_l1_x = 21;
-  int nav_l1_y = 46;
-  int nav_r1_x = 667;
-  int nav_r1_y = 46;
-  int nav_start_x = 90;
-  int nav_slot_w = 135;
-  int nav_y = 42;
-  int reader_progress_panel_margin_x = 18;
-  int reader_progress_panel_margin_bottom = 12;
-  int reader_progress_bar_margin_x = 34;
-  int reader_progress_percent_margin_x = 34;
-  int grid_cols = 4;
-  int visible_rows = 2;
-  float ui_scale = 1.0f;
-};
-
-constexpr LayoutMetrics layout_720x480{
-    720, 480, 20,
-    0, 30,
-    30, 50,
-    80, 350,
-    430, 50,
-    140, 210,
-    180, 250,
-    33, 38,
-    33, 100,
-    36, 2, 4, 24,
-    240, 0, 35,
-    32, 20,
-    21, 46,
-    667, 46,
-    90, 135, 42,
-    18, 12, 34, 34,
-    4, 2,
-    1.0f,
-};
-
-constexpr LayoutMetrics layout_640x480{
-    640, 480, 16,
-    0, 30,
-    30, 50,
-    80, 350,
-    430, 50,
-    130, 195,
-    167, 232,
-    25, 30,
-    23, 100,
-    36, 2, 4, 24,
-    160, 0, 35,
-    28, 20,
-    14, 46,
-    587, 46,
-    72, 124, 42,
-    18, 12, 34, 34,
-    4, 2,
-    1.0f,
-};
-
-constexpr LayoutMetrics layout_720x720{
-    720, 720, 20,
-    0, 36,
-    36, 58,
-    104, 556,
-    660, 60,
-    140, 210,
-    180, 250,
-    33, 38,
-    33, 100,
-    36, 2, 4, 24,
-    240, 0, 42,
-    32, 26,
-    21, 54,
-    667, 54,
-    90, 135, 50,
-    18, 16, 34, 34,
-    4, 3,
-    1.0f,
-};
-
-constexpr LayoutMetrics layout_1024x768{
-    1024, 768, 26,
-    0, 48,
-    48, 80,
-    128, 560,
-    688, 80,
-    208, 312,
-    267, 371,
-    40, 48,
-    37, 160,
-    58, 3, 6, 38,
-    256, 0, 56,
-    45, 32,
-    22, 74,
-    939, 74,
-    115, 198, 67,
-    29, 19, 54, 54,
-    4, 2,
-    1.6f,
-};
-
-constexpr float kFocusScaleBase = 1.0f;
-constexpr float kFocusScaleCurrent = 1.045f; // reduce current zoomed size by 5%
-constexpr float kFocusScale = kFocusScaleCurrent;
 constexpr float kCoverAspect = 2.0f / 3.0f;
 constexpr Uint8 kUnfocusedAlpha = 255;
 constexpr float kTitleMarqueePauseSec = 0.75f;
@@ -231,12 +103,7 @@ constexpr float kTitleMarqueeSpeedPx = 48.0f;
 constexpr size_t kCoverCacheMaxEntries = 160;
 constexpr size_t kCoverCacheMaxBytes = 24u * 1024u * 1024u;
 constexpr Uint8 kSidebarMaskMaxAlpha = 84;
-constexpr float kSceneFadeFlashAlpha = 0.82f;
-constexpr float kSceneFadeFlashDurationSec = 0.18f;
 constexpr int kIdleWaitMs = 100;
-constexpr uint32_t kActiveFrameBudgetMs = 33;
-constexpr uint32_t kAvatarMarqueeFrameBudgetMs = 16;
-constexpr uint32_t kPeriodicTickFrameBudgetMs = 50;
 constexpr float kCardLerpSpeed = 18.0f;
 constexpr float kCardMoveLinearSpeedX = 860.0f;  // px/s for center move transition
 constexpr float kCardMoveLinearSpeedY = 860.0f;  // px/s for center move transition
@@ -280,30 +147,7 @@ void FatalSignalHandler(int sig) {
   std::_Exit(128 + sig);
 }
 
-const LayoutMetrics *g_layout = &layout_720x480;
-
-const LayoutMetrics &Layout() { return *g_layout; }
-
-const LayoutMetrics &SelectLayoutProfile(int screen_w, int screen_h) {
-  if (screen_w == layout_1024x768.screen_w && screen_h == layout_1024x768.screen_h) return layout_1024x768;
-  if (screen_w == layout_720x720.screen_w && screen_h == layout_720x720.screen_h) return layout_720x720;
-  if (screen_w == layout_640x480.screen_w && screen_h == layout_640x480.screen_h) return layout_640x480;
-  return layout_720x480;
-}
-
-int FocusedCoverW() { return static_cast<int>(Layout().cover_w * kFocusScale + 0.5f); }
-int FocusedCoverH() { return static_cast<int>(Layout().cover_h * kFocusScale + 0.5f); }
-int ScalePx(int value) {
-  return std::max(1, static_cast<int>(std::round(static_cast<float>(value) * Layout().ui_scale)));
-}
-float ScaleFloat(float value) { return value * Layout().ui_scale; }
-int ShelfGridCols() { return std::max(1, Layout().grid_cols); }
-int ShelfVisibleRows() { return std::max(1, Layout().visible_rows); }
-int ShelfItemsPerPage() { return ShelfGridCols() * ShelfVisibleRows(); }
-
 std::string NormalizePathKey(const std::string &path);
-
-enum class State { Boot, Shelf, Settings, Reader };
 struct CoverCacheEntry {
   SDL_Texture *texture = nullptr;
   int w = 0;
@@ -781,7 +625,7 @@ int main(int, char **argv) {
   if ((default_fullscreen && !force_windowed) || force_fullscreen) {
     win_flags |= SDL_WINDOW_FULLSCREEN;
   }
-  g_layout = &SelectLayoutProfile(screen_profile.screen_w, screen_profile.screen_h);
+  SetLayoutProfile(SelectLayoutProfile(screen_profile.screen_w, screen_profile.screen_h));
   if (verbose_log) {
     std::cout << "[native_h700] screen detect: source=" << screen_profile.detection_source
               << " detected=" << screen_profile.detected_w << "x" << screen_profile.detected_h
@@ -827,6 +671,15 @@ int main(int, char **argv) {
   }
   runtime_log::Line("main: SDL_CreateRenderer ok");
   const bool renderer_supports_target_textures = (renderer_info.flags & SDL_RENDERER_TARGETTEXTURE) != 0;
+
+  AppContext app_context;
+  app_context.window = window;
+  app_context.renderer = renderer;
+  app_context.screen_profile = screen_profile;
+  app_context.layout = &Layout();
+  app_context.verbose_log = verbose_log;
+  AppShell app_shell;
+  app_shell.Initialize(app_context);
 
   std::vector<SDL_GameController *> opened_controllers;
   std::vector<SDL_Joystick *> opened_joysticks;
@@ -1123,6 +976,7 @@ int main(int, char **argv) {
     std::cout << "[native_h700] pad map: " << input.DescribePadMap() << "\n";
   }
   ConfigStore config(config_path.string());
+  app_context.config.config = &config;
   if (!config.Get().audio) {
     config.Mutable().audio = true;
     config.MarkDirty();
@@ -1265,7 +1119,7 @@ int main(int, char **argv) {
   ZipImageRuntime zip_image_runtime;
   ReaderManager reader_manager;
   PdfReaderModule pdf_reader_module(pdf_runtime);
-  EpubReaderModule epub_reader_module(epub_runtime);
+  EpubReaderModule epub_reader_module;
   ZipImageReaderModule zip_image_reader_module(zip_image_runtime);
   if (verbose_log) {
     std::cout << "[native_h700] epub comic backend: " << epub_runtime.BackendName()
@@ -1277,8 +1131,7 @@ int main(int, char **argv) {
   ShelfRuntimeState shelf_runtime;
   uint64_t &shelf_content_version = shelf_runtime.content_version;
 
-  State state = State::Boot;
-  State settings_return_state = State::Shelf;
+  AppScene &state = app_shell.Scenes().CurrentRef();
   BootRuntimeState boot_runtime;
   {
     std::error_code ec;
@@ -1312,7 +1165,6 @@ int main(int, char **argv) {
   bool title_marquee_active = false;
 
   animation::TweenFloat menu_anim(0.0f);
-  animation::TweenFloat scene_flash(0.0f);
   bool menu_closing = false;
   float settings_toggle_guard = 0.0f;
   bool settings_close_armed = true;
@@ -1543,6 +1395,12 @@ int main(int, char **argv) {
     ClearUiTextCache(ui_text_cache, forget_texture_size);
   };
 
+  auto apply_epub_flow_theme = [&]() {
+    epub_reader_module.SetFlowBaseFontPointSize(current_reader_font_pt);
+    epub_reader_module.SetFlowColors(GetTxtBackgroundColor(config.Get().txt_background_color),
+                                     GetTxtFontColor(config.Get().txt_font_color));
+  };
+
   apply_txt_font_size_level = [&](int level) {
     const int clamped = ClampTxtFontSizeLevel(level);
     if (config.Mutable().txt_font_size_level != clamped) {
@@ -1552,7 +1410,7 @@ int main(int, char **argv) {
     }
     txt_settings_state.font_size_level = clamped;
     current_reader_font_pt = reader_font_pt_for_level(clamped);
-    epub_runtime.SetFlowBaseFontPointSize(current_reader_font_pt);
+    apply_epub_flow_theme();
     ShutdownUiTextCache(ui_text_cache, forget_texture_size);
   };
 
@@ -1593,7 +1451,7 @@ int main(int, char **argv) {
   };
 
   auto focused_title_needs_marquee = [&]() -> bool {
-    if (state != State::Shelf) return false;
+    if (state != AppScene::Shelf) return false;
     if (focus_index < 0 || focus_index >= static_cast<int>(shelf_items.size())) return false;
     SDL_Color title_color{248, 250, 255, 255};
     const std::string display = shelf_title_text(shelf_items[focus_index]);
@@ -1900,6 +1758,7 @@ int main(int, char **argv) {
       pdf_runtime,
       epub_runtime,
       zip_image_runtime,
+      &reader_manager,
       text_jump_to_percent,
   };
 
@@ -1909,13 +1768,12 @@ int main(int, char **argv) {
     return CurrentReaderProgressPercent(reader_progress_deps);
   };
 
-  bool running = true;
   uint32_t prev_ticks = SDL_GetTicks();
-  while (running) {
-    const uint32_t frame_begin_ticks = SDL_GetTicks();
-    uint32_t now = SDL_GetTicks();
-    float dt = std::max(0.0f, (now - prev_ticks) / 1000.0f);
-    prev_ticks = now;
+  while (app_shell.IsRunning()) {
+    const AppFrameTiming frame = app_shell.BeginFrame(prev_ticks);
+    const uint32_t frame_begin_ticks = frame.frame_begin_ticks;
+    const uint32_t now = frame.now;
+    const float dt = frame.dt;
 
     hold_cooldown = std::max(0.0f, hold_cooldown - dt);
     settings_toggle_guard = std::max(0.0f, settings_toggle_guard - dt);
@@ -1923,32 +1781,32 @@ int main(int, char **argv) {
     TickVersionUpdateState(version_update_state, dt);
 
     input.BeginFrame(dt);
-    SDL_Event e;
     const bool animate_enabled = config.Get().animations;
     const bool contributor_marquee_active =
-        state == State::Settings &&
+        state == AppScene::Settings &&
         !menu_items.empty() &&
         menu_items[std::clamp(menu_selected, 0, static_cast<int>(menu_items.size()) - 1)] ==
             SettingId::ContributorAvatars &&
         !contributor_avatar_entries.empty();
     const bool version_update_download_active =
-        state == State::Settings &&
+        state == AppScene::Settings &&
         !menu_items.empty() &&
         menu_items[std::clamp(menu_selected, 0, static_cast<int>(menu_items.size()) - 1)] ==
             SettingId::VersionUpdate &&
         version_update_state.download_in_progress;
     const bool has_active_animation =
-        state == State::Boot || input.AnyPressed() ||
+        state == AppScene::Boot || input.AnyPressed() ||
         txt_transcode_job.active ||
         (reader_mode == ReaderMode::Txt && reader_ui.Txt().open && reader_ui.Txt().loading) ||
         version_update_download_active ||
         contributor_marquee_active ||
-        (animate_enabled && (menu_anim.IsAnimating() || scene_flash.IsAnimating() || page_animating || any_grid_animating));
+        (animate_enabled &&
+         (menu_anim.IsAnimating() || app_shell.IsSceneFlashAnimating() || page_animating || any_grid_animating));
     const bool needs_periodic_tick =
-        (state == State::Shelf && title_marquee_active) ||
-        (state == State::Reader &&
+        (state == AppScene::Shelf && title_marquee_active) ||
+        (state == AppScene::Reader &&
          ((reader_mode == ReaderMode::Pdf && pdf_runtime.IsRenderPending()) ||
-          (reader_mode == ReaderMode::Epub && epub_runtime.IsRenderPending()) ||
+          (reader_mode == ReaderMode::Epub && reader_manager.Module(ReaderMode::Epub)->IsRenderPending()) ||
           (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsRenderPending())));
     const uint32_t loop_now = SDL_GetTicks();
     const bool has_pending_flush =
@@ -1984,23 +1842,12 @@ int main(int, char **argv) {
         auto_sleep_waiting_for_input = true;
       }
     };
+    const AppEventPumpResult event_pump =
+        app_shell.PumpEvents(input, has_active_animation, idle_wait_ms, note_user_input);
     if (has_active_animation) {
-      while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_QUIT) running = false;
-        note_user_input(e);
-        input.HandleEvent(e);
-      }
       maybe_trigger_auto_sleep();
     } else {
-      if (SDL_WaitEventTimeout(&e, idle_wait_ms)) {
-        if (e.type == SDL_QUIT) running = false;
-        note_user_input(e);
-        input.HandleEvent(e);
-        while (SDL_PollEvent(&e)) {
-          if (e.type == SDL_QUIT) running = false;
-          note_user_input(e);
-          input.HandleEvent(e);
-        }
+      if (event_pump.had_event) {
         maybe_trigger_auto_sleep();
       } else {
         maybe_trigger_auto_sleep();
@@ -2009,13 +1856,13 @@ int main(int, char **argv) {
         // Wake only to flush deferred IO; keep the current frame untouched.
           input.EndFrame();
           flush_deferred_writes(false);
-          prev_ticks = SDL_GetTicks();
+          app_shell.ResetFrameClock(prev_ticks);
           continue;
         }
         if (!needs_periodic_tick && !has_pending_flush) {
         // Fully idle: no input, no animation, no incremental loading.
         // Skip update/render work and keep sleeping until something changes.
-          prev_ticks = SDL_GetTicks();
+          app_shell.ResetFrameClock(prev_ticks);
           input.EndFrame();
           continue;
         }
@@ -2039,7 +1886,7 @@ int main(int, char **argv) {
     }
     process_txt_transcode_step();
     flush_deferred_writes(false);
-    if (state == State::Settings && volume_controller.UsesSystemVolume() && now - last_system_volume_sync >= 250) {
+    if (state == AppScene::Settings && volume_controller.UsesSystemVolume() && now - last_system_volume_sync >= 250) {
       int synced_volume_percent = app_ui.volume_display_percent;
       if (volume_controller.RefreshPercent(synced_volume_percent)) {
         app_ui.volume_display_percent = synced_volume_percent;
@@ -2083,7 +1930,7 @@ int main(int, char **argv) {
       transient_message_dismissed_this_frame = true;
     }
 
-    if (state == State::Shelf || state == State::Settings) {
+    if (state == AppScene::Shelf || state == AppScene::Settings) {
       if (input.IsJustPressed(Button::Up) || input.IsJustPressed(Button::Down) ||
           input.IsJustPressed(Button::Left) || input.IsJustPressed(Button::Right)) {
         play_sfx(SfxId::Move);
@@ -2097,12 +1944,12 @@ int main(int, char **argv) {
       }
     }
 
-    if (input.IsPressed(Button::Start) && input.IsPressed(Button::Select)) running = false;
+    if (input.IsPressed(Button::Start) && input.IsPressed(Button::Select)) app_shell.RequestQuit();
 
     // Dedicated settings toggle path (single entry for Start / Select mapping).
     const MenuToggleAction menu_toggle_action =
-        HandleMenuToggleInput(app_ui, input, state == State::Settings, state == State::Shelf,
-                              state == State::Reader, settings_close_armed, settings_toggle_guard, menu_closing,
+        HandleMenuToggleInput(app_ui, input, state == AppScene::Settings, state == AppScene::Shelf,
+                              state == AppScene::Reader, settings_close_armed, settings_toggle_guard, menu_closing,
                               kMenuToggleDebounceSec, input_profile);
     if (menu_toggle_action == MenuToggleAction::CloseSettings) {
       const NativeConfig &ui_cfg = config.Get();
@@ -2112,8 +1959,8 @@ int main(int, char **argv) {
       play_sfx(SfxId::Back);
     } else if (menu_toggle_action == MenuToggleAction::OpenFromShelf ||
                menu_toggle_action == MenuToggleAction::OpenFromReader) {
-      settings_return_state = (menu_toggle_action == MenuToggleAction::OpenFromShelf) ? State::Shelf : State::Reader;
-      state = State::Settings;
+      app_shell.Scenes().OpenSettingsFrom(
+          (menu_toggle_action == MenuToggleAction::OpenFromShelf) ? AppScene::Shelf : AppScene::Reader);
       menu_anim.Snap(0.0f);
       if (config.Get().animations) menu_anim.AnimateTo(1.0f, 0.20f, animation::Ease::OutCubic);
       else menu_anim.Snap(1.0f);
@@ -2123,7 +1970,7 @@ int main(int, char **argv) {
       play_sfx(SfxId::Back);
     }
 
-    if (state == State::Boot) {
+    if (state == AppScene::Boot) {
       BootRuntimeTickDeps boot_tick_deps{
           books_roots,
           kBootCountBatchEntries,
@@ -2133,7 +1980,7 @@ int main(int, char **argv) {
           [&](const std::string &doc_path) {
             const std::string ext = GetLowerExt(doc_path);
             if (ext == ".pdf") return pdf_runtime.HasRealRenderer();
-            if (ext == ".epub") return epub_runtime.HasRealRenderer();
+            if (ext == ".epub") return true;
             if (ext == ".zip" || ext == ".cbz") return zip_image_runtime.HasRealRenderer();
             return false;
           },
@@ -2156,7 +2003,7 @@ int main(int, char **argv) {
           },
           [&]() {
             runtime_log::Line("boot: pending update installed; restart via launcher");
-            running = false;
+            app_shell.RequestQuit();
             std::exit(23);
           },
           [&](size_t total_books, size_t cover_generate_count) {
@@ -2178,11 +2025,11 @@ int main(int, char **argv) {
               std::cout << "[native_h700] boot scan complete: books=" << total_books
                         << " cover_generate=" << cover_generate_count << "\n";
             }
-            state = State::Shelf;
+            app_shell.Scenes().EnterShelf();
           },
       };
       TickBootRuntime(boot_runtime, dt, boot_tick_deps);
-    } else if (state == State::Shelf) {
+    } else if (state == AppScene::Shelf) {
       const NativeConfig &ui_cfg = config.Get();
       ShelfRuntimeInputDeps shelf_input_deps{
           input,
@@ -2250,18 +2097,17 @@ int main(int, char **argv) {
             if (final_opened) {
               history_store.Add(open_path);
               reader_ui.current_book = open_path;
-              state = State::Reader;
-              scene_flash.Snap(kSceneFadeFlashAlpha);
-              scene_flash.AnimateTo(0.0f, kSceneFadeFlashDurationSec, animation::Ease::OutCubic);
+              app_shell.Scenes().EnterReader();
+              app_shell.StartSceneFlash();
             } else {
               show_transient_message("Open failed");
-              state = State::Shelf;
+              app_shell.Scenes().EnterShelf();
             }
             return final_opened;
           },
       };
       HandleShelfInput(shelf_input_deps);
-    } else if (state == State::Settings) {
+    } else if (state == AppScene::Settings) {
       const NativeConfig &ui_cfg = config.Get();
       if (!menu_items.empty() &&
           menu_items[std::clamp(menu_selected, 0, static_cast<int>(menu_items.size()) - 1)] == SettingId::SystemControls) {
@@ -2389,8 +2235,7 @@ int main(int, char **argv) {
                 config.Save();
                 settings_state.background_color = clamped;
                 settings_state.selected_option = clamped;
-                epub_runtime.SetFlowColors(GetTxtBackgroundColor(config.Get().txt_background_color),
-                                           GetTxtFontColor(config.Get().txt_font_color));
+                apply_epub_flow_theme();
                 return true;
               },
               [&](int color_index, TxtSettingsState &settings_state) {
@@ -2400,8 +2245,7 @@ int main(int, char **argv) {
                 config.Save();
                 settings_state.font_color = clamped;
                 settings_state.selected_option = clamped;
-                epub_runtime.SetFlowColors(GetTxtBackgroundColor(config.Get().txt_background_color),
-                                           GetTxtFontColor(config.Get().txt_font_color));
+                apply_epub_flow_theme();
                 return true;
               },
               [&](int delta, TxtSettingsState &settings_state) {
@@ -2438,8 +2282,8 @@ int main(int, char **argv) {
               [&](VersionUpdateState &update_state) { BeginVersionUpdateDownload(update_state); },
           },
           false,
-          [&]() { state = settings_return_state; },
-          [&]() { running = false; },
+          [&]() { app_shell.Scenes().ReturnFromSettings(); },
+          [&]() { app_shell.RequestQuit(); },
           [&]() {
             history_store.Clear();
             if (current_category() == ShelfCategory::History) {
@@ -2457,7 +2301,7 @@ int main(int, char **argv) {
           start_txt_transcode_job,
       };
       HandleSettingsInput(settings_input_deps);
-    } else if (state == State::Reader) {
+    } else if (state == AppScene::Reader) {
       if (input.IsJustPressed(Button::B)) {
         ReaderCloseDeps close_deps{
             reader_ui,
@@ -2470,9 +2314,8 @@ int main(int, char **argv) {
             persist_current_txt_resume_snapshot,
         };
         CloseReaderSession(close_deps);
-        state = State::Shelf;
-        scene_flash.Snap(kSceneFadeFlashAlpha);
-        scene_flash.AnimateTo(0.0f, kSceneFadeFlashDurationSec, animation::Ease::OutCubic);
+        app_shell.Scenes().EnterShelf();
+        app_shell.StartSceneFlash();
       } else {
         ReaderInputRouterDeps reader_input_deps{
             input,
@@ -2480,6 +2323,7 @@ int main(int, char **argv) {
             pdf_runtime,
             epub_runtime,
             zip_image_runtime,
+            &reader_manager,
             dt,
             ScalePx(kReaderTapStepPx),
             kTxtProgressOverlayTapStepPct,
@@ -2500,7 +2344,7 @@ int main(int, char **argv) {
 
     any_grid_animating = false;
     if (animate_enabled) {
-      scene_flash.Update(dt);
+      app_shell.TickSceneFlash(dt, true);
       page_slide.Update(dt);
       if (page_animating && !page_slide.IsAnimating() && page_slide.Value() >= 0.999f) {
         page_animating = false;
@@ -2509,15 +2353,14 @@ int main(int, char **argv) {
     } else {
       page_animating = false;
       page_slide.Snap(0.0f);
-      scene_flash.Snap(0.0f);
-      if (state != State::Settings) menu_anim.Snap(0.0f);
+      app_shell.TickSceneFlash(dt, false);
+      if (state != AppScene::Settings) menu_anim.Snap(0.0f);
     }
 
     // Draw
-    SDL_SetRenderDrawColor(renderer, 26, 27, 31, 255);
-    SDL_RenderClear(renderer);
+    app_shell.BeginDraw();
 
-    if (state == State::Boot) {
+    if (state == AppScene::Boot) {
       BootRuntimeRenderDeps boot_render_deps{
           renderer,
           boot_runtime,
@@ -2536,7 +2379,7 @@ int main(int, char **argv) {
 
       std::function<void()> draw_volume_overlay = []() {};
       std::function<void()> draw_system_status_overlay = []() {};
-      if (state == State::Shelf || state == State::Settings) {
+      if (state == AppScene::Shelf || state == AppScene::Settings) {
         draw_volume_overlay = [&]() {
           VolumeOverlayRenderDeps volume_deps{
               renderer,
@@ -2650,12 +2493,12 @@ int main(int, char **argv) {
         DrawShelfRuntime(shelf_render_deps);
         draw_system_status_overlay();
 
-        if (state != State::Settings) {
+        if (state != AppScene::Settings) {
           draw_volume_overlay();
         }
       }
 
-      if (state == State::Reader) {
+      if (state == AppScene::Reader) {
         const SDL_Color reader_bg =
             (reader_mode == ReaderMode::Txt && reader_ui.Txt().open)
                 ? GetTxtBackgroundColor(config.Get().txt_background_color)
@@ -2688,10 +2531,11 @@ int main(int, char **argv) {
           pdf_runtime.UpdateViewport(Layout().screen_w, Layout().screen_h);
           pdf_runtime.Tick();
           pdf_runtime.Draw(renderer);
-        } else if (reader_mode == ReaderMode::Epub && epub_runtime.IsOpen()) {
-          epub_runtime.UpdateViewport(Layout().screen_w, Layout().screen_h);
-          epub_runtime.Tick();
-          epub_runtime.Draw(renderer);
+        } else if (reader_mode == ReaderMode::Epub && reader_manager.Module(ReaderMode::Epub)->IsOpen()) {
+          IReaderModule *epub_module = reader_manager.Module(ReaderMode::Epub);
+          epub_module->UpdateViewport(Layout().screen_w, Layout().screen_h);
+          epub_module->Tick(dt);
+          epub_module->Draw(renderer);
         } else if (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsOpen()) {
           zip_image_runtime.UpdateViewport(Layout().screen_w, Layout().screen_h);
           zip_image_runtime.Tick();
@@ -2715,7 +2559,7 @@ int main(int, char **argv) {
         DrawReaderProgressOverlay(progress_overlay_deps);
       }
 
-      if (state == State::Settings) {
+      if (state == AppScene::Settings) {
         SettingsRuntimeRenderDeps settings_render_deps{
             renderer,
             ui_assets,
@@ -2776,22 +2620,11 @@ int main(int, char **argv) {
 #endif
     }
 
-    const float flash = scene_flash.Value();
-    if (flash > 0.001f) {
-      DrawRect(renderer, 0, 0, Layout().screen_w, Layout().screen_h,
-               SDL_Color{0, 0, 0, static_cast<Uint8>(std::clamp(flash, 0.0f, 1.0f) * 255.0f)});
-    }
+    app_shell.DrawSceneFlash();
 
-    SDL_RenderPresent(renderer);
+    app_shell.Present();
 
-    uint32_t frame_budget_ms = 0;
-    if (contributor_marquee_active) frame_budget_ms = kAvatarMarqueeFrameBudgetMs;
-    else if (has_active_animation) frame_budget_ms = kActiveFrameBudgetMs;
-    else if (needs_periodic_tick) frame_budget_ms = kPeriodicTickFrameBudgetMs;
-    if (frame_budget_ms > 0) {
-      const uint32_t frame_elapsed = SDL_GetTicks() - frame_begin_ticks;
-      if (frame_elapsed < frame_budget_ms) SDL_Delay(frame_budget_ms - frame_elapsed);
-    }
+    app_shell.ThrottleFrame(frame_begin_ticks, contributor_marquee_active, has_active_animation, needs_periodic_tick);
   }
 
   if (!current_book.empty()) {
@@ -2802,10 +2635,11 @@ int main(int, char **argv) {
       reader.scroll_y = active_pdf.scroll_y;
       reader.zoom = active_pdf.zoom;
       reader.rotation = active_pdf.rotation;
-    } else if (reader_mode == ReaderMode::Epub && epub_runtime.IsOpen()) {
-      const EpubRuntimeProgress active_epub = epub_runtime.Progress();
+    } else if (reader_mode == ReaderMode::Epub && reader_manager.Module(ReaderMode::Epub)->IsOpen()) {
+      const IReaderModule *epub_module = reader_manager.Module(ReaderMode::Epub);
+      const ReaderProgress active_epub = epub_module->Progress();
       reader.page = active_epub.page;
-      reader.scroll_x = active_epub.scroll_x;
+      reader.scroll_x = std::string(epub_module->BackendName()) == "epub-flow" ? 0 : active_epub.scroll_x;
       reader.scroll_y = active_epub.scroll_y;
       reader.zoom = active_epub.zoom;
       reader.rotation = active_epub.rotation;
@@ -2820,7 +2654,7 @@ int main(int, char **argv) {
       reader = txt_reader_module.Progress();
       reader_ui.Txt().resume_cache_dirty = true;
       persist_current_txt_resume_snapshot(current_book, true);
-    } else if (state != State::Reader) {
+    } else if (state != AppScene::Reader) {
       // Not actively reading anymore.
       current_book.clear();
     }

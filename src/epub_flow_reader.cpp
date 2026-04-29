@@ -1,6 +1,7 @@
 #include "epub_flow_reader.h"
 
 #include "epub_runtime.h"
+#include "async_image_render_queue.h"
 #include "image_decode.h"
 #include "runtime_log.h"
 
@@ -13,11 +14,13 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include "filesystem_compat.h"
 #include <regex>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifdef HAVE_LIBZIP
@@ -45,6 +48,12 @@ constexpr size_t kInitialFlowDocsToLoad = 6;
 constexpr size_t kInitialFlowMinBlocks = 80;
 constexpr size_t kMoreFlowDocsToLoad = 1;
 constexpr int kLazyLoadAheadScreens = 1;
+constexpr int64_t kFlowImageTexturePixelBudget = 3600000;
+
+bool FlowImagePerfLogEnabled() {
+  const char *env = std::getenv("ROCREADER_IMAGE_PERF_LOG");
+  return env && *env && std::string(env) != "0";
+}
 
 enum class FlowBlockType { Paragraph, Header, ListItem, Image, Space };
 
@@ -68,6 +77,28 @@ struct TextTextureEntry {
   int h = 0;
   uint32_t last_use = 0;
 };
+
+std::string FlowImageTextureKey(const std::string &resource, int target_w, int target_h) {
+  return resource + "|" + std::to_string(std::max(1, target_w)) + "x" + std::to_string(std::max(1, target_h));
+}
+
+SDL_Point ClampFlowImageTarget(int source_w, int source_h, int target_w, int target_h) {
+  target_w = std::max(1, target_w);
+  target_h = std::max(1, target_h);
+  if (source_w <= 0 || source_h <= 0) return SDL_Point{target_w, target_h};
+
+  const double fit = std::min(static_cast<double>(target_w) / static_cast<double>(source_w),
+                              static_cast<double>(target_h) / static_cast<double>(source_h));
+  int out_w = std::max(1, static_cast<int>(std::llround(static_cast<double>(source_w) * fit)));
+  int out_h = std::max(1, static_cast<int>(std::llround(static_cast<double>(source_h) * fit)));
+  const int64_t pixels = static_cast<int64_t>(out_w) * static_cast<int64_t>(out_h);
+  if (pixels > kFlowImageTexturePixelBudget && pixels > 0) {
+    const double ratio = std::sqrt(static_cast<double>(kFlowImageTexturePixelBudget) / static_cast<double>(pixels));
+    out_w = std::max(1, static_cast<int>(std::llround(static_cast<double>(out_w) * ratio)));
+    out_h = std::max(1, static_cast<int>(std::llround(static_cast<double>(out_h) * ratio)));
+  }
+  return SDL_Point{out_w, out_h};
+}
 
 struct ManifestItem {
   std::string href;
@@ -665,6 +696,65 @@ int NormalizeRotation(int rotation) {
   return rotation;
 }
 
+bool RenderFlowImageJob(const std::string &epub_path, const AsyncImageRenderJob &job,
+                        std::atomic<bool> &cancel, AsyncImageRenderResult &out) {
+#ifdef HAVE_LIBZIP
+  if (epub_path.empty() || job.source_key.empty() || cancel.load()) return false;
+  int zerr = 0;
+  zip_t *za = zip_open(epub_path.c_str(), ZIP_RDONLY, &zerr);
+  if (!za) return false;
+  std::string bytes;
+  const bool ok = ReadZipEntry(za, job.source_key, bytes);
+  zip_close(za);
+  if (!ok || bytes.empty() || cancel.load()) return false;
+
+  SDL_Surface *surface = DecodeSurfaceFromMemoryFit(bytes.data(), bytes.size(), job.viewport_w, job.viewport_h);
+  if (!surface || cancel.load()) {
+    if (surface) SDL_FreeSurface(surface);
+    return false;
+  }
+
+  SDL_Surface *texture_surface = surface;
+  SDL_Surface *scaled_surface = nullptr;
+  if (job.viewport_w > 0 && job.viewport_h > 0 &&
+      (surface->w > job.viewport_w || surface->h > job.viewport_h)) {
+    scaled_surface = SDL_CreateRGBSurfaceWithFormat(0, job.viewport_w, job.viewport_h, 32, SDL_PIXELFORMAT_RGBA32);
+    if (scaled_surface) {
+      SDL_Rect src{0, 0, surface->w, surface->h};
+      SDL_Rect dst{0, 0, job.viewport_w, job.viewport_h};
+      if (SDL_BlitScaled(surface, &src, scaled_surface, &dst) == 0) {
+        texture_surface = scaled_surface;
+      }
+    }
+  }
+
+  SDL_Surface *rgba_surface = SDL_ConvertSurfaceFormat(texture_surface, SDL_PIXELFORMAT_RGBA32, 0);
+  if (scaled_surface) SDL_FreeSurface(scaled_surface);
+  SDL_FreeSurface(surface);
+  if (!rgba_surface || cancel.load()) {
+    if (rgba_surface) SDL_FreeSurface(rgba_surface);
+    return false;
+  }
+
+  out.width = rgba_surface->w;
+  out.height = rgba_surface->h;
+  out.rgba.resize(static_cast<size_t>(out.width) * static_cast<size_t>(out.height) * 4);
+  for (int y = 0; y < out.height; ++y) {
+    const unsigned char *src_row = static_cast<const unsigned char *>(rgba_surface->pixels) + y * rgba_surface->pitch;
+    unsigned char *dst_row = out.rgba.data() + static_cast<size_t>(y) * static_cast<size_t>(out.width) * 4;
+    std::memcpy(dst_row, src_row, static_cast<size_t>(out.width) * 4);
+  }
+  SDL_FreeSurface(rgba_surface);
+  return !cancel.load() && out.width > 0 && out.height > 0 && !out.rgba.empty();
+#else
+  (void)epub_path;
+  (void)job;
+  (void)cancel;
+  (void)out;
+  return false;
+#endif
+}
+
 }  // namespace
 
 struct EpubFlowReader::Impl {
@@ -687,10 +777,15 @@ struct EpubFlowReader::Impl {
   bool all_docs_loaded = true;
   bool lazy_load_requested = false;
   std::vector<FlowBlock> source_blocks;
+  mutable AsyncImageRenderQueue image_queue;
   mutable std::unordered_map<std::string, SDL_Texture *> image_textures;
-  mutable std::unordered_map<std::string, SDL_Point> image_sizes;
+  mutable std::unordered_map<std::string, SDL_Point> image_natural_sizes;
+  mutable std::unordered_map<std::string, SDL_Point> image_texture_sizes;
+  mutable std::unordered_map<std::string, AsyncImageRenderResult> image_ready;
+  mutable std::unordered_set<std::string> image_pending;
   mutable std::unordered_map<std::string, TextTextureEntry> text_textures;
   mutable int image_texture_creates_this_frame = 0;
+  mutable int image_decode_requests_this_frame = 0;
 #ifdef HAVE_SDL2_TTF
   TTF_Font *font = nullptr;
   TTF_Font *header_font = nullptr;
@@ -777,12 +872,17 @@ struct EpubFlowReader::Impl {
 #endif
   }
 
-  void DestroyImages() const {
+  void DestroyImages(bool clear_natural_sizes = false) const {
+    image_queue.CancelTarget();
+    image_pending.clear();
+    image_ready.clear();
+    image_decode_requests_this_frame = 0;
     for (auto &kv : image_textures) {
       if (kv.second) SDL_DestroyTexture(kv.second);
     }
     image_textures.clear();
-    image_sizes.clear();
+    image_texture_sizes.clear();
+    if (clear_natural_sizes) image_natural_sizes.clear();
   }
 
   void DestroyTextTextures() const {
@@ -807,8 +907,8 @@ struct EpubFlowReader::Impl {
   bool ReadImageSize(const std::string &resource, int &w, int &h) {
     w = 0;
     h = 0;
-    const auto cached = image_sizes.find(resource);
-    if (cached != image_sizes.end()) {
+    const auto cached = image_natural_sizes.find(resource);
+    if (cached != image_natural_sizes.end()) {
       w = cached->second.x;
       h = cached->second.y;
       return w > 0 && h > 0;
@@ -822,7 +922,7 @@ struct EpubFlowReader::Impl {
     zip_close(za);
     if (!ok || bytes.empty()) return false;
     if (ProbeImageSizeFromBytes(bytes, w, h)) {
-      image_sizes[resource] = SDL_Point{w, h};
+      image_natural_sizes[resource] = SDL_Point{w, h};
       return true;
     }
     return false;
@@ -830,6 +930,15 @@ struct EpubFlowReader::Impl {
     (void)resource;
     return false;
 #endif
+  }
+
+  void StartImageQueue() {
+    image_queue.Shutdown();
+    image_queue.Start("epub_flow_image_worker",
+                      [this](const AsyncImageRenderJob &job, std::atomic<bool> &cancel,
+                             AsyncImageRenderResult &out) {
+                        return RenderFlowImageJob(path, job, cancel, out);
+                      });
   }
 
   void Relayout(bool clear_images = true, bool clear_text_cache = true) {
@@ -934,51 +1043,134 @@ struct EpubFlowReader::Impl {
     }
   }
 
-  SDL_Texture *LoadImage(SDL_Renderer *r, const FlowBlock &block, int &w, int &h) const {
-    const auto size_it = image_sizes.find(block.resource);
-    if (size_it != image_sizes.end()) {
-      w = size_it->second.x;
-      h = size_it->second.y;
+  bool CreateImageTextureFromResult(SDL_Renderer *r, const AsyncImageRenderResult &ready) const {
+    if (!r || !ready.success || ready.job.source_key.empty() || ready.width <= 0 || ready.height <= 0 ||
+        ready.rgba.empty()) {
+      return false;
     }
-    const auto tex_it = image_textures.find(block.resource);
-    if (tex_it != image_textures.end()) return tex_it->second;
-    if (image_texture_creates_this_frame >= kMaxImageTextureCreatesPerFrame) return nullptr;
-#ifdef HAVE_LIBZIP
-    int zerr = 0;
-    zip_t *za = zip_open(path.c_str(), ZIP_RDONLY, &zerr);
-    if (!za) return nullptr;
-    std::string bytes;
-    const bool ok = ReadZipEntry(za, block.resource, bytes);
-    zip_close(za);
-    if (!ok || bytes.empty()) return nullptr;
-    SDL_Surface *surface = DecodeSurfaceFromMemoryFit(bytes.data(), bytes.size(), block.draw_w, block.draw_h);
-    if (!surface) return nullptr;
-    w = surface->w;
-    h = surface->h;
-    SDL_Surface *texture_surface = surface;
-    SDL_Surface *scaled_surface = nullptr;
-    if (block.draw_w > 0 && block.draw_h > 0 &&
-        (surface->w > block.draw_w || surface->h > block.draw_h)) {
-      scaled_surface = SDL_CreateRGBSurfaceWithFormat(0, block.draw_w, block.draw_h, 32, SDL_PIXELFORMAT_RGBA32);
-      if (scaled_surface) {
-        SDL_Rect src{0, 0, surface->w, surface->h};
-        SDL_Rect dst{0, 0, block.draw_w, block.draw_h};
-        if (SDL_BlitScaled(surface, &src, scaled_surface, &dst) == 0) {
-          texture_surface = scaled_surface;
-        }
+    const Uint32 perf_begin = FlowImagePerfLogEnabled() ? SDL_GetTicks() : 0;
+    const std::string texture_key =
+        FlowImageTextureKey(ready.job.source_key, ready.job.viewport_w, ready.job.viewport_h);
+    SDL_Texture *texture = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC,
+                                             ready.width, ready.height);
+    if (!texture) return false;
+    const Uint32 perf_create = FlowImagePerfLogEnabled() ? SDL_GetTicks() : 0;
+    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    if (SDL_UpdateTexture(texture, nullptr, ready.rgba.data(), ready.width * 4) != 0) {
+      SDL_DestroyTexture(texture);
+      return false;
+    }
+    const Uint32 perf_update = FlowImagePerfLogEnabled() ? SDL_GetTicks() : 0;
+    auto old = image_textures.find(texture_key);
+    if (old != image_textures.end() && old->second) SDL_DestroyTexture(old->second);
+    image_textures[texture_key] = texture;
+    image_texture_sizes[texture_key] = SDL_Point{ready.width, ready.height};
+    ++image_texture_creates_this_frame;
+    if (FlowImagePerfLogEnabled()) {
+      runtime_log::Line("[epub_flow_perf] texture resource=" + ready.job.source_key +
+                        " size=" + std::to_string(ready.width) + "x" + std::to_string(ready.height) +
+                        " create_ms=" + std::to_string(perf_create - perf_begin) +
+                        " update_ms=" + std::to_string(perf_update - perf_create));
+    }
+    return true;
+  }
+
+  void DrainReadyImages(SDL_Renderer *r) const {
+    AsyncImageRenderResult ready;
+    while (image_queue.TakeReady(ready)) {
+      const std::string texture_key =
+          FlowImageTextureKey(ready.job.source_key, ready.job.viewport_w, ready.job.viewport_h);
+      image_pending.erase(texture_key);
+      if (!ready.success) {
+        ready = AsyncImageRenderResult{};
+        continue;
+      }
+      image_ready[texture_key] = std::move(ready);
+      ready = AsyncImageRenderResult{};
+    }
+
+    if (!r || image_texture_creates_this_frame >= kMaxImageTextureCreatesPerFrame) return;
+    for (auto it = image_ready.begin(); it != image_ready.end();) {
+      if (image_texture_creates_this_frame >= kMaxImageTextureCreatesPerFrame) break;
+      if (CreateImageTextureFromResult(r, it->second)) {
+        it = image_ready.erase(it);
+      } else {
+        ++it;
       }
     }
-    SDL_Texture *texture = SDL_CreateTextureFromSurface(r, texture_surface);
-    if (scaled_surface) SDL_FreeSurface(scaled_surface);
-    SDL_FreeSurface(surface);
-    ++image_texture_creates_this_frame;
-    image_textures[block.resource] = texture;
-    image_sizes[block.resource] = SDL_Point{w, h};
-    return texture;
-#else
-    (void)r;
+  }
+
+  void QueueImageDecode(const FlowBlock &block) const {
+    const SDL_Point target = ClampFlowImageTarget(block.image_w, block.image_h, block.draw_w, block.draw_h);
+    const std::string texture_key = FlowImageTextureKey(block.resource, target.x, target.y);
+    if (block.resource.empty() ||
+        image_textures.find(texture_key) != image_textures.end() ||
+        image_ready.find(texture_key) != image_ready.end() ||
+        image_pending.find(texture_key) != image_pending.end() ||
+        image_decode_requests_this_frame > 0 ||
+        image_queue.IsBusyOrReady() ||
+        !image_ready.empty()) {
+      return;
+    }
+    AsyncImageRenderJob job;
+    job.source_key = block.resource;
+    job.viewport_w = target.x;
+    job.viewport_h = target.y;
+    if (image_queue.Request(job, false)) {
+      image_pending.insert(texture_key);
+      ++image_decode_requests_this_frame;
+    }
+  }
+
+  SDL_Texture *FindFallbackImageTexture(const std::string &resource, int &w, int &h) const {
+    if (resource.empty()) return nullptr;
+    const std::string prefix = resource + "|";
+    for (const auto &kv : image_textures) {
+      if (kv.first.rfind(prefix, 0) != 0 || !kv.second) continue;
+      const auto size_it = image_texture_sizes.find(kv.first);
+      if (size_it != image_texture_sizes.end()) {
+        w = size_it->second.x;
+        h = size_it->second.y;
+      }
+      return kv.second;
+    }
     return nullptr;
-#endif
+  }
+
+  SDL_Texture *LoadImage(SDL_Renderer *r, const FlowBlock &block, int &w, int &h) const {
+    DrainReadyImages(r);
+    const SDL_Point target = ClampFlowImageTarget(block.image_w, block.image_h, block.draw_w, block.draw_h);
+    const std::string texture_key = FlowImageTextureKey(block.resource, target.x, target.y);
+    const auto tex_size_it = image_texture_sizes.find(texture_key);
+    if (tex_size_it != image_texture_sizes.end()) {
+      w = tex_size_it->second.x;
+      h = tex_size_it->second.y;
+    } else {
+      w = target.x;
+      h = target.y;
+    }
+    const auto tex_it = image_textures.find(texture_key);
+    if (tex_it != image_textures.end()) return tex_it->second;
+    SDL_Texture *fallback = FindFallbackImageTexture(block.resource, w, h);
+    if (fallback) {
+      QueueImageDecode(block);
+      return fallback;
+    }
+    if (image_texture_creates_this_frame >= kMaxImageTextureCreatesPerFrame) return nullptr;
+    QueueImageDecode(block);
+    return nullptr;
+  }
+
+  void QueueImagesAheadOfViewport() const {
+    const int prefetch_top = scroll_y + ViewHeight();
+    const int prefetch_bottom = prefetch_top + ViewHeight() * 2;
+    for (const FlowBlock &block : source_blocks) {
+      if (block.y > prefetch_bottom) break;
+      if (block.y + block.h < prefetch_top) continue;
+      if (block.type != FlowBlockType::Image) continue;
+      QueueImageDecode(block);
+      if (image_decode_requests_this_frame > 0 || image_queue.IsBusyOrReady() || !image_ready.empty()) return;
+    }
   }
 
   bool LoadMoreDocs(size_t max_docs) {
@@ -1071,6 +1263,7 @@ bool EpubFlowReader::Open(const std::string &path, SDL_Renderer *renderer, int s
     return false;
   }
   impl_->path = path;
+  impl_->StartImageQueue();
   impl_->ordered_docs = pkg.ordered_docs;
   impl_->next_doc_index = 0;
   impl_->all_docs_loaded = impl_->ordered_docs.empty();
@@ -1118,7 +1311,8 @@ bool EpubFlowReader::Open(const std::string &path, SDL_Renderer *renderer, int s
 
 void EpubFlowReader::Close() {
   if (!impl_) return;
-  impl_->DestroyImages();
+  impl_->image_queue.Shutdown();
+  impl_->DestroyImages(true);
   impl_->DestroyTextTextures();
   impl_->CloseFonts();
   impl_->path.clear();
@@ -1137,13 +1331,19 @@ void EpubFlowReader::Close() {
 bool EpubFlowReader::IsOpen() const { return impl_ && !impl_->path.empty(); }
 bool EpubFlowReader::HasRealRenderer() const { return true; }
 const char *EpubFlowReader::BackendName() const { return "epub-flow"; }
-bool EpubFlowReader::IsRenderPending() const { return false; }
+bool EpubFlowReader::IsRenderPending() const {
+  return impl_ && (impl_->image_queue.IsBusyOrReady() || !impl_->image_pending.empty() ||
+                   !impl_->image_ready.empty());
+}
 
 void EpubFlowReader::UpdateViewport(int screen_w, int screen_h) {
   if (!IsOpen()) return;
+  screen_w = std::max(1, screen_w);
+  screen_h = std::max(1, screen_h);
+  if (impl_->screen_w == screen_w && impl_->screen_h == screen_h) return;
   const float pct = impl_->MaxScroll() > 0 ? static_cast<float>(impl_->scroll_y) / impl_->MaxScroll() : 0.0f;
-  impl_->screen_w = std::max(1, screen_w);
-  impl_->screen_h = std::max(1, screen_h);
+  impl_->screen_w = screen_w;
+  impl_->screen_h = screen_h;
   impl_->scroll_y = 0;
   impl_->Relayout();
   impl_->scroll_y = std::clamp(static_cast<int>(std::lround(pct * impl_->MaxScroll())), 0, impl_->MaxScroll());
@@ -1155,11 +1355,13 @@ void EpubFlowReader::Tick() {
     impl_->lazy_load_requested = false;
     impl_->LoadMoreDocs(kMoreFlowDocsToLoad);
   }
+  impl_->QueueImagesAheadOfViewport();
 }
 
 void EpubFlowReader::Draw(SDL_Renderer *renderer) const {
   if (!IsOpen() || !renderer) return;
   impl_->image_texture_creates_this_frame = 0;
+  impl_->image_decode_requests_this_frame = 0;
   SDL_SetRenderDrawColor(renderer, impl_->background_color.r, impl_->background_color.g,
                          impl_->background_color.b, impl_->background_color.a);
   SDL_Rect bg{0, 0, impl_->screen_w, impl_->screen_h};

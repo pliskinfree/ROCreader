@@ -2,6 +2,7 @@
 
 #include "epub_runtime.h"
 #include "pdf_runtime.h"
+#include "reader_manager.h"
 #include "reader_session_state.h"
 #include "ui_text_cache.h"
 #include "zip_image_runtime.h"
@@ -16,6 +17,7 @@ struct ReaderProgressControllerDeps {
   PdfRuntime &pdf_runtime;
   EpubRuntime &epub_runtime;
   ZipImageRuntime &zip_image_runtime;
+  ReaderManager *reader_manager = nullptr;
   std::function<void(int)> text_jump_to_percent;
 };
 
@@ -44,4 +46,3 @@ struct ReaderProgressOverlayRenderDeps {
 };
 
 void DrawReaderProgressOverlay(ReaderProgressOverlayRenderDeps &deps);
-

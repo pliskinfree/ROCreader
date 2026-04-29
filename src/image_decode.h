@@ -6,3 +6,4 @@
 
 SDL_Surface *DecodeSurfaceFromMemory(const void *data, size_t size);
 SDL_Surface *DecodeSurfaceFromMemoryFit(const void *data, size_t size, int max_w, int max_h);
+bool ProbeImageSizeFromMemory(const void *data, size_t size, int &w, int &h);

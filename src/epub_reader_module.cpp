@@ -1,80 +1,143 @@
 #include "epub_reader_module.h"
 
-#include <string>
+#include "runtime_log.h"
 
-EpubReaderModule::EpubReaderModule(EpubRuntime &runtime) : runtime_(runtime) {}
+EpubReaderModule::EpubReaderModule()
+    : comic_module_(), flow_module_() {}
 
 bool EpubReaderModule::Open(const ReaderOpenRequest &request) {
-  EpubRuntimeProgress progress;
-  progress.page = request.progress.page;
-  progress.rotation = request.progress.rotation;
-  progress.zoom = request.progress.zoom;
-  progress.scroll_x = request.progress.scroll_x;
-  progress.scroll_y = request.progress.scroll_y;
   restore_progress_ = request.progress;
-  return runtime_.Open(request.renderer,
-                       request.path,
-                       request.screen_w,
-                       request.screen_h,
-                       progress,
-                       request.flow_base_font_pt,
-                       request.flow_background_color,
-                       request.flow_font_color);
+  active_module_ = nullptr;
+  active_kind_ = ClassifyEpub(request.path);
+
+  if (active_kind_ == EpubKind::FlowMixed) {
+    if (flow_module_.Open(request)) {
+      active_module_ = &flow_module_;
+      return true;
+    }
+    runtime_log::Line("[epub_reader_module] independent flow open failed, falling back to comic path=" +
+                      request.path);
+  }
+
+  if (comic_module_.Open(request)) {
+    active_module_ = &comic_module_;
+    active_kind_ = EpubKind::ComicImageOnly;
+    return true;
+  }
+
+  if (active_kind_ != EpubKind::FlowMixed && flow_module_.Open(request)) {
+    active_module_ = &flow_module_;
+    active_kind_ = EpubKind::FlowMixed;
+    return true;
+  }
+
+  active_kind_ = EpubKind::Unknown;
+  return false;
 }
 
 void EpubReaderModule::Close() {
-  runtime_.Close();
+  if (active_module_) active_module_->Close();
+  active_module_ = nullptr;
+  active_kind_ = EpubKind::Unknown;
 }
 
 bool EpubReaderModule::IsOpen() const {
-  return runtime_.IsOpen();
+  return active_module_ ? active_module_->IsOpen() : false;
 }
 
 void EpubReaderModule::UpdateViewport(int w, int h) {
-  runtime_.UpdateViewport(w, h);
+  if (active_module_) active_module_->UpdateViewport(w, h);
 }
 
 void EpubReaderModule::Tick(float dt) {
-  (void)dt;
-  runtime_.Tick();
+  if (active_module_) active_module_->Tick(dt);
 }
 
 void EpubReaderModule::Draw(SDL_Renderer *renderer) {
-  runtime_.Draw(renderer);
+  if (active_module_) active_module_->Draw(renderer);
 }
 
 void EpubReaderModule::HandleInput(const InputManager &input, float dt) {
-  (void)input;
-  (void)dt;
+  if (active_module_) active_module_->HandleInput(input, dt);
 }
 
 ReaderProgress EpubReaderModule::Progress() const {
-  const EpubRuntimeProgress progress = runtime_.Progress();
-  return ReaderProgress{progress.page, progress.rotation, progress.zoom, progress.scroll_x, progress.scroll_y};
+  return active_module_ ? active_module_->Progress() : ReaderProgress{};
 }
 
 void EpubReaderModule::RestoreProgress(const ReaderProgress &progress) {
   restore_progress_ = progress;
+  if (active_module_) active_module_->RestoreProgress(progress);
 }
 
 int EpubReaderModule::PageCount() const {
-  return runtime_.PageCount();
+  return active_module_ ? active_module_->PageCount() : 0;
 }
 
 int EpubReaderModule::CurrentPage() const {
-  return runtime_.CurrentPage();
+  return active_module_ ? active_module_->CurrentPage() : 0;
 }
 
 ReaderCapabilities EpubReaderModule::Capabilities() const {
+  if (active_module_) return active_module_->Capabilities();
   ReaderCapabilities capabilities;
-  const bool flow_epub = std::string(runtime_.BackendName()) == "epub-flow";
-  capabilities.supports_rotation = !flow_epub;
-  capabilities.supports_zoom = !flow_epub;
-  capabilities.supports_horizontal_pan = !flow_epub;
-  capabilities.supports_continuous_scroll = true;
-  capabilities.uses_txt_theme = flow_epub;
-  capabilities.is_image_sequence = !flow_epub;
-  capabilities.is_flow_layout = flow_epub;
   return capabilities;
 }
 
+bool EpubReaderModule::IsRenderPending() const {
+  return active_module_ ? active_module_->IsRenderPending() : false;
+}
+
+const char *EpubReaderModule::BackendName() const {
+  return active_module_ ? active_module_->BackendName() : "none";
+}
+
+void EpubReaderModule::RotateLeft() {
+  if (active_module_) active_module_->RotateLeft();
+}
+
+void EpubReaderModule::RotateRight() {
+  if (active_module_) active_module_->RotateRight();
+}
+
+void EpubReaderModule::ZoomOut() {
+  if (active_module_) active_module_->ZoomOut();
+}
+
+void EpubReaderModule::ZoomIn() {
+  if (active_module_) active_module_->ZoomIn();
+}
+
+void EpubReaderModule::ResetView() {
+  if (active_module_) active_module_->ResetView();
+}
+
+bool EpubReaderModule::PanHorizontalByPixels(int delta_px) {
+  return active_module_ ? active_module_->PanHorizontalByPixels(delta_px) : false;
+}
+
+void EpubReaderModule::ScrollByPixels(int delta_px) {
+  if (active_module_) active_module_->ScrollByPixels(delta_px);
+}
+
+void EpubReaderModule::JumpByScreen(int direction) {
+  if (active_module_) active_module_->JumpByScreen(direction);
+}
+
+void EpubReaderModule::SetPage(int page_index) {
+  if (active_module_) active_module_->SetPage(page_index);
+}
+
+void EpubReaderModule::SetFlowBaseFontPointSize(int base_font_pt) {
+  flow_module_.SetFlowBaseFontPointSize(base_font_pt);
+  if (active_module_ && active_module_ != &flow_module_) {
+    active_module_->SetFlowBaseFontPointSize(base_font_pt);
+  }
+}
+
+void EpubReaderModule::SetFlowColors(SDL_Color background_color, SDL_Color font_color) {
+  flow_module_.SetFlowColors(background_color, font_color);
+  if (active_module_ && active_module_ != &flow_module_) {
+    active_module_->SetFlowColors(background_color, font_color);
+  }
+}

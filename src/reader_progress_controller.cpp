@@ -55,10 +55,17 @@ void ReaderJumpToPercent(ReaderProgressControllerDeps &deps, int pct) {
                                                        std::max(1, deps.pdf_runtime.PageCount())));
     return;
   }
-  if (reader_mode == ReaderMode::Epub && deps.epub_runtime.IsOpen()) {
-    deps.epub_runtime.SetPage(ReaderPageIndexForPercent(deps.epub_runtime.CurrentPage(),
-                                                        pct,
-                                                        std::max(1, deps.epub_runtime.PageCount())));
+  IReaderModule *epub_module = deps.reader_manager ? deps.reader_manager->Module(ReaderMode::Epub) : nullptr;
+  if (reader_mode == ReaderMode::Epub && ((epub_module && epub_module->IsOpen()) || deps.epub_runtime.IsOpen())) {
+    if (epub_module && epub_module->IsOpen()) {
+      epub_module->SetPage(ReaderPageIndexForPercent(epub_module->CurrentPage(),
+                                                     pct,
+                                                     std::max(1, epub_module->PageCount())));
+    } else {
+      deps.epub_runtime.SetPage(ReaderPageIndexForPercent(deps.epub_runtime.CurrentPage(),
+                                                          pct,
+                                                          std::max(1, deps.epub_runtime.PageCount())));
+    }
     return;
   }
   if (reader_mode == ReaderMode::ZipImage && deps.zip_image_runtime.IsOpen()) {
@@ -81,9 +88,14 @@ int CurrentReaderProgressPercent(const ReaderProgressControllerDeps &deps) {
                ? 100
                : ClampIntLocal(static_cast<int>((static_cast<int64_t>(page_idx) * 100) / (page_count - 1)), 0, 100);
   }
-  if (reader_mode == ReaderMode::Epub && deps.epub_runtime.IsOpen()) {
-    const int page_count = std::max(1, deps.epub_runtime.PageCount());
-    const int page_idx = ClampIntLocal(deps.epub_runtime.Progress().page, 0, page_count - 1);
+  const IReaderModule *epub_module = deps.reader_manager ? deps.reader_manager->Module(ReaderMode::Epub) : nullptr;
+  if (reader_mode == ReaderMode::Epub && ((epub_module && epub_module->IsOpen()) || deps.epub_runtime.IsOpen())) {
+    const int page_count = std::max(1, (epub_module && epub_module->IsOpen()) ? epub_module->PageCount()
+                                                                              : deps.epub_runtime.PageCount());
+    const int page_idx = ClampIntLocal((epub_module && epub_module->IsOpen()) ? epub_module->Progress().page
+                                                                              : deps.epub_runtime.Progress().page,
+                                       0,
+                                       page_count - 1);
     return (page_count <= 1)
                ? 100
                : ClampIntLocal(static_cast<int>((static_cast<int64_t>(page_idx) * 100) / (page_count - 1)), 0, 100);
@@ -150,7 +162,9 @@ void DrawReaderProgressOverlay(ReaderProgressOverlayRenderDeps &deps) {
   const std::string pct_text = (pct < 10) ? ("0" + std::to_string(pct)) : std::to_string(pct);
   const bool render_pending =
       (reader_mode == ReaderMode::Pdf && deps.progress.pdf_runtime.IsRenderPending()) ||
-      (reader_mode == ReaderMode::Epub && deps.progress.epub_runtime.IsRenderPending()) ||
+      (reader_mode == ReaderMode::Epub &&
+       (deps.progress.reader_manager ? deps.progress.reader_manager->Module(ReaderMode::Epub)->IsRenderPending()
+                                     : deps.progress.epub_runtime.IsRenderPending())) ||
       (reader_mode == ReaderMode::ZipImage && deps.progress.zip_image_runtime.IsRenderPending());
   const std::string percent =
       txt_progress_computing ? ("(Calculating " + pct_text + "%)")
@@ -168,4 +182,3 @@ void DrawReaderProgressOverlay(ReaderProgressOverlayRenderDeps &deps) {
   (void)deps;
 #endif
 }
-

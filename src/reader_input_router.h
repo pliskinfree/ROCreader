@@ -3,6 +3,7 @@
 #include "epub_runtime.h"
 #include "input_manager.h"
 #include "pdf_runtime.h"
+#include "reader_manager.h"
 #include "reader_session_state.h"
 #include "txt_reader_runtime.h"
 #include "zip_image_runtime.h"
@@ -17,6 +18,7 @@ struct ReaderInputRouterDeps {
   PdfRuntime &pdf_runtime;
   EpubRuntime &epub_runtime;
   ZipImageRuntime &zip_image_runtime;
+  ReaderManager *reader_manager = nullptr;
   float dt = 0.0f;
   int tap_step_px = 0;
   int progress_overlay_tap_step_pct = 1;
@@ -33,4 +35,3 @@ struct ReaderInputRouterDeps {
 };
 
 void HandleReaderInput(ReaderInputRouterDeps &deps);
-
