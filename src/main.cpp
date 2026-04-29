@@ -51,9 +51,14 @@
 #include "input_manager.h"
 #include "lid_power_control.h"
 #include "pdf_reader.h"
+#include "pdf_reader_module.h"
 #include "pdf_runtime.h"
 #include "progress_store.h"
+#include "epub_reader_module.h"
 #include "reader_core.h"
+#include "reader_input_router.h"
+#include "reader_manager.h"
+#include "reader_progress_controller.h"
 #include "reader_session_ops.h"
 #include "reader_session_state.h"
 #include "runtime_log.h"
@@ -64,14 +69,18 @@
 #include "settings_runtime.h"
 #include "sdl_utils.h"
 #include "storage_paths.h"
+#include "status_bar_runtime.h"
 #include "system_status.h"
 #include "txt_reader_session.h"
+#include "txt_reader_module.h"
 #include "txt_reader_runtime.h"
 #include "txt_text_service.h"
 #include "ui_assets.h"
 #include "ui_assets_loader.h"
 #include "ui_text_cache.h"
 #include "version_update_runtime.h"
+#include "volume_overlay.h"
+#include "zip_image_reader_module.h"
 #include "zip_image_runtime.h"
 #include "animation.h"
 
@@ -1254,6 +1263,10 @@ int main(int, char **argv) {
   PdfRuntime pdf_runtime;
   EpubRuntime epub_runtime;
   ZipImageRuntime zip_image_runtime;
+  ReaderManager reader_manager;
+  PdfReaderModule pdf_reader_module(pdf_runtime);
+  EpubReaderModule epub_reader_module(epub_runtime);
+  ZipImageReaderModule zip_image_reader_module(zip_image_runtime);
   if (verbose_log) {
     std::cout << "[native_h700] epub comic backend: " << epub_runtime.BackendName()
               << " (real_renderer=" << (epub_runtime.HasRealRenderer() ? "yes" : "no") << ")\n";
@@ -1328,8 +1341,6 @@ int main(int, char **argv) {
   TxtReaderState &txt_reader = reader_ui.txt_reader;
   bool &reader_progress_overlay_visible = reader_ui.progress_overlay_visible;
   float &hold_cooldown = reader_ui.hold_cooldown;
-  auto &hold_speed = reader_ui.hold_speed;
-  auto &long_fired = reader_ui.long_fired;
   int nav_selected_index = 0; // 0: ALL COMICS, 1: ALL BOOKS, 2: COLLECTIONS, 3: HISTORY
 
   auto current_category = [&]() -> ShelfCategory {
@@ -1871,95 +1882,32 @@ int main(int, char **argv) {
     TextJumpToPercent(pct, current_book, deps);
   };
 
-  auto page_progress_pct_for_index = [&](int page_index, int page_count) -> int {
-    if (page_count <= 1) return 100;
-    return ClampInt(static_cast<int>((static_cast<int64_t>(ClampInt(page_index, 0, page_count - 1)) * 100) /
-                                     (page_count - 1)),
-                    0, 100);
+  TxtReaderModule txt_reader_module(
+      reader_ui,
+      TxtReaderModuleCallbacks{
+          open_text_book,
+          close_text_reader,
+          text_scroll_by,
+          text_page_by,
+          text_jump_to_percent,
+      });
+  reader_manager.Register(ReaderMode::Pdf, &pdf_reader_module);
+  reader_manager.Register(ReaderMode::Epub, &epub_reader_module);
+  reader_manager.Register(ReaderMode::Txt, &txt_reader_module);
+  reader_manager.Register(ReaderMode::ZipImage, &zip_image_reader_module);
+
+  ReaderProgressControllerDeps reader_progress_deps{
+      reader_ui,
+      pdf_runtime,
+      epub_runtime,
+      zip_image_runtime,
+      text_jump_to_percent,
   };
 
-  auto page_index_for_percent = [&](int current_page, int target_pct, int page_count) -> int {
-    if (page_count <= 1) return 0;
-    const int clamped_current = ClampInt(current_page, 0, page_count - 1);
-    const int clamped_target = ClampInt(target_pct, 0, 100);
-    const int current_pct = page_progress_pct_for_index(clamped_current, page_count);
-    if (clamped_target == current_pct) return clamped_current;
-
-    if (clamped_target > current_pct) {
-      for (int page = clamped_current + 1; page < page_count; ++page) {
-        if (page_progress_pct_for_index(page, page_count) >= clamped_target) {
-          return page;
-        }
-      }
-      return page_count - 1;
-    }
-
-    for (int page = clamped_current - 1; page >= 0; --page) {
-      if (page_progress_pct_for_index(page, page_count) <= clamped_target) {
-        return page;
-      }
-    }
-    return 0;
-  };
-
-  auto reader_jump_to_percent = [&](int pct) {
-    if (reader_mode == ReaderMode::Txt && txt_reader.open) {
-      text_jump_to_percent(pct);
-      return;
-    }
-    if (reader_mode == ReaderMode::Pdf && pdf_runtime.IsOpen()) {
-      pdf_runtime.SetPage(page_index_for_percent(pdf_runtime.CurrentPage(),
-                                                pct,
-                                                std::max(1, pdf_runtime.PageCount())));
-      return;
-    }
-    if (reader_mode == ReaderMode::Epub && epub_runtime.IsOpen()) {
-      epub_runtime.SetPage(page_index_for_percent(epub_runtime.CurrentPage(),
-                                                 pct,
-                                                 std::max(1, epub_runtime.PageCount())));
-      return;
-    }
-    if (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsOpen()) {
-      zip_image_runtime.SetPage(page_index_for_percent(zip_image_runtime.CurrentPage(),
-                                                       pct,
-                                                       std::max(1, zip_image_runtime.PageCount())));
-    }
-  };
+  auto reader_jump_to_percent = [&](int pct) { ReaderJumpToPercent(reader_progress_deps, pct); };
 
   auto current_reader_progress_pct = [&]() -> int {
-    if (reader_mode == ReaderMode::Txt && txt_reader.open) {
-      return TxtReaderProgressPercent(txt_reader);
-    }
-    if (reader_mode == ReaderMode::Pdf && pdf_runtime.IsOpen()) {
-      const int page_count = std::max(1, pdf_runtime.PageCount());
-      const int page_idx = ClampInt(pdf_runtime.Progress().page, 0, page_count - 1);
-      return (page_count <= 1)
-                 ? 100
-                 : ClampInt(static_cast<int>((static_cast<int64_t>(page_idx) * 100) / (page_count - 1)), 0, 100);
-    }
-    if (reader_mode == ReaderMode::Epub && epub_runtime.IsOpen()) {
-      const int page_count = std::max(1, epub_runtime.PageCount());
-      const int page_idx = ClampInt(epub_runtime.Progress().page, 0, page_count - 1);
-      return (page_count <= 1)
-                 ? 100
-                 : ClampInt(static_cast<int>((static_cast<int64_t>(page_idx) * 100) / (page_count - 1)), 0, 100);
-    }
-    if (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsOpen()) {
-      const int page_count = std::max(1, zip_image_runtime.PageCount());
-      const int page_idx = ClampInt(zip_image_runtime.Progress().page, 0, page_count - 1);
-      return (page_count <= 1)
-                 ? 100
-                 : ClampInt(static_cast<int>((static_cast<int64_t>(page_idx) * 100) / (page_count - 1)), 0, 100);
-    }
-    return 0;
-  };
-
-  auto current_txt_layout_progress_pct = [&]() -> int {
-    if (!(reader_mode == ReaderMode::Txt && txt_reader.open)) return 0;
-    if (!txt_reader.loading) return 100;
-    const size_t total = txt_reader.pending_raw.size();
-    if (total == 0) return 0;
-    return ClampInt(static_cast<int>((static_cast<int64_t>(txt_reader.parse_pos) * 100) / total), 0, 100);
+    return CurrentReaderProgressPercent(reader_progress_deps);
   };
 
   bool running = true;
@@ -2277,6 +2225,7 @@ int main(int, char **argv) {
                 Layout().screen_w,
                 Layout().screen_h,
                 reader_ui,
+                &reader_manager,
                 pdf_runtime,
                 epub_runtime,
                 zip_image_runtime,
@@ -2524,6 +2473,7 @@ int main(int, char **argv) {
         ReaderCloseDeps close_deps{
             reader_ui,
             progress,
+            &reader_manager,
             pdf_runtime,
             epub_runtime,
             zip_image_runtime,
@@ -2535,378 +2485,27 @@ int main(int, char **argv) {
         scene_flash.Snap(kSceneFadeFlashAlpha);
         scene_flash.AnimateTo(0.0f, kSceneFadeFlashDurationSec, animation::Ease::OutCubic);
       } else {
-        if (input.IsJustPressed(Button::X)) {
-          reader_progress_overlay_visible = !reader_progress_overlay_visible;
-          if (reader_progress_overlay_visible) {
-            const int pct = current_reader_progress_pct();
-            reader_ui.progress_overlay_preview_pct = pct;
-            reader_ui.progress_overlay_preview_pct_f = static_cast<float>(pct);
-            reader_ui.progress_overlay_dirty = false;
-            reader_ui.progress_overlay_scrubbing = false;
-          } else {
-            reader_ui.progress_overlay_dirty = false;
-            reader_ui.progress_overlay_scrubbing = false;
-          }
-        }
-        if (reader_progress_overlay_visible &&
-            ((reader_mode == ReaderMode::Txt && txt_reader.open) ||
-             (reader_mode == ReaderMode::Pdf && pdf_runtime.IsOpen()) ||
-             (reader_mode == ReaderMode::Epub && epub_runtime.IsOpen()) ||
-             (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsOpen()))) {
-          TxtProgressOverlayInputDeps txt_overlay_input_deps{
-              input,
-              reader_ui,
-              dt,
-              current_reader_progress_pct(),
-              !(reader_mode == ReaderMode::Txt && txt_reader.open && txt_reader.loading),
-              kTxtProgressOverlayTapStepPct,
-              kTxtProgressOverlayHoldDelaySec,
-              kTxtProgressOverlayHoldSpeedMinPct,
-              kTxtProgressOverlayHoldSpeedMaxPct,
-              kTxtProgressOverlayHoldAccelPct,
-              reader_jump_to_percent,
-          };
-          HandleTxtProgressOverlayInput(txt_overlay_input_deps);
-        } else if (reader_mode == ReaderMode::Txt && txt_reader.open) {
-          {
-            TxtReaderInputDeps txt_input_deps{
-                input,
-                reader_ui,
-                dt,
-                ScalePx(kReaderTapStepPx),
-                text_scroll_by,
-                text_page_by,
-            };
-            HandleTxtReaderInput(txt_input_deps);
-          }
-        } else if (reader_mode == ReaderMode::Pdf) {
-          const int pdf_rotation = pdf_runtime.Progress().rotation;
-          const auto pdf_progress = pdf_runtime.Progress();
-          const bool pdf_zoomed = pdf_progress.zoom > 1.0005f;
-          auto pdf_pan_delta_for_page_button = [&](Button button) -> int {
-            const int page_action = PdfTapPageActionForButton(pdf_rotation, button);
-            if (page_action == 0) return 0;
-            const int pan_sign = (pdf_rotation == 180 || pdf_rotation == 270) ? -page_action : page_action;
-            return pan_sign * ScalePx(kReaderTapStepPx);
-          };
-          const bool rotate_left_pressed = input.IsJustPressed(Button::L2);
-          const bool rotate_right_pressed = input.IsJustPressed(Button::R2);
-          if (rotate_left_pressed) {
-            pdf_runtime.RotateLeft();
-          }
-          if (rotate_right_pressed) {
-            pdf_runtime.RotateRight();
-          }
-          if (input.IsJustPressed(Button::L1)) {
-            pdf_runtime.ZoomOut();
-          }
-          if (input.IsJustPressed(Button::R1)) {
-            pdf_runtime.ZoomIn();
-          }
-          if (input.IsJustPressed(Button::A)) {
-            pdf_runtime.ResetView();
-          }
-
-          std::array<Button, 4> dirs = {Button::Up, Button::Down, Button::Left, Button::Right};
-          for (Button b : dirs) {
-            int bi = static_cast<int>(b);
-            int long_dir = PdfScrollDirForButton(pdf_rotation, b);
-            if (long_dir == 0) {
-              if (pdf_zoomed) {
-                const int pan_delta = pdf_pan_delta_for_page_button(b);
-                if (pan_delta != 0 && input.IsPressed(b) && input.HoldTime(b) >= 0.28f) {
-                  long_fired[bi] = true;
-                  pdf_runtime.PanHorizontalByPixels(pan_delta > 0 ? 20 : -20);
-                }
-              }
-              hold_speed[bi] = 0.0f;
-              continue;
-            }
-            if (input.IsPressed(b) && input.HoldTime(b) >= 0.28f) {
-              long_fired[bi] = true;
-              pdf_runtime.ScrollByPixels(long_dir * 20);
-            } else if (!input.IsPressed(b)) {
-              hold_speed[bi] = 0.0f;
-            }
-          }
-
-          for (Button b : dirs) {
-            int bi = static_cast<int>(b);
-            if (!input.IsJustReleased(b)) continue;
-            if (long_fired[bi]) {
-              long_fired[bi] = false;
-              continue;
-            }
-            const int tap_dir = PdfScrollDirForButton(pdf_rotation, b);
-            if (tap_dir != 0) {
-              pdf_runtime.ScrollByPixels(tap_dir * 60);
-            } else {
-              if (pdf_zoomed) {
-                const int pan_delta = pdf_pan_delta_for_page_button(b);
-                if (pan_delta != 0) {
-                  pdf_runtime.PanHorizontalByPixels(pan_delta);
-                  continue;
-                }
-              }
-              const int page_action = PdfTapPageActionForButton(pdf_rotation, b);
-              if (page_action != 0) {
-                pdf_runtime.JumpByScreen(page_action);
-              }
-            }
-          }
-        } else if (reader_mode == ReaderMode::Epub) {
-          const int epub_rotation = epub_runtime.Progress().rotation;
-          const auto epub_progress = epub_runtime.Progress();
-          const bool flow_epub = std::string(epub_runtime.BackendName()) == "epub-flow";
-          const bool epub_zoomed = !flow_epub && epub_progress.zoom > 1.0005f;
-          auto epub_scroll_dir_for_button = [&](Button button) -> int {
-            if (epub_rotation == 0) {
-              if (button == Button::Down) return 1;
-              if (button == Button::Up) return -1;
-            } else if (epub_rotation == 90) {
-              if (button == Button::Left) return 1;
-              if (button == Button::Right) return -1;
-            } else if (epub_rotation == 180) {
-              if (button == Button::Up) return 1;
-              if (button == Button::Down) return -1;
-            } else {
-              if (button == Button::Left) return -1;
-              if (button == Button::Right) return 1;
-            }
-            return 0;
-          };
-          auto epub_tap_page_action_for_button = [&](Button button) -> int {
-            if (epub_rotation == 0) {
-              if (button == Button::Right) return 1;
-              if (button == Button::Left) return -1;
-            } else if (epub_rotation == 90) {
-              if (button == Button::Up) return -1;
-              if (button == Button::Down) return 1;
-            } else if (epub_rotation == 180) {
-              if (button == Button::Left) return 1;
-              if (button == Button::Right) return -1;
-            } else {
-              if (button == Button::Up) return 1;
-              if (button == Button::Down) return -1;
-            }
-            return 0;
-          };
-          auto epub_pan_delta_for_page_button = [&](Button button) -> int {
-            const int page_action = epub_tap_page_action_for_button(button);
-            if (page_action == 0) return 0;
-            const int pan_sign = (epub_rotation == 180 || epub_rotation == 270) ? -page_action : page_action;
-            return pan_sign * ScalePx(kReaderTapStepPx);
-          };
-          const bool rotate_left_pressed = input.IsJustPressed(Button::L2);
-          const bool rotate_right_pressed = input.IsJustPressed(Button::R2);
-          const bool zoom_out_pressed = input.IsJustPressed(Button::L1);
-          const bool zoom_in_pressed = input.IsJustPressed(Button::R1);
-          if (flow_epub && (rotate_left_pressed || rotate_right_pressed || zoom_out_pressed || zoom_in_pressed)) {
-            if (!transient_message_dismissed_this_frame) {
-              show_transient_message("EPUB图文混排模式禁用旋转和缩放", 3000, true);
-            }
-          } else {
-            if (rotate_left_pressed) {
-              epub_runtime.RotateLeft();
-            }
-            if (rotate_right_pressed) {
-              epub_runtime.RotateRight();
-            }
-            if (zoom_out_pressed) {
-              epub_runtime.ZoomOut();
-            }
-            if (zoom_in_pressed) {
-              epub_runtime.ZoomIn();
-            }
-          }
-          if (input.IsJustPressed(Button::A)) {
-            epub_runtime.ResetView();
-          }
-
-          if (flow_epub) {
-            std::array<Button, 2> flow_dirs = {Button::Up, Button::Down};
-            for (Button b : flow_dirs) {
-              int bi = static_cast<int>(b);
-              const int long_dir = (b == Button::Down) ? 1 : -1;
-              if (input.IsPressed(b) && input.HoldTime(b) >= 0.28f) {
-                long_fired[bi] = true;
-                epub_runtime.ScrollByPixels(long_dir * 20);
-              } else if (!input.IsPressed(b)) {
-                hold_speed[bi] = 0.0f;
-              }
-            }
-
-            for (Button b : flow_dirs) {
-              int bi = static_cast<int>(b);
-              if (!input.IsJustReleased(b)) continue;
-              if (long_fired[bi]) {
-                long_fired[bi] = false;
-                continue;
-              }
-              const int tap_dir = (b == Button::Down) ? 1 : -1;
-              epub_runtime.ScrollByPixels(tap_dir * 60);
-            }
-
-            if (input.IsJustPressed(Button::Right)) {
-              epub_runtime.JumpByScreen(1);
-            } else if (input.IsJustPressed(Button::Left)) {
-              epub_runtime.JumpByScreen(-1);
-            }
-          } else {
-            std::array<Button, 4> dirs = {Button::Up, Button::Down, Button::Left, Button::Right};
-            for (Button b : dirs) {
-              int bi = static_cast<int>(b);
-              int long_dir = epub_scroll_dir_for_button(b);
-              if (long_dir == 0) {
-                if (epub_zoomed) {
-                  const int pan_delta = epub_pan_delta_for_page_button(b);
-                  if (pan_delta != 0 && input.IsPressed(b) && input.HoldTime(b) >= 0.28f) {
-                    long_fired[bi] = true;
-                    epub_runtime.PanHorizontalByPixels(pan_delta > 0 ? 20 : -20);
-                  }
-                }
-                hold_speed[bi] = 0.0f;
-                continue;
-              }
-              if (input.IsPressed(b) && input.HoldTime(b) >= 0.28f) {
-                long_fired[bi] = true;
-                epub_runtime.ScrollByPixels(long_dir * 20);
-              } else if (!input.IsPressed(b)) {
-                hold_speed[bi] = 0.0f;
-              }
-            }
-
-            for (Button b : dirs) {
-              int bi = static_cast<int>(b);
-              if (!input.IsJustReleased(b)) continue;
-              if (long_fired[bi]) {
-                long_fired[bi] = false;
-                continue;
-              }
-              const int tap_dir = epub_scroll_dir_for_button(b);
-              if (tap_dir != 0) {
-                epub_runtime.ScrollByPixels(tap_dir * 60);
-              } else {
-                if (epub_zoomed) {
-                  const int pan_delta = epub_pan_delta_for_page_button(b);
-                  if (pan_delta != 0) {
-                    epub_runtime.PanHorizontalByPixels(pan_delta);
-                    continue;
-                  }
-                }
-                const int page_action = epub_tap_page_action_for_button(b);
-                if (page_action != 0) {
-                  epub_runtime.JumpByScreen(page_action);
-                }
-              }
-            }
-          }
-        } else if (reader_mode == ReaderMode::ZipImage) {
-          const int zip_rotation = zip_image_runtime.Progress().rotation;
-          const auto zip_progress = zip_image_runtime.Progress();
-          const bool zip_zoomed = zip_progress.zoom > 1.0005f;
-          auto zip_scroll_dir_for_button = [&](Button button) -> int {
-            if (zip_rotation == 0) {
-              if (button == Button::Down) return 1;
-              if (button == Button::Up) return -1;
-            } else if (zip_rotation == 90) {
-              if (button == Button::Left) return 1;
-              if (button == Button::Right) return -1;
-            } else if (zip_rotation == 180) {
-              if (button == Button::Up) return 1;
-              if (button == Button::Down) return -1;
-            } else {
-              if (button == Button::Left) return -1;
-              if (button == Button::Right) return 1;
-            }
-            return 0;
-          };
-          auto zip_tap_page_action_for_button = [&](Button button) -> int {
-            if (zip_rotation == 0) {
-              if (button == Button::Right) return 1;
-              if (button == Button::Left) return -1;
-            } else if (zip_rotation == 90) {
-              if (button == Button::Up) return -1;
-              if (button == Button::Down) return 1;
-            } else if (zip_rotation == 180) {
-              if (button == Button::Left) return 1;
-              if (button == Button::Right) return -1;
-            } else {
-              if (button == Button::Up) return 1;
-              if (button == Button::Down) return -1;
-            }
-            return 0;
-          };
-          auto zip_pan_delta_for_page_button = [&](Button button) -> int {
-            const int page_action = zip_tap_page_action_for_button(button);
-            if (page_action == 0) return 0;
-            const int pan_sign = (zip_rotation == 180 || zip_rotation == 270) ? -page_action : page_action;
-            return pan_sign * ScalePx(kReaderTapStepPx);
-          };
-          if (input.IsJustPressed(Button::L2)) {
-            zip_image_runtime.RotateLeft();
-          }
-          if (input.IsJustPressed(Button::R2)) {
-            zip_image_runtime.RotateRight();
-          }
-          if (input.IsJustPressed(Button::L1)) {
-            zip_image_runtime.ZoomOut();
-          }
-          if (input.IsJustPressed(Button::R1)) {
-            zip_image_runtime.ZoomIn();
-          }
-          if (input.IsJustPressed(Button::A)) {
-            zip_image_runtime.ResetView();
-          }
-
-          std::array<Button, 4> dirs = {Button::Up, Button::Down, Button::Left, Button::Right};
-          for (Button b : dirs) {
-            int bi = static_cast<int>(b);
-            int long_dir = zip_scroll_dir_for_button(b);
-            if (long_dir == 0) {
-              if (zip_zoomed) {
-                const int pan_delta = zip_pan_delta_for_page_button(b);
-                if (pan_delta != 0 && input.IsPressed(b) && input.HoldTime(b) >= 0.28f) {
-                  long_fired[bi] = true;
-                  zip_image_runtime.PanHorizontalByPixels(pan_delta > 0 ? 20 : -20);
-                }
-              }
-              hold_speed[bi] = 0.0f;
-              continue;
-            }
-            if (input.IsPressed(b) && input.HoldTime(b) >= 0.28f) {
-              long_fired[bi] = true;
-              zip_image_runtime.ScrollByPixels(long_dir * 20);
-            } else if (!input.IsPressed(b)) {
-              hold_speed[bi] = 0.0f;
-            }
-          }
-
-          for (Button b : dirs) {
-            int bi = static_cast<int>(b);
-            if (!input.IsJustReleased(b)) continue;
-            if (long_fired[bi]) {
-              long_fired[bi] = false;
-              continue;
-            }
-            const int tap_dir = zip_scroll_dir_for_button(b);
-            if (tap_dir != 0) {
-              zip_image_runtime.ScrollByPixels(tap_dir * 60);
-            } else {
-              if (zip_zoomed) {
-                const int pan_delta = zip_pan_delta_for_page_button(b);
-                if (pan_delta != 0) {
-                  zip_image_runtime.PanHorizontalByPixels(pan_delta);
-                  continue;
-                }
-              }
-              const int page_action = zip_tap_page_action_for_button(b);
-              if (page_action != 0) {
-                zip_image_runtime.JumpByScreen(page_action);
-              }
-            }
-          }
-        }
+        ReaderInputRouterDeps reader_input_deps{
+            input,
+            reader_ui,
+            pdf_runtime,
+            epub_runtime,
+            zip_image_runtime,
+            dt,
+            ScalePx(kReaderTapStepPx),
+            kTxtProgressOverlayTapStepPct,
+            kTxtProgressOverlayHoldDelaySec,
+            kTxtProgressOverlayHoldSpeedMinPct,
+            kTxtProgressOverlayHoldSpeedMaxPct,
+            kTxtProgressOverlayHoldAccelPct,
+            transient_message_dismissed_this_frame,
+            current_reader_progress_pct,
+            reader_jump_to_percent,
+            text_scroll_by,
+            text_page_by,
+            show_transient_message,
+        };
+        HandleReaderInput(reader_input_deps);
       }
     }
 
@@ -2950,94 +2549,33 @@ int main(int, char **argv) {
       std::function<void()> draw_system_status_overlay = []() {};
       if (state == State::Shelf || state == State::Settings) {
         draw_volume_overlay = [&]() {
-#ifdef HAVE_SDL2_TTF
-          if (now > app_ui.volume_display_until) return;
-          SDL_Color volume_text{238, 242, 250, 255};
-          const std::string label = std::to_string(app_ui.volume_display_percent);
-          TextCacheEntry *te = get_text_texture(label, volume_text);
-          if (!te || !te->texture) return;
-          const int tx = ScalePx(18);
-          const int ty = Layout().top_bar_y + std::max(0, (Layout().top_bar_h - te->h) / 2);
-          SDL_Rect td{tx, ty, te->w, te->h};
-          SDL_RenderCopy(renderer, te->texture, nullptr, &td);
-#endif
+          VolumeOverlayRenderDeps volume_deps{
+              renderer,
+              now,
+              app_ui.volume_display_until,
+              app_ui.volume_display_percent,
+              Layout().top_bar_y,
+              Layout().top_bar_h,
+              [](int value) { return ScalePx(value); },
+              get_text_texture,
+          };
+          DrawVolumeOverlay(volume_deps);
         };
-          draw_system_status_overlay = [&]() {
-#ifdef HAVE_SDL2_TTF
-          const SystemStatusSnapshot &status = system_status.Snapshot();
-          SDL_Color text_color{238, 242, 250, 255};
-          SDL_Color outline_color{238, 242, 250, 255};
-          SDL_Color fill_color = status.charging ? SDL_Color{104, 214, 141, 255} : SDL_Color{238, 242, 250, 255};
-          if (config.Get().theme != 0) {
-            text_color = SDL_Color{58, 64, 76, 255};
-            outline_color = SDL_Color{58, 64, 76, 255};
-            fill_color = status.charging ? SDL_Color{76, 170, 98, 255} : SDL_Color{58, 64, 76, 255};
-          }
-
-            const int center_y = Layout().top_bar_y + Layout().top_bar_h / 2;
-            const bool trimui_brick_status_layout = input_profile == InputProfile::TrimuiBrick;
-            const int battery_shift_y = trimui_brick_status_layout ? 5 : 3;
-            const int h700_battery_shift_x = (Layout().screen_w <= 640) ? -80 : 0;
-            const int battery_icon_x = trimui_brick_status_layout ? 750 : 552 + h700_battery_shift_x;
-            const int battery_text_x = trimui_brick_status_layout ? 806 : 587 + h700_battery_shift_x;
-            const int clock_shift_x = trimui_brick_status_layout ? 64 : 40;
-            const int clock_shift_y = trimui_brick_status_layout ? 5 : 3;
-            int clock_right = Layout().screen_w - (trimui_brick_status_layout ? 26 : 16) - clock_shift_x;
-
-          if (!status.clock_text.empty()) {
-            TextCacheEntry *clock_tex = get_text_texture(status.clock_text, text_color);
-            if (clock_tex && clock_tex->texture) {
-              const int clock_x = clock_right - clock_tex->w;
-              const int clock_y = center_y - clock_tex->h / 2 + clock_shift_y;
-              SDL_Rect td{clock_x, clock_y, clock_tex->w, clock_tex->h};
-              SDL_RenderCopy(renderer, clock_tex->texture, nullptr, &td);
-            }
-          }
-
-          const int avatar_badge_size = ScalePx(28);
-          const int avatar_badge_x = Layout().screen_w - ScalePx(12) - avatar_badge_size;
-          const int avatar_badge_y = ScalePx(4);
-          DrawRect(renderer, avatar_badge_x, avatar_badge_y, avatar_badge_size, avatar_badge_size,
-                   SDL_Color{26, 32, 42, 220}, true);
-          DrawRect(renderer, avatar_badge_x, avatar_badge_y, avatar_badge_size, avatar_badge_size,
-                   SDL_Color{152, 185, 210, 235}, false);
-          if (selected_avatar_badge_texture) {
-            SDL_Rect avatar_dst{avatar_badge_x, avatar_badge_y, avatar_badge_size, avatar_badge_size};
-            SDL_RenderCopy(renderer, selected_avatar_badge_texture, nullptr, &avatar_dst);
-          }
-
-          if (status.battery_available) {
-            const std::string battery_text = std::to_string(status.battery_percent) + "%";
-            TextCacheEntry *battery_tex = get_text_texture(battery_text, text_color);
-            int battery_text_w = battery_tex ? battery_tex->w : 0;
-            int battery_text_h = battery_tex ? battery_tex->h : 0;
-
-            const int cap_w = ScalePx(4);
-            const int cap_h = ScalePx(8);
-            const int body_w = ScalePx(24);
-            const int body_h = ScalePx(12);
-            const int icon_x = battery_icon_x;
-            const int icon_y = center_y - body_h / 2 + battery_shift_y;
-
-            DrawRect(renderer, icon_x, icon_y, body_w, body_h, outline_color, false);
-            DrawRect(renderer, icon_x + body_w, center_y - cap_h / 2 + battery_shift_y, cap_w, cap_h, outline_color, true);
-
-            const int inner_pad = ScalePx(2);
-            const int inner_w = body_w - inner_pad * 2;
-            const int inner_h = body_h - inner_pad * 2;
-            const int fill_w = std::clamp((inner_w * status.battery_percent) / 100, 0, inner_w);
-            if (fill_w > 0) {
-              DrawRect(renderer, icon_x + inner_pad, icon_y + inner_pad, fill_w, inner_h, fill_color, true);
-            }
-
-            if (battery_tex && battery_tex->texture) {
-              SDL_Rect td{battery_text_x, center_y - battery_text_h / 2 + battery_shift_y, battery_text_w, battery_text_h};
-              SDL_RenderCopy(renderer, battery_tex->texture, nullptr, &td);
-            }
-          }
-#else
-          (void)now;
-#endif
+        draw_system_status_overlay = [&]() {
+          StatusBarRenderDeps status_deps{
+              renderer,
+              &system_status.Snapshot(),
+              input_profile,
+              config.Get().theme,
+              Layout().screen_w,
+              Layout().top_bar_y,
+              Layout().top_bar_h,
+              selected_avatar_badge_texture,
+              [](int value) { return ScalePx(value); },
+              [&](int x, int y, int w, int h, SDL_Color c, bool filled) { DrawRect(renderer, x, y, w, h, c, filled); },
+              get_text_texture,
+          };
+          DrawStatusBarRuntime(status_deps);
         };
         ShelfRuntimeRenderDeps shelf_render_deps{
             renderer,
@@ -3170,59 +2708,22 @@ int main(int, char **argv) {
           zip_image_runtime.Tick();
           zip_image_runtime.Draw(renderer);
         }
-#ifdef HAVE_SDL2_TTF
-        if (reader_progress_overlay_visible) {
-          const int actual_pct = current_reader_progress_pct();
-          const int txt_layout_pct = current_txt_layout_progress_pct();
-          const bool txt_progress_computing =
-              (reader_mode == ReaderMode::Txt && txt_reader.open && txt_reader.loading);
-          const int pct =
-              txt_progress_computing
-                  ? txt_layout_pct
-                  : (reader_ui.progress_overlay_dirty
-                   ? ClampInt(reader_ui.progress_overlay_preview_pct, 0, 100)
-                   : actual_pct);
-          const int panel_h = ScalePx(58);
-          const int panel_y = Layout().screen_h - panel_h - Layout().reader_progress_panel_margin_bottom;
-          DrawRect(renderer,
-                   Layout().reader_progress_panel_margin_x,
-                   panel_y,
-                   Layout().screen_w - Layout().reader_progress_panel_margin_x * 2,
-                   panel_h,
-                   SDL_Color{0, 0, 0, 178});
-
-          const int bar_x = Layout().reader_progress_bar_margin_x;
-          const int bar_y = panel_y + ScalePx(30);
-          const int bar_w = Layout().screen_w - Layout().reader_progress_bar_margin_x * 2;
-          const int bar_h = ScalePx(12);
-          DrawRect(renderer, bar_x, bar_y, bar_w, bar_h, SDL_Color{60, 60, 60, 220});
-          const int actual_fill_source = txt_progress_computing ? txt_layout_pct : actual_pct;
-          const int actual_fill_w = std::max(0, std::min(bar_w, (bar_w * actual_fill_source) / 100));
-          if (actual_fill_w > 0) {
-            DrawRect(renderer, bar_x, bar_y, actual_fill_w, bar_h, SDL_Color{125, 125, 125, 215});
-          }
-          const int fill_w = std::max(0, std::min(bar_w, (bar_w * pct) / 100));
-          if (fill_w > 0) {
-            DrawRect(renderer, bar_x, bar_y, fill_w, bar_h, SDL_Color{230, 230, 230, 235});
-          }
-          DrawRect(renderer, bar_x, bar_y, bar_w, bar_h, SDL_Color{255, 255, 255, 220}, false);
-
-          SDL_Color tc{245, 245, 245, 255};
-          const std::string pct_text = (pct < 10) ? ("0" + std::to_string(pct)) : std::to_string(pct);
-          const std::string percent =
-              txt_progress_computing ? ("(Calculating " + pct_text + "%)")
-                                     : (((reader_mode == ReaderMode::Pdf && pdf_runtime.IsRenderPending()) ||
-                                         (reader_mode == ReaderMode::Epub && epub_runtime.IsRenderPending()) ||
-                                         (reader_mode == ReaderMode::ZipImage &&
-                                          zip_image_runtime.IsRenderPending()))
-                                            ? ("(Rendering) " + std::to_string(pct) + "%")
-                                            : (std::to_string(pct) + "%"));
-          if (TextCacheEntry *te = get_text_texture(percent, tc); te && te->texture) {
-            SDL_Rect td{Layout().screen_w - Layout().reader_progress_percent_margin_x - te->w, panel_y + ScalePx(8), te->w, te->h};
-            SDL_RenderCopy(renderer, te->texture, nullptr, &td);
-          }
-        }
-#endif
+        ReaderProgressOverlayRenderDeps progress_overlay_deps{
+            renderer,
+            reader_progress_deps,
+            ReaderProgressOverlayLayout{
+                Layout().screen_w,
+                Layout().screen_h,
+                Layout().reader_progress_panel_margin_x,
+                Layout().reader_progress_panel_margin_bottom,
+                Layout().reader_progress_bar_margin_x,
+                Layout().reader_progress_percent_margin_x,
+            },
+            [](int value) { return ScalePx(value); },
+            [&](int x, int y, int w, int h, SDL_Color c, bool filled) { DrawRect(renderer, x, y, w, h, c, filled); },
+            get_text_texture,
+        };
+        DrawReaderProgressOverlay(progress_overlay_deps);
       }
 
       if (state == State::Settings) {

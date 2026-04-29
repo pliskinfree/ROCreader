@@ -5,20 +5,61 @@
 #include <iostream>
 #include <limits>
 
+namespace {
+ReaderOpenRequest MakeOpenRequest(const std::string &book_path, const ReaderOpenDeps &deps) {
+  ReaderOpenRequest request;
+  request.renderer = deps.renderer;
+  request.path = book_path;
+  request.screen_w = deps.screen_w;
+  request.screen_h = deps.screen_h;
+  request.progress = deps.ui.progress;
+  request.flow_base_font_pt = deps.epub_flow_base_font_pt ? deps.epub_flow_base_font_pt() : 18;
+  request.flow_background_color = deps.epub_flow_background_color ? deps.epub_flow_background_color()
+                                                                  : SDL_Color{250, 249, 244, 255};
+  request.flow_font_color = deps.epub_flow_font_color ? deps.epub_flow_font_color()
+                                                      : SDL_Color{28, 28, 28, 255};
+  return request;
+}
+
+bool OpenManagedReader(ReaderMode mode, const std::string &book_path, ReaderOpenDeps &deps) {
+  if (!deps.reader_manager) return false;
+  return deps.reader_manager->Open(mode, MakeOpenRequest(book_path, deps));
+}
+
+void CloseManagedReader(ReaderMode mode, ReaderCloseDeps &deps) {
+  if (deps.reader_manager) {
+    deps.reader_manager->Close(mode);
+    return;
+  }
+  if (mode == ReaderMode::Pdf) {
+    deps.pdf_runtime.Close();
+  } else if (mode == ReaderMode::Epub) {
+    deps.epub_runtime.Close();
+  } else if (mode == ReaderMode::ZipImage) {
+    deps.zip_image_runtime.Close();
+  } else if (mode == ReaderMode::Txt) {
+    deps.close_text_reader();
+  }
+}
+}  // namespace
+
 bool OpenReaderSession(const std::string &book_path, const std::string &ext, ReaderOpenDeps &deps) {
   deps.ui.current_book = book_path;
   bool opened = false;
 
   if (ext == ".txt") {
-    opened = deps.open_text_book(book_path);
+    opened = OpenManagedReader(ReaderMode::Txt, book_path, deps);
+    if (!opened && !deps.reader_manager) {
+      opened = deps.open_text_book(book_path);
+    }
+    if (opened) {
+      deps.pdf_runtime.Close();
+      deps.epub_runtime.Close();
+      deps.zip_image_runtime.Close();
+      deps.ui.mode = ReaderMode::Txt;
+    }
   } else if (ext == ".pdf") {
-    PdfRuntimeProgress pdf_progress;
-    pdf_progress.page = deps.ui.progress.page;
-    pdf_progress.rotation = deps.ui.progress.rotation;
-    pdf_progress.zoom = deps.ui.progress.zoom;
-    pdf_progress.scroll_x = deps.ui.progress.scroll_x;
-    pdf_progress.scroll_y = deps.ui.progress.scroll_y;
-    if (deps.pdf_runtime.Open(deps.renderer, book_path, deps.screen_w, deps.screen_h, pdf_progress)) {
+    if (OpenManagedReader(ReaderMode::Pdf, book_path, deps)) {
       deps.close_text_reader();
       deps.epub_runtime.Close();
       deps.zip_image_runtime.Close();
@@ -36,18 +77,7 @@ bool OpenReaderSession(const std::string &book_path, const std::string &ext, Rea
     if (deps.file_exists && !deps.file_exists(book_path)) {
       std::cerr << "[reader][epub] file does not exist before open: " << book_path << "\n";
     }
-    EpubRuntimeProgress epub_progress;
-    epub_progress.page = deps.ui.progress.page;
-    epub_progress.rotation = deps.ui.progress.rotation;
-    epub_progress.zoom = deps.ui.progress.zoom;
-    epub_progress.scroll_y = deps.ui.progress.scroll_y;
-    const int flow_base_font_pt = deps.epub_flow_base_font_pt ? deps.epub_flow_base_font_pt() : 18;
-    const SDL_Color flow_background_color = deps.epub_flow_background_color ? deps.epub_flow_background_color()
-                                                                            : SDL_Color{250, 249, 244, 255};
-    const SDL_Color flow_font_color = deps.epub_flow_font_color ? deps.epub_flow_font_color()
-                                                                : SDL_Color{28, 28, 28, 255};
-    if (deps.epub_runtime.Open(deps.renderer, book_path, deps.screen_w, deps.screen_h, epub_progress,
-                               flow_base_font_pt, flow_background_color, flow_font_color)) {
+    if (OpenManagedReader(ReaderMode::Epub, book_path, deps)) {
       deps.close_text_reader();
       deps.pdf_runtime.Close();
       deps.zip_image_runtime.Close();
@@ -69,13 +99,7 @@ bool OpenReaderSession(const std::string &book_path, const std::string &ext, Rea
     if (deps.file_exists && !deps.file_exists(book_path)) {
       std::cerr << "[reader][zip_image] file does not exist before open: " << book_path << "\n";
     }
-    ZipImageRuntimeProgress zip_progress;
-    zip_progress.page = deps.ui.progress.page;
-    zip_progress.rotation = deps.ui.progress.rotation;
-    zip_progress.zoom = deps.ui.progress.zoom;
-    zip_progress.scroll_x = deps.ui.progress.scroll_x;
-    zip_progress.scroll_y = deps.ui.progress.scroll_y;
-    if (deps.zip_image_runtime.Open(deps.renderer, book_path, deps.screen_w, deps.screen_h, zip_progress)) {
+    if (OpenManagedReader(ReaderMode::ZipImage, book_path, deps)) {
       deps.close_text_reader();
       deps.pdf_runtime.Close();
       deps.epub_runtime.Close();
@@ -102,10 +126,17 @@ bool OpenReaderSession(const std::string &book_path, const std::string &ext, Rea
       std::cerr << "[reader] failed to open: " << book_path << "\n";
     }
     deps.ui.current_book.clear();
-    deps.close_text_reader();
-    deps.pdf_runtime.Close();
-    deps.epub_runtime.Close();
-    deps.zip_image_runtime.Close();
+    if (deps.reader_manager) {
+      deps.reader_manager->Close(ReaderMode::Txt);
+      deps.reader_manager->Close(ReaderMode::Pdf);
+      deps.reader_manager->Close(ReaderMode::Epub);
+      deps.reader_manager->Close(ReaderMode::ZipImage);
+    } else {
+      deps.close_text_reader();
+      deps.pdf_runtime.Close();
+      deps.epub_runtime.Close();
+      deps.zip_image_runtime.Close();
+    }
   }
 
   deps.ui.progress_overlay_visible = false;
@@ -156,13 +187,13 @@ void CloseReaderSession(ReaderCloseDeps &deps) {
   deps.progress_store.Set(deps.ui.current_book, deps.ui.progress);
 
   if (deps.ui.mode == ReaderMode::Pdf) {
-    deps.pdf_runtime.Close();
+    CloseManagedReader(ReaderMode::Pdf, deps);
   } else if (deps.ui.mode == ReaderMode::Epub) {
-    deps.epub_runtime.Close();
+    CloseManagedReader(ReaderMode::Epub, deps);
   } else if (deps.ui.mode == ReaderMode::ZipImage) {
-    deps.zip_image_runtime.Close();
+    CloseManagedReader(ReaderMode::ZipImage, deps);
   } else if (deps.ui.mode == ReaderMode::Txt) {
-    deps.close_text_reader();
+    CloseManagedReader(ReaderMode::Txt, deps);
   }
 
   deps.ui.mode = ReaderMode::None;

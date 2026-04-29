@@ -3,6 +3,7 @@
 #include "epub_runtime.h"
 #include "pdf_runtime.h"
 #include "progress_store.h"
+#include "reader_manager.h"
 #include "reader_session_state.h"
 #include "zip_image_runtime.h"
 
@@ -16,6 +17,7 @@ struct ReaderOpenDeps {
   int screen_w = 0;
   int screen_h = 0;
   ReaderUiState &ui;
+  ReaderManager *reader_manager = nullptr;
   PdfRuntime &pdf_runtime;
   EpubRuntime &epub_runtime;
   ZipImageRuntime &zip_image_runtime;
@@ -30,6 +32,7 @@ struct ReaderOpenDeps {
 struct ReaderCloseDeps {
   ReaderUiState &ui;
   ProgressStore &progress_store;
+  ReaderManager *reader_manager = nullptr;
   PdfRuntime &pdf_runtime;
   EpubRuntime &epub_runtime;
   ZipImageRuntime &zip_image_runtime;
