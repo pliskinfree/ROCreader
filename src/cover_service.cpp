@@ -2,6 +2,7 @@
 
 #include "cover_resolver.h"
 #include "epub_cover_cache.h"
+#include "zip_image_cover_cache.h"
 #include "path_adapter.h"
 #include "pdf_reader.h"
 
@@ -225,7 +226,11 @@ std::string FindPreferredFolderCoverDoc(const std::string &folder_path,
   // 2. If no PDF exists, fallback to the first EPUB found.
   const std::string first_pdf = FindFirstDocInFolder(folder_path, ".pdf", deps);
   if (!first_pdf.empty()) return first_pdf;
-  return FindFirstDocInFolder(folder_path, ".epub", deps);
+  const std::string first_epub = FindFirstDocInFolder(folder_path, ".epub", deps);
+  if (!first_epub.empty()) return first_epub;
+  const std::string first_cbz = FindFirstDocInFolder(folder_path, ".cbz", deps);
+  if (!first_cbz.empty()) return first_cbz;
+  return FindFirstDocInFolder(folder_path, ".zip", deps);
 }
 
 SDL_Texture *CreateEpubFirstImageCoverTextureLocalImpl(const std::string &doc_path, CoverServiceDeps &deps) {
@@ -247,6 +252,22 @@ SDL_Texture *CreateEpubFirstImageCoverTextureLocalImpl(const std::string &doc_pa
 
 SDL_Texture *CreateEpubFirstImageCoverTextureLocal(const std::string &doc_path, CoverServiceDeps &deps) {
   return CreateEpubFirstImageCoverTextureLocalImpl(doc_path, deps);
+}
+
+SDL_Texture *CreateZipImageFirstImageCoverTextureLocal(const std::string &doc_path, CoverServiceDeps &deps) {
+  ZipImageCoverTextureDeps cover_deps{
+      deps.renderer,
+      deps.cover_w,
+      deps.cover_h,
+      SelectCoverCacheDir(doc_path, deps),
+      deps.normalize_path_key,
+      deps.load_surface_from_file,
+      deps.load_surface_from_memory,
+      deps.create_normalized_cover_texture,
+      deps.create_texture_from_surface,
+      deps.remember_texture_size,
+  };
+  return CreateZipImageFirstImageCoverTexture(doc_path, cover_deps);
 }
 
 bool HasManualCoverExactOrFuzzy(const BookItem &item, const CoverServiceDeps &deps) {
@@ -278,6 +299,21 @@ bool HasCachedDocCoverOnDisk(const std::string &doc_path, const CoverServiceDeps
         deps.remember_texture_size,
     };
     return HasCachedEpubCoverOnDisk(doc_path, cover_deps);
+  }
+  if (ext == ".zip" || ext == ".cbz") {
+    ZipImageCoverTextureDeps cover_deps{
+        deps.renderer,
+        deps.cover_w,
+        deps.cover_h,
+        SelectCoverCacheDir(doc_path, deps),
+        deps.normalize_path_key,
+        deps.load_surface_from_file,
+        deps.load_surface_from_memory,
+        deps.create_normalized_cover_texture,
+        deps.create_texture_from_surface,
+        deps.remember_texture_size,
+    };
+    return HasCachedZipImageCoverOnDisk(doc_path, cover_deps);
   }
   return false;
 }
@@ -368,21 +404,25 @@ SDL_Texture *ResolveBookCoverTexture(const BookItem &item, ShelfCategory categor
         if (SDL_Texture *texture = CreatePdfFirstPageCoverTexture(preferred_doc, deps)) return texture;
       } else if (ext == ".epub") {
         if (SDL_Texture *texture = CreateEpubFirstImageCoverTextureLocal(preferred_doc, deps)) return texture;
+      } else if (ext == ".zip" || ext == ".cbz") {
+        if (SDL_Texture *texture = CreateZipImageFirstImageCoverTextureLocal(preferred_doc, deps)) return texture;
       }
     }
     return deps.shared_pdf_cover ? deps.shared_pdf_cover : deps.shared_txt_cover;
   }
 
   const std::string ext = deps.get_lower_ext(item.path);
-  if (ext != ".pdf" && ext != ".epub") {
+  if (ext != ".pdf" && ext != ".epub" && ext != ".zip" && ext != ".cbz") {
     return LoadManualCoverExactThenFuzzy(item, deps);
   }
 
   if (SDL_Texture *texture = LoadManualCoverExactThenFuzzy(item, deps)) return texture;
   if (ext == ".pdf") {
     if (SDL_Texture *texture = CreatePdfFirstPageCoverTexture(item.path, deps)) return texture;
-  } else {
+  } else if (ext == ".epub") {
     if (SDL_Texture *texture = CreateEpubFirstImageCoverTextureLocal(item.path, deps)) return texture;
+  } else if (ext == ".zip" || ext == ".cbz") {
+    if (SDL_Texture *texture = CreateZipImageFirstImageCoverTextureLocal(item.path, deps)) return texture;
   }
   return deps.shared_pdf_cover ? deps.shared_pdf_cover : deps.shared_txt_cover;
 }

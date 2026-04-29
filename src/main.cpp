@@ -72,6 +72,7 @@
 #include "ui_assets_loader.h"
 #include "ui_text_cache.h"
 #include "version_update_runtime.h"
+#include "zip_image_runtime.h"
 #include "animation.h"
 
 namespace {
@@ -1252,9 +1253,12 @@ int main(int, char **argv) {
   };
   PdfRuntime pdf_runtime;
   EpubRuntime epub_runtime;
+  ZipImageRuntime zip_image_runtime;
   if (verbose_log) {
     std::cout << "[native_h700] epub comic backend: " << epub_runtime.BackendName()
               << " (real_renderer=" << (epub_runtime.HasRealRenderer() ? "yes" : "no") << ")\n";
+    std::cout << "[native_h700] zip image backend: " << zip_image_runtime.BackendName()
+              << " (real_renderer=" << (zip_image_runtime.HasRealRenderer() ? "yes" : "no") << ")\n";
   }
   ShelfRenderCache shelf_render_cache;
   ShelfRuntimeState shelf_runtime;
@@ -1473,6 +1477,7 @@ int main(int, char **argv) {
     SDL_Texture *texture = nullptr;
     if (ext == ".pdf") texture = CreatePdfFirstPageCoverTexture(doc_path, deps);
     else if (ext == ".epub") texture = CreateEpubFirstImageCoverTextureLocal(doc_path, deps);
+    else if (ext == ".zip" || ext == ".cbz") texture = CreateZipImageFirstImageCoverTextureLocal(doc_path, deps);
     if (texture) return texture;
     return nullptr;
   };
@@ -1912,6 +1917,12 @@ int main(int, char **argv) {
       epub_runtime.SetPage(page_index_for_percent(epub_runtime.CurrentPage(),
                                                  pct,
                                                  std::max(1, epub_runtime.PageCount())));
+      return;
+    }
+    if (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsOpen()) {
+      zip_image_runtime.SetPage(page_index_for_percent(zip_image_runtime.CurrentPage(),
+                                                       pct,
+                                                       std::max(1, zip_image_runtime.PageCount())));
     }
   };
 
@@ -1929,6 +1940,13 @@ int main(int, char **argv) {
     if (reader_mode == ReaderMode::Epub && epub_runtime.IsOpen()) {
       const int page_count = std::max(1, epub_runtime.PageCount());
       const int page_idx = ClampInt(epub_runtime.Progress().page, 0, page_count - 1);
+      return (page_count <= 1)
+                 ? 100
+                 : ClampInt(static_cast<int>((static_cast<int64_t>(page_idx) * 100) / (page_count - 1)), 0, 100);
+    }
+    if (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsOpen()) {
+      const int page_count = std::max(1, zip_image_runtime.PageCount());
+      const int page_idx = ClampInt(zip_image_runtime.Progress().page, 0, page_count - 1);
       return (page_count <= 1)
                  ? 100
                  : ClampInt(static_cast<int>((static_cast<int64_t>(page_idx) * 100) / (page_count - 1)), 0, 100);
@@ -1983,7 +2001,8 @@ int main(int, char **argv) {
         (state == State::Shelf && title_marquee_active) ||
         (state == State::Reader &&
          ((reader_mode == ReaderMode::Pdf && pdf_runtime.IsRenderPending()) ||
-          (reader_mode == ReaderMode::Epub && epub_runtime.IsRenderPending())));
+          (reader_mode == ReaderMode::Epub && epub_runtime.IsRenderPending()) ||
+          (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsRenderPending())));
     const uint32_t loop_now = SDL_GetTicks();
     const bool has_pending_flush =
         config.ShouldFlush(loop_now, kDeferredSaveDelayMs) ||
@@ -2168,6 +2187,7 @@ int main(int, char **argv) {
             const std::string ext = GetLowerExt(doc_path);
             if (ext == ".pdf") return pdf_runtime.HasRealRenderer();
             if (ext == ".epub") return epub_runtime.HasRealRenderer();
+            if (ext == ".zip" || ext == ".cbz") return zip_image_runtime.HasRealRenderer();
             return false;
           },
           has_manual_cover_exact_or_fuzzy,
@@ -2259,6 +2279,7 @@ int main(int, char **argv) {
                 reader_ui,
                 pdf_runtime,
                 epub_runtime,
+                zip_image_runtime,
                 [&]() { return current_reader_font_pt; },
                 [&]() { return GetTxtBackgroundColor(config.Get().txt_background_color); },
                 [&]() { return GetTxtFontColor(config.Get().txt_font_color); },
@@ -2274,6 +2295,7 @@ int main(int, char **argv) {
               if (final_opened) {
                 epub_runtime.Close();
                 pdf_runtime.Close();
+                zip_image_runtime.Close();
                 reader_ui.mode = ReaderMode::Txt;
               }
             }
@@ -2504,6 +2526,7 @@ int main(int, char **argv) {
             progress,
             pdf_runtime,
             epub_runtime,
+            zip_image_runtime,
             close_text_reader,
             persist_current_txt_resume_snapshot,
         };
@@ -2528,7 +2551,8 @@ int main(int, char **argv) {
         if (reader_progress_overlay_visible &&
             ((reader_mode == ReaderMode::Txt && txt_reader.open) ||
              (reader_mode == ReaderMode::Pdf && pdf_runtime.IsOpen()) ||
-             (reader_mode == ReaderMode::Epub && epub_runtime.IsOpen()))) {
+             (reader_mode == ReaderMode::Epub && epub_runtime.IsOpen()) ||
+             (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsOpen()))) {
           TxtProgressOverlayInputDeps txt_overlay_input_deps{
               input,
               reader_ui,
@@ -2630,7 +2654,7 @@ int main(int, char **argv) {
               }
             }
           }
-        } else {
+        } else if (reader_mode == ReaderMode::Epub) {
           const int epub_rotation = epub_runtime.Progress().rotation;
           const auto epub_progress = epub_runtime.Progress();
           const bool flow_epub = std::string(epub_runtime.BackendName()) == "epub-flow";
@@ -2774,6 +2798,111 @@ int main(int, char **argv) {
                 if (page_action != 0) {
                   epub_runtime.JumpByScreen(page_action);
                 }
+              }
+            }
+          }
+        } else if (reader_mode == ReaderMode::ZipImage) {
+          const int zip_rotation = zip_image_runtime.Progress().rotation;
+          const auto zip_progress = zip_image_runtime.Progress();
+          const bool zip_zoomed = zip_progress.zoom > 1.0005f;
+          auto zip_scroll_dir_for_button = [&](Button button) -> int {
+            if (zip_rotation == 0) {
+              if (button == Button::Down) return 1;
+              if (button == Button::Up) return -1;
+            } else if (zip_rotation == 90) {
+              if (button == Button::Left) return 1;
+              if (button == Button::Right) return -1;
+            } else if (zip_rotation == 180) {
+              if (button == Button::Up) return 1;
+              if (button == Button::Down) return -1;
+            } else {
+              if (button == Button::Left) return -1;
+              if (button == Button::Right) return 1;
+            }
+            return 0;
+          };
+          auto zip_tap_page_action_for_button = [&](Button button) -> int {
+            if (zip_rotation == 0) {
+              if (button == Button::Right) return 1;
+              if (button == Button::Left) return -1;
+            } else if (zip_rotation == 90) {
+              if (button == Button::Up) return -1;
+              if (button == Button::Down) return 1;
+            } else if (zip_rotation == 180) {
+              if (button == Button::Left) return 1;
+              if (button == Button::Right) return -1;
+            } else {
+              if (button == Button::Up) return 1;
+              if (button == Button::Down) return -1;
+            }
+            return 0;
+          };
+          auto zip_pan_delta_for_page_button = [&](Button button) -> int {
+            const int page_action = zip_tap_page_action_for_button(button);
+            if (page_action == 0) return 0;
+            const int pan_sign = (zip_rotation == 180 || zip_rotation == 270) ? -page_action : page_action;
+            return pan_sign * ScalePx(kReaderTapStepPx);
+          };
+          if (input.IsJustPressed(Button::L2)) {
+            zip_image_runtime.RotateLeft();
+          }
+          if (input.IsJustPressed(Button::R2)) {
+            zip_image_runtime.RotateRight();
+          }
+          if (input.IsJustPressed(Button::L1)) {
+            zip_image_runtime.ZoomOut();
+          }
+          if (input.IsJustPressed(Button::R1)) {
+            zip_image_runtime.ZoomIn();
+          }
+          if (input.IsJustPressed(Button::A)) {
+            zip_image_runtime.ResetView();
+          }
+
+          std::array<Button, 4> dirs = {Button::Up, Button::Down, Button::Left, Button::Right};
+          for (Button b : dirs) {
+            int bi = static_cast<int>(b);
+            int long_dir = zip_scroll_dir_for_button(b);
+            if (long_dir == 0) {
+              if (zip_zoomed) {
+                const int pan_delta = zip_pan_delta_for_page_button(b);
+                if (pan_delta != 0 && input.IsPressed(b) && input.HoldTime(b) >= 0.28f) {
+                  long_fired[bi] = true;
+                  zip_image_runtime.PanHorizontalByPixels(pan_delta > 0 ? 20 : -20);
+                }
+              }
+              hold_speed[bi] = 0.0f;
+              continue;
+            }
+            if (input.IsPressed(b) && input.HoldTime(b) >= 0.28f) {
+              long_fired[bi] = true;
+              zip_image_runtime.ScrollByPixels(long_dir * 20);
+            } else if (!input.IsPressed(b)) {
+              hold_speed[bi] = 0.0f;
+            }
+          }
+
+          for (Button b : dirs) {
+            int bi = static_cast<int>(b);
+            if (!input.IsJustReleased(b)) continue;
+            if (long_fired[bi]) {
+              long_fired[bi] = false;
+              continue;
+            }
+            const int tap_dir = zip_scroll_dir_for_button(b);
+            if (tap_dir != 0) {
+              zip_image_runtime.ScrollByPixels(tap_dir * 60);
+            } else {
+              if (zip_zoomed) {
+                const int pan_delta = zip_pan_delta_for_page_button(b);
+                if (pan_delta != 0) {
+                  zip_image_runtime.PanHorizontalByPixels(pan_delta);
+                  continue;
+                }
+              }
+              const int page_action = zip_tap_page_action_for_button(b);
+              if (page_action != 0) {
+                zip_image_runtime.JumpByScreen(page_action);
               }
             }
           }
@@ -3032,10 +3161,14 @@ int main(int, char **argv) {
           pdf_runtime.UpdateViewport(Layout().screen_w, Layout().screen_h);
           pdf_runtime.Tick();
           pdf_runtime.Draw(renderer);
-        } else {
+        } else if (reader_mode == ReaderMode::Epub && epub_runtime.IsOpen()) {
           epub_runtime.UpdateViewport(Layout().screen_w, Layout().screen_h);
           epub_runtime.Tick();
           epub_runtime.Draw(renderer);
+        } else if (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsOpen()) {
+          zip_image_runtime.UpdateViewport(Layout().screen_w, Layout().screen_h);
+          zip_image_runtime.Tick();
+          zip_image_runtime.Draw(renderer);
         }
 #ifdef HAVE_SDL2_TTF
         if (reader_progress_overlay_visible) {
@@ -3079,7 +3212,9 @@ int main(int, char **argv) {
           const std::string percent =
               txt_progress_computing ? ("(Calculating " + pct_text + "%)")
                                      : (((reader_mode == ReaderMode::Pdf && pdf_runtime.IsRenderPending()) ||
-                                         (reader_mode == ReaderMode::Epub && epub_runtime.IsRenderPending()))
+                                         (reader_mode == ReaderMode::Epub && epub_runtime.IsRenderPending()) ||
+                                         (reader_mode == ReaderMode::ZipImage &&
+                                          zip_image_runtime.IsRenderPending()))
                                             ? ("(Rendering) " + std::to_string(pct) + "%")
                                             : (std::to_string(pct) + "%"));
           if (TextCacheEntry *te = get_text_texture(percent, tc); te && te->texture) {
@@ -3184,6 +3319,13 @@ int main(int, char **argv) {
       reader.scroll_y = active_epub.scroll_y;
       reader.zoom = active_epub.zoom;
       reader.rotation = active_epub.rotation;
+    } else if (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsOpen()) {
+      const ZipImageRuntimeProgress active_zip = zip_image_runtime.Progress();
+      reader.page = active_zip.page;
+      reader.scroll_x = active_zip.scroll_x;
+      reader.scroll_y = active_zip.scroll_y;
+      reader.zoom = active_zip.zoom;
+      reader.rotation = active_zip.rotation;
     } else if (reader_mode == ReaderMode::Txt && txt_reader.open) {
       if (!txt_reader.line_source_offsets.empty()) {
         const size_t top_line = std::min(
@@ -3220,6 +3362,7 @@ int main(int, char **argv) {
   destroy_shelf_render_cache();
   pdf_runtime.Close();
   epub_runtime.Close();
+  zip_image_runtime.Close();
   for (SDL_GameController *gc : opened_controllers) {
     if (gc) SDL_GameControllerClose(gc);
   }

@@ -24,6 +24,7 @@ enum class ReaderMode {
   Pdf = 1,
   Txt = 2,
   Epub = 3,
+  ZipImage = 4,
 };
 
 enum class ReaderRenderQuality {

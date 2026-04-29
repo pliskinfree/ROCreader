@@ -36,4 +36,5 @@ bool HasManualCoverExactOrFuzzy(const BookItem &item, const CoverServiceDeps &de
 bool HasCachedDocCoverOnDisk(const std::string &doc_path, const CoverServiceDeps &deps);
 SDL_Texture *CreatePdfFirstPageCoverTexture(const std::string &doc_path, CoverServiceDeps &deps);
 SDL_Texture *CreateEpubFirstImageCoverTextureLocal(const std::string &doc_path, CoverServiceDeps &deps);
+SDL_Texture *CreateZipImageFirstImageCoverTextureLocal(const std::string &doc_path, CoverServiceDeps &deps);
 SDL_Texture *ResolveBookCoverTexture(const BookItem &item, ShelfCategory category, CoverServiceDeps &deps);

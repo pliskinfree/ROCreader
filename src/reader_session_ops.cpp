@@ -21,6 +21,7 @@ bool OpenReaderSession(const std::string &book_path, const std::string &ext, Rea
     if (deps.pdf_runtime.Open(deps.renderer, book_path, deps.screen_w, deps.screen_h, pdf_progress)) {
       deps.close_text_reader();
       deps.epub_runtime.Close();
+      deps.zip_image_runtime.Close();
       deps.ui.mode = ReaderMode::Pdf;
       opened = true;
     }
@@ -49,6 +50,7 @@ bool OpenReaderSession(const std::string &book_path, const std::string &ext, Rea
                                flow_base_font_pt, flow_background_color, flow_font_color)) {
       deps.close_text_reader();
       deps.pdf_runtime.Close();
+      deps.zip_image_runtime.Close();
       deps.ui.mode = ReaderMode::Epub;
       opened = true;
     }
@@ -63,18 +65,47 @@ bool OpenReaderSession(const std::string &book_path, const std::string &ext, Rea
       std::cerr << "[reader][epub] runtime open failed backend=" << deps.epub_runtime.BackendName()
                 << " path=" << book_path << "\n";
     }
+  } else if (ext == ".zip" || ext == ".cbz") {
+    if (deps.file_exists && !deps.file_exists(book_path)) {
+      std::cerr << "[reader][zip_image] file does not exist before open: " << book_path << "\n";
+    }
+    ZipImageRuntimeProgress zip_progress;
+    zip_progress.page = deps.ui.progress.page;
+    zip_progress.rotation = deps.ui.progress.rotation;
+    zip_progress.zoom = deps.ui.progress.zoom;
+    zip_progress.scroll_x = deps.ui.progress.scroll_x;
+    zip_progress.scroll_y = deps.ui.progress.scroll_y;
+    if (deps.zip_image_runtime.Open(deps.renderer, book_path, deps.screen_w, deps.screen_h, zip_progress)) {
+      deps.close_text_reader();
+      deps.pdf_runtime.Close();
+      deps.epub_runtime.Close();
+      deps.ui.mode = ReaderMode::ZipImage;
+      opened = true;
+    }
+    if (!opened && !deps.zip_image_runtime.HasRealRenderer()) {
+      if (!deps.ui.warned_epub_backend) {
+        std::cerr << "[reader] blocked: current build has no zip image backend. "
+                     "Please rebuild with libzip (pkg-config libzip) available.\n";
+        deps.ui.warned_epub_backend = true;
+      }
+    }
+    if (!opened) {
+      std::cerr << "[reader][zip_image] runtime open failed backend="
+                << deps.zip_image_runtime.BackendName() << " path=" << book_path << "\n";
+    }
   } else {
     std::cerr << "[reader] unsupported format for runtime reader: " << book_path << "\n";
   }
 
   if (!opened) {
-    if (ext == ".pdf" || ext == ".epub") {
+    if (ext == ".pdf" || ext == ".epub" || ext == ".zip" || ext == ".cbz") {
       std::cerr << "[reader] failed to open: " << book_path << "\n";
     }
     deps.ui.current_book.clear();
     deps.close_text_reader();
     deps.pdf_runtime.Close();
     deps.epub_runtime.Close();
+    deps.zip_image_runtime.Close();
   }
 
   deps.ui.progress_overlay_visible = false;
@@ -98,6 +129,13 @@ void CloseReaderSession(ReaderCloseDeps &deps) {
     deps.ui.progress.scroll_y = active_epub.scroll_y;
     deps.ui.progress.zoom = active_epub.zoom;
     deps.ui.progress.rotation = active_epub.rotation;
+  } else if (deps.ui.mode == ReaderMode::ZipImage && deps.zip_image_runtime.IsOpen()) {
+    const ZipImageRuntimeProgress active_zip = deps.zip_image_runtime.Progress();
+    deps.ui.progress.page = active_zip.page;
+    deps.ui.progress.scroll_x = active_zip.scroll_x;
+    deps.ui.progress.scroll_y = active_zip.scroll_y;
+    deps.ui.progress.zoom = active_zip.zoom;
+    deps.ui.progress.rotation = active_zip.rotation;
   } else if (deps.ui.mode == ReaderMode::Txt && deps.ui.txt_reader.open) {
     if (!deps.ui.txt_reader.line_source_offsets.empty()) {
       const size_t top_line = std::min(
@@ -121,6 +159,8 @@ void CloseReaderSession(ReaderCloseDeps &deps) {
     deps.pdf_runtime.Close();
   } else if (deps.ui.mode == ReaderMode::Epub) {
     deps.epub_runtime.Close();
+  } else if (deps.ui.mode == ReaderMode::ZipImage) {
+    deps.zip_image_runtime.Close();
   } else if (deps.ui.mode == ReaderMode::Txt) {
     deps.close_text_reader();
   }

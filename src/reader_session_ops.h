@@ -4,6 +4,7 @@
 #include "pdf_runtime.h"
 #include "progress_store.h"
 #include "reader_session_state.h"
+#include "zip_image_runtime.h"
 
 #include <SDL.h>
 
@@ -17,6 +18,7 @@ struct ReaderOpenDeps {
   ReaderUiState &ui;
   PdfRuntime &pdf_runtime;
   EpubRuntime &epub_runtime;
+  ZipImageRuntime &zip_image_runtime;
   std::function<int()> epub_flow_base_font_pt;
   std::function<SDL_Color()> epub_flow_background_color;
   std::function<SDL_Color()> epub_flow_font_color;
@@ -30,6 +32,7 @@ struct ReaderCloseDeps {
   ProgressStore &progress_store;
   PdfRuntime &pdf_runtime;
   EpubRuntime &epub_runtime;
+  ZipImageRuntime &zip_image_runtime;
   std::function<void()> close_text_reader;
   std::function<void(const std::string &, bool)> persist_current_txt_resume_snapshot;
 };

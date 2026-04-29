@@ -45,7 +45,7 @@ std::vector<BookItem> BuildItemsFromScannedPaths(ShelfCategory category,
   const std::vector<std::string> wanted_exts =
       (category == ShelfCategory::AllBooks)
           ? std::vector<std::string>{".txt"}
-          : std::vector<std::string>{".pdf", ".epub"};
+          : std::vector<std::string>{".pdf", ".epub", ".zip", ".cbz"};
   std::vector<BookItem> out;
   std::set<std::string> seen_files;
   std::set<std::string> seen_dirs;
@@ -160,7 +160,9 @@ void PruneShelfScanCache(ShelfRuntimeState &state, size_t max_cache_entries) {
 bool ShelfMatchCategory(const BookItem &item, ShelfCategory category, const ShelfRuntimeDeps &deps) {
   if (item.is_dir) return category == ShelfCategory::AllComics || category == ShelfCategory::AllBooks;
   const std::string ext = deps.get_lower_ext(item.path);
-  if (category == ShelfCategory::AllComics) return ext == ".pdf" || ext == ".epub";
+  if (category == ShelfCategory::AllComics) {
+    return ext == ".pdf" || ext == ".epub" || ext == ".zip" || ext == ".cbz";
+  }
   if (category == ShelfCategory::AllBooks) return ext == ".txt";
   if (category == ShelfCategory::Collections) return deps.favorites_contains(item.path);
   if (category == ShelfCategory::History) return deps.history_contains(item.path);
@@ -195,7 +197,7 @@ std::vector<BookItem> ScanShelfBaseItems(ShelfRuntimeState &state, ShelfCategory
     for (const auto &item : scanned_books) {
       const std::string key_path = item.real_path.empty() ? item.path : item.real_path;
       const std::string ext = deps.get_lower_ext(key_path);
-      if (ext != ".pdf" && ext != ".txt" && ext != ".epub") continue;
+      if (ext != ".pdf" && ext != ".txt" && ext != ".epub" && ext != ".zip" && ext != ".cbz") continue;
       found.emplace(deps.normalize_path_key(key_path), item);
     }
     std::vector<BookItem> out;
@@ -213,7 +215,7 @@ std::vector<BookItem> ScanShelfBaseItems(ShelfRuntimeState &state, ShelfCategory
     for (const auto &item : scanned_books) {
       const std::string key_path = item.real_path.empty() ? item.path : item.real_path;
       const std::string ext = deps.get_lower_ext(key_path);
-      if (ext != ".pdf" && ext != ".txt" && ext != ".epub") continue;
+      if (ext != ".pdf" && ext != ".txt" && ext != ".epub" && ext != ".zip" && ext != ".cbz") continue;
       found.emplace(deps.normalize_path_key(key_path), item);
     }
     std::vector<BookItem> out;

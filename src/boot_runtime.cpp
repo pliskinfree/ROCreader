@@ -186,7 +186,7 @@ void TickBootRuntime(BootRuntimeState &state, float dt, const BootRuntimeTickDep
       if (ec || !filesystem_compat::IsRegularFile(entry, ec)) continue;
       const std::string readable_path = path_adapter::ResolveReadableFilePath(entry);
       const std::string ext = deps.get_lower_ext ? deps.get_lower_ext(readable_path) : std::string{};
-      if (ext == ".pdf" || ext == ".txt" || ext == ".epub") {
+      if (ext == ".pdf" || ext == ".txt" || ext == ".epub" || ext == ".zip" || ext == ".cbz") {
         const std::string book_key = ScannedBookKey(entry.path());
         if (!state.scanned_book_keys.insert(book_key).second) continue;
         BookItem item;
@@ -219,7 +219,7 @@ void TickBootRuntime(BootRuntimeState &state, float dt, const BootRuntimeTickDep
                                          ? state.scanned_books[state.scan_index].path
                                          : state.scanned_books[state.scan_index].real_path;
       const std::string ext = deps.get_lower_ext ? deps.get_lower_ext(book_path) : std::string{};
-      if (ext == ".pdf" || ext == ".epub") {
+      if (ext == ".pdf" || ext == ".epub" || ext == ".zip" || ext == ".cbz") {
         const BookItem &item = state.scanned_books[state.scan_index];
         const bool manual = deps.has_manual_cover_exact_or_fuzzy && deps.has_manual_cover_exact_or_fuzzy(item);
         const bool cached = deps.has_cached_doc_cover_on_disk && deps.has_cached_doc_cover_on_disk(book_path);
