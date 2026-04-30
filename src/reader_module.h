@@ -1,12 +1,14 @@
 #pragma once
 
 #include "input_manager.h"
+#include "reader_chapter.h"
 #include "reader_core.h"
 
 #include <SDL.h>
 
 #include <functional>
 #include <string>
+#include <vector>
 
 struct ReaderCapabilities {
   bool supports_rotation = false;
@@ -63,6 +65,13 @@ public:
   virtual void ScrollByPixels(int delta_px) { (void)delta_px; }
   virtual void JumpByScreen(int direction) { (void)direction; }
   virtual void SetPage(int page_index) { (void)page_index; }
+  virtual std::vector<ReaderChapterAnchor> Chapters() const { return {}; }
+  virtual bool ChaptersLoading() const { return false; }
+  virtual int ChaptersLoadingPercent() const { return ChaptersLoading() ? 0 : 100; }
+  virtual void JumpToChapter(const ReaderChapterAnchor &chapter) {
+    SetPage(chapter.page);
+    if (chapter.scroll_y > 0) ScrollByPixels(chapter.scroll_y - Progress().scroll_y);
+  }
   virtual void SetFlowBaseFontPointSize(int base_font_pt) { (void)base_font_pt; }
   virtual void SetFlowColors(SDL_Color background_color, SDL_Color font_color) {
     (void)background_color;

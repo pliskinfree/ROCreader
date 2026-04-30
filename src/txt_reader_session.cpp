@@ -1,5 +1,6 @@
 #include "txt_reader_session.h"
 
+#include "chapter_detection.h"
 #include "reader_core.h"
 
 #include <SDL.h>
@@ -203,6 +204,8 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
     next.lines = txt_cache_it->second.lines;
     next.line_source_offsets = txt_cache_it->second.line_source_offsets;
     next.content_h = txt_cache_it->second.content_h;
+    next.paragraph_spacing_pending = false;
+    next.last_raw_line_blank = true;
     next.truncated = txt_cache_it->second.truncated;
     next.limit_hit = txt_cache_it->second.limit_hit;
     next.truncation_notice_added = true;
@@ -226,6 +229,8 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
     next.lines = disk_cache_entry.lines;
     next.line_source_offsets = disk_cache_entry.line_source_offsets;
     next.content_h = disk_cache_entry.content_h;
+    next.paragraph_spacing_pending = false;
+    next.last_raw_line_blank = true;
     next.truncated = disk_cache_entry.truncated;
     next.limit_hit = disk_cache_entry.limit_hit;
     next.truncation_notice_added = true;
@@ -257,6 +262,8 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
       next.pending_line = std::move(resume_cache_entry.pending_line);
       next.pending_line_source_offset = resume_cache_entry.pending_line_source_offset;
       next.content_h = resume_cache_entry.content_h;
+      next.paragraph_spacing_pending = resume_cache_entry.paragraph_spacing_pending;
+      next.last_raw_line_blank = resume_cache_entry.last_raw_line_blank;
       next.parse_pos = resume_cache_entry.parse_pos;
       next.restore_source_offset = initial_restore_source_offset;
       next.loading = resume_cache_entry.loading;
@@ -313,6 +320,7 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
   }
 
   next.pending_raw = std::move(raw);
+  next.layout_total_bytes = next.pending_raw.size();
   next.pending_line.reserve(256);
   next.pending_line_source_offset = 0;
   next.parse_pos = 0;
@@ -328,6 +336,7 @@ bool OpenTextBookSession(const std::string &path, TxtReaderSessionDeps &deps) {
   next.resume_cache_dirty = true;
 
   deps.ui.Txt() = std::move(next);
+  ResetTxtChapterScan(deps.ui, deps.ui.Txt());
   ProcessTextLayoutChunk(deps.ui.Txt(), 8, 32768, &deps.ui.Txt().cache_key, deps);
   WarmTextReaderToTarget(deps.ui.Txt(), &deps.ui.Txt().cache_key, deps);
   if (!deps.ui.Txt().loading) FinalizeTextReaderLoading(deps.ui.Txt(), &deps.ui.Txt().cache_key, deps);
@@ -372,6 +381,8 @@ bool OpenTextBufferSession(const std::string &path, std::string raw, uintmax_t l
     next.lines = txt_cache_it->second.lines;
     next.line_source_offsets = txt_cache_it->second.line_source_offsets;
     next.content_h = txt_cache_it->second.content_h;
+    next.paragraph_spacing_pending = false;
+    next.last_raw_line_blank = true;
     next.truncated = txt_cache_it->second.truncated;
     next.limit_hit = txt_cache_it->second.limit_hit;
     next.truncation_notice_added = true;
@@ -395,6 +406,8 @@ bool OpenTextBufferSession(const std::string &path, std::string raw, uintmax_t l
     next.lines = disk_cache_entry.lines;
     next.line_source_offsets = disk_cache_entry.line_source_offsets;
     next.content_h = disk_cache_entry.content_h;
+    next.paragraph_spacing_pending = false;
+    next.last_raw_line_blank = true;
     next.truncated = disk_cache_entry.truncated;
     next.limit_hit = disk_cache_entry.limit_hit;
     next.truncation_notice_added = true;
@@ -415,6 +428,7 @@ bool OpenTextBufferSession(const std::string &path, std::string raw, uintmax_t l
     next.pending_raw.resize(deps.txt_max_bytes);
     next.truncated = true;
   }
+  next.layout_total_bytes = next.pending_raw.size();
   next.pending_line.reserve(256);
   next.pending_line_source_offset = 0;
   next.parse_pos = 0;
@@ -429,6 +443,7 @@ bool OpenTextBufferSession(const std::string &path, std::string raw, uintmax_t l
   next.resume_cache_dirty = true;
 
   deps.ui.Txt() = std::move(next);
+  ResetTxtChapterScan(deps.ui, deps.ui.Txt());
   ProcessTextLayoutChunk(deps.ui.Txt(), 8, 32768, &deps.ui.Txt().cache_key, deps);
   WarmTextReaderToTarget(deps.ui.Txt(), &deps.ui.Txt().cache_key, deps);
   if (!deps.ui.Txt().loading) FinalizeTextReaderLoading(deps.ui.Txt(), &deps.ui.Txt().cache_key, deps);
@@ -495,12 +510,14 @@ void TextJumpToPercent(int pct, const std::string &book_path, TxtReaderSessionDe
   state.restore_source_offset = 0;
   state.target_scroll_px = target_scroll;
   if (state.loading) {
-    WarmTextReaderToTarget(state, &state.cache_key, deps);
+    state.scroll_px = std::clamp(target_scroll, 0, current_max_scroll);
+    state.target_scroll_px = state.scroll_px;
+  } else {
+    const int max_scroll = std::max(0, state.content_h - state.viewport_h);
+    target_scroll = ScrollForPercent(clamped_pct, max_scroll);
+    state.target_scroll_px = target_scroll;
+    state.scroll_px = std::clamp(target_scroll, 0, max_scroll);
   }
-  const int max_scroll = std::max(0, state.content_h - state.viewport_h);
-  target_scroll = ScrollForPercent(clamped_pct, max_scroll);
-  state.target_scroll_px = target_scroll;
-  state.scroll_px = std::clamp(target_scroll, 0, max_scroll);
   deps.clamp_text_scroll();
   state.resume_cache_dirty = true;
   PersistCurrentTxtResumeSnapshot(book_path, false, deps);

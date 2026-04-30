@@ -19,31 +19,39 @@
 
 enum class SettingId { SystemControls, KeyGuide, ClearHistory, CleanCache, TxtToUtf8, ContributorAvatars, ContactMe, VersionUpdate, ExitApp };
 
-struct SettingsRuntimeInputDeps {
-  const InputManager &input;
-  const NativeConfig &ui_cfg;
-  float dt = 0.0f;
-  bool &menu_closing;
-  bool &settings_close_armed;
-  float &settings_toggle_guard;
-  int &menu_selected;
-  const std::vector<SettingId> &menu_items;
-  animation::TweenFloat &menu_anim;
-  SystemSettingsState &system_settings_state;
-  SystemSettingsCallbacks system_settings_callbacks;
-  TxtSettingsState &txt_settings_state;
-  TxtSettingsCallbacks txt_settings_callbacks;
-  ContributorAvatarState &contributor_avatar_state;
-  size_t contributor_avatar_count = 0;
-  std::function<void(int)> on_contributor_avatar_confirm;
-  VersionUpdateState &version_update_state;
-  VersionUpdateCallbacks version_update_callbacks;
+struct SettingsRuntimeMenuState {
+  bool &closing;
+  bool &close_armed;
+  float &toggle_guard;
+  int &selected;
+  const std::vector<SettingId> &items;
+  animation::TweenFloat &anim;
+};
+
+struct SettingsRuntimeInputActions {
   bool menu_toggle_request = false;
   std::function<void()> on_close;
   std::function<void()> on_exit_app;
   std::function<void()> on_clear_history;
   std::function<void()> on_clean_cache;
   std::function<void()> on_txt_to_utf8;
+  std::function<void(int)> on_contributor_avatar_confirm;
+};
+
+struct SettingsRuntimeInputDeps {
+  const InputManager &input;
+  const NativeConfig &ui_cfg;
+  float dt = 0.0f;
+  SettingsRuntimeMenuState menu;
+  SystemSettingsState &system_settings_state;
+  SystemSettingsCallbacks system_settings_callbacks;
+  TxtSettingsState &txt_settings_state;
+  TxtSettingsCallbacks txt_settings_callbacks;
+  ContributorAvatarState &contributor_avatar_state;
+  size_t contributor_avatar_count = 0;
+  VersionUpdateState &version_update_state;
+  VersionUpdateCallbacks version_update_callbacks;
+  SettingsRuntimeInputActions actions;
 };
 
 struct SettingsRuntimeLayout {
@@ -57,6 +65,16 @@ struct SettingsRuntimeLayout {
   int settings_y_offset = 0;
   int settings_content_offset_y = 0;
   float ui_scale = 1.0f;
+};
+
+struct SettingsRuntimeRenderServices {
+  std::function<void(int, int, int, int, SDL_Color, bool)> draw_rect;
+  std::function<void(SDL_Texture *, int &, int &)> get_texture_size;
+  std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_text_texture;
+  std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_title_text_texture;
+  std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_reader_text_texture;
+  std::function<std::string(const std::string &, size_t)> utf8_ellipsize;
+  std::function<void()> draw_volume_overlay;
 };
 
 struct SettingsRuntimeRenderDeps {
@@ -75,13 +93,7 @@ struct SettingsRuntimeRenderDeps {
   const ContributorAvatarState &contributor_avatar_state;
   const VersionUpdateState &version_update_state;
   SettingsRuntimeLayout layout;
-  std::function<void(int, int, int, int, SDL_Color, bool)> draw_rect;
-  std::function<void(SDL_Texture *, int &, int &)> get_texture_size;
-  std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_text_texture;
-  std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_title_text_texture;
-  std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_reader_text_texture;
-  std::function<std::string(const std::string &, size_t)> utf8_ellipsize;
-  std::function<void()> draw_volume_overlay;
+  SettingsRuntimeRenderServices services;
 };
 
 void HandleSettingsInput(SettingsRuntimeInputDeps &deps);

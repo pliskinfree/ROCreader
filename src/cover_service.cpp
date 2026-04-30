@@ -18,6 +18,14 @@ int ClampIntLocal(int value, int lo, int hi) {
   return std::max(lo, std::min(hi, value));
 }
 
+void ApplyImageTextureFiltering(SDL_Texture *texture) {
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+  if (texture) SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear);
+#else
+  (void)texture;
+#endif
+}
+
 std::filesystem::path SelectCoverCacheDir(const std::string &doc_path, const CoverServiceDeps &deps) {
   if (!deps.removable_cover_thumb_cache_dir.empty() &&
       (doc_path == "/mnt/sdcard" || doc_path.rfind("/mnt/sdcard/", 0) == 0)) {
@@ -84,6 +92,7 @@ SDL_Texture *LoadCachedPdfCoverTexture(const std::string &doc_path, CoverService
   if (!normalized) normalized = deps.create_texture_from_surface(deps.renderer, cover_surface);
   SDL_FreeSurface(cover_surface);
   if (normalized) {
+    ApplyImageTextureFiltering(normalized);
     deps.remember_texture_size(normalized, deps.cover_w, deps.cover_h);
   }
   return normalized;
@@ -135,6 +144,7 @@ SDL_Texture *LoadManualCoverFromPath(const BookItem &item, const std::string &co
       SDL_Texture *cached = deps.create_texture_from_surface(deps.renderer, cached_surface);
       SDL_FreeSurface(cached_surface);
       if (cached) {
+        ApplyImageTextureFiltering(cached);
         deps.remember_texture_size(cached, deps.cover_w, deps.cover_h);
         return cached;
       }
@@ -153,7 +163,10 @@ SDL_Texture *LoadManualCoverFromPath(const BookItem &item, const std::string &co
 
   SDL_Texture *texture = deps.create_texture_from_surface(deps.renderer, normalized_surface);
   SDL_FreeSurface(normalized_surface);
-  if (texture) deps.remember_texture_size(texture, deps.cover_w, deps.cover_h);
+  if (texture) {
+    ApplyImageTextureFiltering(texture);
+    deps.remember_texture_size(texture, deps.cover_w, deps.cover_h);
+  }
   return texture;
 }
 
@@ -379,6 +392,7 @@ SDL_Texture *CreatePdfFirstPageCoverTexture(const std::string &doc_path, CoverSe
       SDL_CreateTexture(deps.renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, deps.cover_w, deps.cover_h);
   if (!texture) return nullptr;
   SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+  ApplyImageTextureFiltering(texture);
   if (SDL_UpdateTexture(texture, nullptr, cover_rgba.data(), deps.cover_w * 4) != 0) {
     SDL_DestroyTexture(texture);
     return nullptr;

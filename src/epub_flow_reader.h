@@ -2,7 +2,10 @@
 
 #include <SDL.h>
 
+#include "reader_session_state.h"
+
 #include <string>
+#include <vector>
 
 struct EpubRuntimeProgress;
 
@@ -36,6 +39,10 @@ public:
   void ScrollByPixels(int delta_px);
   void JumpByScreen(int direction);
   void SetPage(int page_index);
+  std::vector<ReaderChapterAnchor> Chapters() const;
+  bool ChaptersLoading() const;
+  int ChaptersLoadingPercent() const;
+  void JumpToChapter(const ReaderChapterAnchor &chapter);
 
   int PageCount() const;
   bool PageSize(int page_index, int &w, int &h) const;

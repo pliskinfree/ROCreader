@@ -23,6 +23,14 @@ constexpr size_t kTextureCacheSize = 3;
 constexpr Uint32 kVisualRenderThrottleMs = 75;
 constexpr Uint32 kIdlePrefetchDelayMs = 220;
 
+void ApplyImageTextureFiltering(SDL_Texture *texture) {
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+  if (texture) SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear);
+#else
+  (void)texture;
+#endif
+}
+
 struct ViewState {
   float zoom = 1.0f;
   int rotation = 0;
@@ -494,6 +502,7 @@ struct EpubComicRuntime::Impl {
       return nullptr;
     }
     SDL_SetTextureBlendMode(next, SDL_BLENDMODE_BLEND);
+    ApplyImageTextureFiltering(next);
     if (SDL_UpdateTexture(next, nullptr, ready.rgba.data(), ready.texture_w * 4) != 0) {
       runtime_log::Line("[epub_runtime] SDL_UpdateTexture failed size=" + std::to_string(ready.texture_w) + "x" +
                         std::to_string(ready.texture_h) + " err=" + SDL_GetError());

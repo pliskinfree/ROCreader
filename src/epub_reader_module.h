@@ -32,6 +32,9 @@ public:
   void ScrollByPixels(int delta_px) override;
   void JumpByScreen(int direction) override;
   void SetPage(int page_index) override;
+  std::vector<ReaderChapterAnchor> Chapters() const override;
+  bool ChaptersLoading() const override;
+  void JumpToChapter(const ReaderChapterAnchor &chapter) override;
   void SetFlowBaseFontPointSize(int base_font_pt) override;
   void SetFlowColors(SDL_Color background_color, SDL_Color font_color) override;
 

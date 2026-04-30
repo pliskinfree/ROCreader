@@ -4,7 +4,124 @@ REQUIRE_MUPDF ?= 0
 H700_OPTIMIZE ?= 0
 
 TARGET := build/rocreader_sdl
-SRCS := src/main.cpp src/book_scanner.cpp src/book_library_service.cpp src/storage_paths.cpp src/path_adapter.cpp src/pdf_reader.cpp src/pdf_runtime.cpp src/epub_reader.cpp src/epub_common.cpp src/epub_classifier.cpp src/epub_comic_reader.cpp src/epub_comic_runtime.cpp src/epub_flow_reader.cpp src/zip_image_reader.cpp src/zip_image_runtime.cpp src/zip_image_cover_cache.cpp src/cover_resolver.cpp src/cover_service.cpp src/boot_runtime.cpp src/app_runtime.cpp src/app_context.cpp src/app_shell.cpp src/app_layout.cpp src/app_config_bridge.cpp src/scene_manager.cpp src/audio_runtime.cpp src/sdl_utils.cpp src/image_decode.cpp src/animation.cpp src/input_manager.cpp src/reader_core.cpp src/reader_module.cpp src/reader_manager.cpp src/pdf_reader_module.cpp src/epub_reader_module.cpp src/epub_comic_reader_module.cpp src/epub_flow_reader_module.cpp src/txt_reader_module.cpp src/zip_image_reader_module.cpp src/reader_input_router.cpp src/reader_progress_controller.cpp src/reader_runtime_common.cpp src/reader_render_controller.cpp src/reader_render_runtime.cpp src/async_image_render_queue.cpp src/progress_store.cpp src/reader_session_ops.cpp src/txt_reader_runtime.cpp src/txt_reader_session.cpp src/txt_text_service.cpp src/txt_settings_runtime.cpp src/version_update_runtime.cpp src/epub_runtime.cpp src/epub_cover_cache.cpp src/ui_assets.cpp src/ui_assets_loader.cpp src/ui_text_cache.cpp src/shelf_runtime.cpp src/settings_runtime.cpp src/menu_runtime.cpp src/settings_panel_router.cpp src/system_controls_panel.cpp src/txt_settings_panel.cpp src/avatar_panel.cpp src/history_panel.cpp src/cache_panel.cpp src/update_panel.cpp src/contact_panel.cpp src/exit_panel.cpp src/key_guide_panel.cpp src/system_settings_runtime.cpp src/contributor_avatar_runtime.cpp src/app_language.cpp src/app_stores.cpp src/system_status.cpp src/status_bar_runtime.cpp src/volume_overlay.cpp src/system_controls.cpp src/lid_power_control.cpp src/screen_profile.cpp src/runtime_log.cpp
+APP_SRCS := \
+  src/main.cpp \
+  src/app_runtime.cpp \
+  src/app_context.cpp \
+  src/app_shell.cpp \
+  src/app_layout.cpp \
+  src/app_config_bridge.cpp \
+  src/scene_manager.cpp \
+  src/app_language.cpp \
+  src/app_stores.cpp
+
+CORE_SRCS := \
+  src/storage_paths.cpp \
+  src/path_adapter.cpp \
+  src/sdl_utils.cpp \
+  src/image_decode.cpp \
+  src/animation.cpp \
+  src/input_manager.cpp \
+  src/screen_profile.cpp \
+  src/runtime_log.cpp
+
+BOOT_SRCS := \
+  src/boot_runtime.cpp \
+  src/boot_scene.cpp
+
+SHELF_SRCS := \
+  src/book_scanner.cpp \
+  src/book_library_service.cpp \
+  src/cover_resolver.cpp \
+  src/cover_service.cpp \
+  src/cover_cache_runtime.cpp \
+  src/shelf_runtime.cpp \
+  src/shelf_scene.cpp
+
+READER_SRCS := \
+  src/reader_core.cpp \
+  src/reader_module.cpp \
+  src/reader_manager.cpp \
+  src/reader_launch_service.cpp \
+  src/chapter_detection.cpp \
+  src/chapter_sidebar.cpp \
+  src/reader_input_router.cpp \
+  src/reader_progress_controller.cpp \
+  src/reader_scene.cpp \
+  src/reader_runtime_common.cpp \
+  src/reader_render_controller.cpp \
+  src/reader_render_runtime.cpp \
+  src/async_image_render_queue.cpp \
+  src/progress_store.cpp \
+  src/reader_session_ops.cpp \
+  src/pdf_reader.cpp \
+  src/pdf_runtime.cpp \
+  src/pdf_reader_module.cpp \
+  src/epub_reader.cpp \
+  src/epub_common.cpp \
+  src/epub_classifier.cpp \
+  src/epub_comic_reader.cpp \
+  src/epub_comic_runtime.cpp \
+  src/epub_flow_reader.cpp \
+  src/epub_runtime.cpp \
+  src/epub_cover_cache.cpp \
+  src/epub_reader_module.cpp \
+  src/epub_comic_reader_module.cpp \
+  src/epub_flow_reader_module.cpp \
+  src/txt_reader_runtime.cpp \
+  src/txt_reader_session.cpp \
+  src/txt_reader_module.cpp \
+  src/txt_session_facade.cpp \
+  src/txt_text_service.cpp \
+  src/txt_transcode_service.cpp \
+  src/zip_image_reader.cpp \
+  src/zip_image_runtime.cpp \
+  src/zip_image_cover_cache.cpp \
+  src/zip_image_reader_module.cpp
+
+MENU_SRCS := \
+  src/settings_runtime.cpp \
+  src/menu_scene.cpp \
+  src/menu_runtime.cpp \
+  src/settings_panel_router.cpp \
+  src/system_controls_panel.cpp \
+  src/txt_settings_panel.cpp \
+  src/avatar_panel.cpp \
+  src/history_panel.cpp \
+  src/cache_panel.cpp \
+  src/update_panel.cpp \
+  src/contact_panel.cpp \
+  src/exit_panel.cpp \
+  src/key_guide_panel.cpp \
+  src/system_settings_runtime.cpp \
+  src/txt_settings_runtime.cpp \
+  src/version_update_runtime.cpp \
+  src/contributor_avatar_runtime.cpp
+
+UI_SRCS := \
+  src/ui_assets.cpp \
+  src/ui_assets_loader.cpp \
+  src/ui_text_cache.cpp \
+  src/texture_registry.cpp \
+  src/avatar_badge_runtime.cpp
+
+STATUS_SRCS := \
+  src/system_status.cpp \
+  src/status_bar_runtime.cpp \
+  src/volume_overlay.cpp \
+  src/audio_runtime.cpp \
+  src/system_controls.cpp \
+  src/lid_power_control.cpp
+
+SRCS := \
+  $(APP_SRCS) \
+  $(CORE_SRCS) \
+  $(BOOT_SRCS) \
+  $(SHELF_SRCS) \
+  $(READER_SRCS) \
+  $(MENU_SRCS) \
+  $(UI_SRCS) \
+  $(STATUS_SRCS)
 OBJS := $(SRCS:.cpp=.o)
 
 SDL_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags sdl2 2>/dev/null)
@@ -95,7 +212,7 @@ $(error REQUIRE_MUPDF=1 but no real PDF backend found. Install MuPDF/Fitz or pop
 endif
 endif
 
-.PHONY: all clean run print-config
+.PHONY: all clean run print-config smoke-windows
 
 all: $(TARGET)
 
@@ -108,6 +225,9 @@ src/%.o: src/%.cpp
 
 run: $(TARGET)
 	./$(TARGET)
+
+smoke-windows:
+	powershell -ExecutionPolicy Bypass -File scripts/smoke_windows.ps1
 
 print-config:
 	@echo "CXX=$(CXX)"

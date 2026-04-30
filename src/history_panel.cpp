@@ -1,6 +1,6 @@
 #include "history_panel.h"
 
 bool HandleHistoryPanelConfirm(SettingsRuntimeInputDeps &deps) {
-  if (deps.on_clear_history) deps.on_clear_history();
+  if (deps.actions.on_clear_history) deps.actions.on_clear_history();
   return true;
 }

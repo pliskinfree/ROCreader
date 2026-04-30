@@ -19,6 +19,56 @@ SDL_Surface *LoadSurfaceFromFileBytes(const std::string &path) {
   if (bytes.empty()) return nullptr;
   return DecodeSurfaceFromMemory(bytes.data(), bytes.size());
 }
+
+void ApplyImageTextureFiltering(SDL_Texture *texture) {
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+  if (texture) SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear);
+#else
+  (void)texture;
+#endif
+}
+
+bool ResampleRgbaSurface(SDL_Surface *src, const SDL_Rect &src_rect, SDL_Surface *dst) {
+  if (!src || !dst || src_rect.w <= 0 || src_rect.h <= 0 || dst->w <= 0 || dst->h <= 0) return false;
+  SDL_Surface *rgba = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
+  if (!rgba) return false;
+  for (int y = 0; y < dst->h; ++y) {
+    for (int x = 0; x < dst->w; ++x) {
+      const double x0 = src_rect.x + static_cast<double>(x) * src_rect.w / dst->w;
+      const double x1 = src_rect.x + static_cast<double>(x + 1) * src_rect.w / dst->w;
+      const double y0 = src_rect.y + static_cast<double>(y) * src_rect.h / dst->h;
+      const double y1 = src_rect.y + static_cast<double>(y + 1) * src_rect.h / dst->h;
+      const int ix0 = std::max(src_rect.x, static_cast<int>(std::floor(x0)));
+      const int ix1 = std::min(src_rect.x + src_rect.w, static_cast<int>(std::ceil(x1)));
+      const int iy0 = std::max(src_rect.y, static_cast<int>(std::floor(y0)));
+      const int iy1 = std::min(src_rect.y + src_rect.h, static_cast<int>(std::ceil(y1)));
+      double sum[4] = {0.0, 0.0, 0.0, 0.0};
+      double total = 0.0;
+      for (int sy = iy0; sy < iy1; ++sy) {
+        const double wy = std::max(0.0, std::min(y1, static_cast<double>(sy + 1)) -
+                                            std::max(y0, static_cast<double>(sy)));
+        if (wy <= 0.0) continue;
+        const unsigned char *row = static_cast<const unsigned char *>(rgba->pixels) + sy * rgba->pitch;
+        for (int sx = ix0; sx < ix1; ++sx) {
+          const double wx = std::max(0.0, std::min(x1, static_cast<double>(sx + 1)) -
+                                              std::max(x0, static_cast<double>(sx)));
+          const double weight = wx * wy;
+          if (weight <= 0.0) continue;
+          const unsigned char *p = row + sx * 4;
+          for (int c = 0; c < 4; ++c) sum[c] += static_cast<double>(p[c]) * weight;
+          total += weight;
+        }
+      }
+      if (total <= 0.0) total = 1.0;
+      unsigned char *out = static_cast<unsigned char *>(dst->pixels) + y * dst->pitch + x * 4;
+      for (int c = 0; c < 4; ++c) {
+        out[c] = static_cast<unsigned char>(std::clamp(static_cast<int>(std::lround(sum[c] / total)), 0, 255));
+      }
+    }
+  }
+  SDL_FreeSurface(rgba);
+  return true;
+}
 } // namespace
 
 SDL_Texture *LoadTextureFromFile(SDL_Renderer *renderer, const std::string &path) {
@@ -63,12 +113,13 @@ SDL_Texture *CreateNormalizedCoverTexture(SDL_Renderer *renderer, SDL_Surface *s
     src.y = (src_surface->h - src.h) / 2;
   }
 
-  if (SDL_BlitScaled(src_surface, &src, dst_surface, nullptr) != 0) {
+  if (!ResampleRgbaSurface(src_surface, src, dst_surface)) {
     SDL_FreeSurface(dst_surface);
     return nullptr;
   }
   SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, dst_surface);
   SDL_FreeSurface(dst_surface);
+  ApplyImageTextureFiltering(tex);
   return tex;
 }
 

@@ -5,17 +5,17 @@
 #include <algorithm>
 
 bool HandleExitPanelConfirm(SettingsRuntimeInputDeps &deps) {
-  if (deps.on_exit_app) deps.on_exit_app();
+  if (deps.actions.on_exit_app) deps.actions.on_exit_app();
   return true;
 }
 
 void DrawExitPanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect, int language_index) {
-  if (!deps.get_title_text_texture) return;
+  if (!deps.services.get_title_text_texture) return;
   const SDL_Color hint_color{240, 246, 255, 255};
   const std::string exit_hint = LocalizedAppText(language_index, AppTextId::ExitHint);
-  TextCacheEntry *hint_tex = deps.get_title_text_texture(exit_hint, hint_color);
+  TextCacheEntry *hint_tex = deps.services.get_title_text_texture(exit_hint, hint_color);
   if (!hint_tex || !hint_tex->texture) {
-    hint_tex = deps.get_text_texture ? deps.get_text_texture(exit_hint, hint_color) : nullptr;
+    hint_tex = deps.services.get_text_texture ? deps.services.get_text_texture(exit_hint, hint_color) : nullptr;
   }
   if (!hint_tex || !hint_tex->texture) return;
 

@@ -125,6 +125,75 @@ bool ImagePerfLogEnabled() {
   return env && *env && std::string(env) != "0";
 }
 
+bool ResampleRgbaSurface(SDL_Surface *src, int dst_w, int dst_h, std::vector<unsigned char> &out,
+                         const std::atomic<bool> *cancel) {
+  if (!src || src->w <= 0 || src->h <= 0 || dst_w <= 0 || dst_h <= 0) return false;
+  out.assign(static_cast<size_t>(dst_w * dst_h * 4), 0);
+  const bool area = dst_w < src->w || dst_h < src->h;
+  for (int y = 0; y < dst_h; ++y) {
+    if (cancel && cancel->load()) {
+      out.clear();
+      return false;
+    }
+    for (int x = 0; x < dst_w; ++x) {
+      const size_t di = static_cast<size_t>((y * dst_w + x) * 4);
+      if (area) {
+        const double x0 = static_cast<double>(x) * src->w / dst_w;
+        const double x1 = static_cast<double>(x + 1) * src->w / dst_w;
+        const double y0 = static_cast<double>(y) * src->h / dst_h;
+        const double y1 = static_cast<double>(y + 1) * src->h / dst_h;
+        const int ix0 = std::max(0, static_cast<int>(std::floor(x0)));
+        const int ix1 = std::min(src->w, static_cast<int>(std::ceil(x1)));
+        const int iy0 = std::max(0, static_cast<int>(std::floor(y0)));
+        const int iy1 = std::min(src->h, static_cast<int>(std::ceil(y1)));
+        double sum[4] = {0.0, 0.0, 0.0, 0.0};
+        double total = 0.0;
+        for (int sy = iy0; sy < iy1; ++sy) {
+          const double wy = std::max(0.0, std::min(y1, static_cast<double>(sy + 1)) -
+                                              std::max(y0, static_cast<double>(sy)));
+          if (wy <= 0.0) continue;
+          const unsigned char *row = static_cast<const unsigned char *>(src->pixels) + sy * src->pitch;
+          for (int sx = ix0; sx < ix1; ++sx) {
+            const double wx = std::max(0.0, std::min(x1, static_cast<double>(sx + 1)) -
+                                                std::max(x0, static_cast<double>(sx)));
+            const double weight = wx * wy;
+            if (weight <= 0.0) continue;
+            const unsigned char *p = row + sx * 4;
+            for (int c = 0; c < 4; ++c) sum[c] += static_cast<double>(p[c]) * weight;
+            total += weight;
+          }
+        }
+        if (total <= 0.0) total = 1.0;
+        for (int c = 0; c < 4; ++c) {
+          out[di + c] = static_cast<unsigned char>(std::clamp(static_cast<int>(std::lround(sum[c] / total)), 0, 255));
+        }
+      } else {
+        const double sx = (static_cast<double>(x) + 0.5) * src->w / dst_w - 0.5;
+        const double sy = (static_cast<double>(y) + 0.5) * src->h / dst_h - 0.5;
+        const int x0 = std::clamp(static_cast<int>(std::floor(sx)), 0, src->w - 1);
+        const int y0 = std::clamp(static_cast<int>(std::floor(sy)), 0, src->h - 1);
+        const int x1 = std::min(x0 + 1, src->w - 1);
+        const int y1 = std::min(y0 + 1, src->h - 1);
+        const double fx = std::clamp(sx - std::floor(sx), 0.0, 1.0);
+        const double fy = std::clamp(sy - std::floor(sy), 0.0, 1.0);
+        const unsigned char *row0 = static_cast<const unsigned char *>(src->pixels) + y0 * src->pitch;
+        const unsigned char *row1 = static_cast<const unsigned char *>(src->pixels) + y1 * src->pitch;
+        const unsigned char *p00 = row0 + x0 * 4;
+        const unsigned char *p10 = row0 + x1 * 4;
+        const unsigned char *p01 = row1 + x0 * 4;
+        const unsigned char *p11 = row1 + x1 * 4;
+        for (int c = 0; c < 4; ++c) {
+          const double top = p00[c] * (1.0 - fx) + p10[c] * fx;
+          const double bottom = p01[c] * (1.0 - fx) + p11[c] * fx;
+          out[di + c] =
+              static_cast<unsigned char>(std::clamp(static_cast<int>(std::lround(top * (1.0 - fy) + bottom * fy)), 0, 255));
+        }
+      }
+    }
+  }
+  return true;
+}
+
 struct PageEntry {
   std::string image_entry;
   int width = 0;
@@ -351,46 +420,16 @@ bool ZipImageReader::RenderPageRGBA(int page_index, float scale, std::vector<uns
   w = target_w > 0 ? target_w : std::max(1, static_cast<int>(std::round(static_cast<float>(rgba_surface->w) * scale)));
   h = target_h > 0 ? target_h : std::max(1, static_cast<int>(std::round(static_cast<float>(rgba_surface->h) * scale)));
 
-  SDL_Surface *scaled = rgba_surface;
-  if (w != rgba_surface->w || h != rgba_surface->h) {
-    if (cancel && cancel->load()) {
-      SDL_FreeSurface(rgba_surface);
-      return false;
-    }
-    scaled = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_RGBA32);
-    if (!scaled) {
-      runtime_log::Line("[zip_image] render scaled surface failed page=" + std::to_string(page_index) +
-                        " target=" + std::to_string(w) + "x" + std::to_string(h) +
-                        " err=" + SDL_GetError());
-      SDL_FreeSurface(rgba_surface);
-      return false;
-    }
-    if (SDL_BlitScaled(rgba_surface, nullptr, scaled, nullptr) != 0) {
-      runtime_log::Line("[zip_image] render blit scaled failed page=" + std::to_string(page_index) +
-                        " src=" + std::to_string(rgba_surface->w) + "x" +
-                        std::to_string(rgba_surface->h) +
-                        " dst=" + std::to_string(w) + "x" + std::to_string(h) +
-                        " err=" + SDL_GetError());
-      SDL_FreeSurface(scaled);
-      SDL_FreeSurface(rgba_surface);
-      return false;
-    }
+  if (!ResampleRgbaSurface(rgba_surface, w, h, rgba, cancel)) {
+    runtime_log::Line("[zip_image] render resample failed page=" + std::to_string(page_index) +
+                      " src=" + std::to_string(rgba_surface->w) + "x" +
+                      std::to_string(rgba_surface->h) +
+                      " dst=" + std::to_string(w) + "x" + std::to_string(h));
     SDL_FreeSurface(rgba_surface);
+    return false;
   }
   const uint32_t perf_scale = SDL_GetTicks();
-
-  rgba.assign(static_cast<size_t>(w * h * 4), 0);
-  for (int y = 0; y < h; ++y) {
-    if (cancel && cancel->load()) {
-      SDL_FreeSurface(scaled);
-      rgba.clear();
-      return false;
-    }
-    const unsigned char *src_row = static_cast<const unsigned char *>(scaled->pixels) + y * scaled->pitch;
-    unsigned char *dst_row = rgba.data() + static_cast<size_t>(y * w * 4);
-    std::memcpy(dst_row, src_row, static_cast<size_t>(w * 4));
-  }
-  SDL_FreeSurface(scaled);
+  SDL_FreeSurface(rgba_surface);
   if (ImagePerfLogEnabled()) {
     runtime_log::Line("[zip_image_perf] page=" + std::to_string(page_index) +
                       " bytes=" + std::to_string(bytes.size()) +

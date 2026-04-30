@@ -66,3 +66,46 @@ ReaderCapabilities ZipImageReaderModule::Capabilities() const {
   return capabilities;
 }
 
+bool ZipImageReaderModule::IsRenderPending() const {
+  return runtime_.IsRenderPending();
+}
+
+const char *ZipImageReaderModule::BackendName() const {
+  return runtime_.BackendName();
+}
+
+void ZipImageReaderModule::RotateLeft() {
+  runtime_.RotateLeft();
+}
+
+void ZipImageReaderModule::RotateRight() {
+  runtime_.RotateRight();
+}
+
+void ZipImageReaderModule::ZoomOut() {
+  runtime_.ZoomOut();
+}
+
+void ZipImageReaderModule::ZoomIn() {
+  runtime_.ZoomIn();
+}
+
+void ZipImageReaderModule::ResetView() {
+  runtime_.ResetView();
+}
+
+bool ZipImageReaderModule::PanHorizontalByPixels(int delta_px) {
+  return runtime_.PanHorizontalByPixels(delta_px);
+}
+
+void ZipImageReaderModule::ScrollByPixels(int delta_px) {
+  runtime_.ScrollByPixels(delta_px);
+}
+
+void ZipImageReaderModule::JumpByScreen(int direction) {
+  runtime_.JumpByScreen(direction);
+}
+
+void ZipImageReaderModule::SetPage(int page_index) {
+  runtime_.SetPage(page_index);
+}

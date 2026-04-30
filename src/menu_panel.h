@@ -1,15 +1,32 @@
 #pragma once
 
-#include "input_manager.h"
+#include "settings_runtime.h"
 
-#include <SDL.h>
+struct MenuPanelDrawContext {
+  SettingsRuntimeRenderDeps &deps;
+  SDL_Rect preview_rect{};
+  int language_index = 0;
+  int first_menu_item_y = 0;
+  int sidebar_item_pitch = 0;
+  int sidebar_item_h = 0;
+  float scale = 1.0f;
+};
 
 class IMenuPanel {
 public:
   virtual ~IMenuPanel() = default;
 
-  virtual void OnEnter() {}
-  virtual void OnExit() {}
-  virtual bool HandleInput(const InputManager &input, float dt) = 0;
-  virtual void Draw(SDL_Renderer *renderer) = 0;
+  virtual bool HandleInput(SettingsRuntimeInputDeps &deps) {
+    (void)deps;
+    return false;
+  }
+
+  virtual bool Confirm(SettingsRuntimeInputDeps &deps) {
+    (void)deps;
+    return false;
+  }
+
+  virtual void Draw(const MenuPanelDrawContext &context) {
+    (void)context;
+  }
 };

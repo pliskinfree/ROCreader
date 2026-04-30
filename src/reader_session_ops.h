@@ -1,16 +1,17 @@
 #pragma once
 
-#include "epub_runtime.h"
-#include "pdf_runtime.h"
 #include "progress_store.h"
 #include "reader_manager.h"
 #include "reader_session_state.h"
-#include "zip_image_runtime.h"
 
 #include <SDL.h>
 
 #include <functional>
 #include <string>
+
+class EpubRuntime;
+class PdfRuntime;
+class ZipImageRuntime;
 
 struct ReaderOpenDeps {
   SDL_Renderer *renderer = nullptr;
@@ -18,9 +19,9 @@ struct ReaderOpenDeps {
   int screen_h = 0;
   ReaderUiState &ui;
   ReaderManager *reader_manager = nullptr;
-  PdfRuntime &pdf_runtime;
-  EpubRuntime &epub_runtime;
-  ZipImageRuntime &zip_image_runtime;
+  PdfRuntime *pdf_runtime = nullptr;
+  EpubRuntime *epub_runtime = nullptr;
+  ZipImageRuntime *zip_image_runtime = nullptr;
   std::function<int()> epub_flow_base_font_pt;
   std::function<SDL_Color()> epub_flow_background_color;
   std::function<SDL_Color()> epub_flow_font_color;
@@ -33,9 +34,9 @@ struct ReaderCloseDeps {
   ReaderUiState &ui;
   ProgressStore &progress_store;
   ReaderManager *reader_manager = nullptr;
-  PdfRuntime &pdf_runtime;
-  EpubRuntime &epub_runtime;
-  ZipImageRuntime &zip_image_runtime;
+  PdfRuntime *pdf_runtime = nullptr;
+  EpubRuntime *epub_runtime = nullptr;
+  ZipImageRuntime *zip_image_runtime = nullptr;
   std::function<void()> close_text_reader;
   std::function<void(const std::string &, bool)> persist_current_txt_resume_snapshot;
 };

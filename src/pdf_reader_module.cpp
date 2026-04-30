@@ -65,3 +65,46 @@ ReaderCapabilities PdfReaderModule::Capabilities() const {
   return capabilities;
 }
 
+bool PdfReaderModule::IsRenderPending() const {
+  return runtime_.IsRenderPending();
+}
+
+const char *PdfReaderModule::BackendName() const {
+  return runtime_.HasRealRenderer() ? "pdf" : "none";
+}
+
+void PdfReaderModule::RotateLeft() {
+  runtime_.RotateLeft();
+}
+
+void PdfReaderModule::RotateRight() {
+  runtime_.RotateRight();
+}
+
+void PdfReaderModule::ZoomOut() {
+  runtime_.ZoomOut();
+}
+
+void PdfReaderModule::ZoomIn() {
+  runtime_.ZoomIn();
+}
+
+void PdfReaderModule::ResetView() {
+  runtime_.ResetView();
+}
+
+bool PdfReaderModule::PanHorizontalByPixels(int delta_px) {
+  return runtime_.PanHorizontalByPixels(delta_px);
+}
+
+void PdfReaderModule::ScrollByPixels(int delta_px) {
+  runtime_.ScrollByPixels(delta_px);
+}
+
+void PdfReaderModule::JumpByScreen(int direction) {
+  runtime_.JumpByScreen(direction);
+}
+
+void PdfReaderModule::SetPage(int page_index) {
+  runtime_.SetPage(page_index);
+}

@@ -1,6 +1,13 @@
 #pragma once
 
+#include "menu_panel.h"
 #include "settings_runtime.h"
+
+class SystemControlsPanel final : public IMenuPanel {
+public:
+  bool HandleInput(SettingsRuntimeInputDeps &deps) override;
+  void Draw(const MenuPanelDrawContext &context) override;
+};
 
 bool HandleSystemControlsPanelInput(SettingsRuntimeInputDeps &deps);
 void DrawSystemControlsPanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect,

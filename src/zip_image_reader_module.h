@@ -19,9 +19,19 @@ public:
   int PageCount() const override;
   int CurrentPage() const override;
   ReaderCapabilities Capabilities() const override;
+  bool IsRenderPending() const override;
+  const char *BackendName() const override;
+  void RotateLeft() override;
+  void RotateRight() override;
+  void ZoomOut() override;
+  void ZoomIn() override;
+  void ResetView() override;
+  bool PanHorizontalByPixels(int delta_px) override;
+  void ScrollByPixels(int delta_px) override;
+  void JumpByScreen(int direction) override;
+  void SetPage(int page_index) override;
 
 private:
   ZipImageRuntime &runtime_;
   ReaderProgress restore_progress_;
 };
-

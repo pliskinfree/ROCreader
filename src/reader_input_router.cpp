@@ -45,7 +45,12 @@ int EpubTapPageActionForButton(int rotation, Button button) {
 void HandleReaderInput(ReaderInputRouterDeps &deps) {
   ReaderMode &reader_mode = deps.ui.mode;
   TxtReaderState &txt_reader = deps.ui.Txt();
+  IReaderModule *active_module = deps.reader_manager ? deps.reader_manager->Module(reader_mode) : nullptr;
   IReaderModule *epub_module = deps.reader_manager ? deps.reader_manager->Module(ReaderMode::Epub) : nullptr;
+  auto module_is_open = [&](ReaderMode mode) {
+    IReaderModule *module = deps.reader_manager ? deps.reader_manager->Module(mode) : nullptr;
+    return module && module->IsOpen();
+  };
   auto epub_is_open = [&]() {
     return epub_module ? epub_module->IsOpen() : deps.epub_runtime.IsOpen();
   };
@@ -69,9 +74,9 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
 
   if (reader_progress_overlay_visible &&
       ((reader_mode == ReaderMode::Txt && txt_reader.open) ||
-       (reader_mode == ReaderMode::Pdf && deps.pdf_runtime.IsOpen()) ||
+       (reader_mode == ReaderMode::Pdf && (module_is_open(ReaderMode::Pdf) || deps.pdf_runtime.IsOpen())) ||
        (reader_mode == ReaderMode::Epub && epub_is_open()) ||
-       (reader_mode == ReaderMode::ZipImage && deps.zip_image_runtime.IsOpen()))) {
+       (reader_mode == ReaderMode::ZipImage && (module_is_open(ReaderMode::ZipImage) || deps.zip_image_runtime.IsOpen())))) {
     TxtProgressOverlayInputDeps txt_overlay_input_deps{
         deps.input,
         deps.ui,
@@ -97,8 +102,14 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
     };
     HandleTxtReaderInput(txt_input_deps);
   } else if (reader_mode == ReaderMode::Pdf) {
-    const int pdf_rotation = deps.pdf_runtime.Progress().rotation;
-    const auto pdf_progress = deps.pdf_runtime.Progress();
+    const ReaderProgress pdf_progress = active_module && active_module->IsOpen()
+                                            ? active_module->Progress()
+                                            : [&]() {
+                                                const auto progress = deps.pdf_runtime.Progress();
+                                                return ReaderProgress{progress.page, progress.rotation, progress.zoom,
+                                                                      progress.scroll_x, progress.scroll_y};
+                                              }();
+    const int pdf_rotation = pdf_progress.rotation;
     const bool pdf_zoomed = pdf_progress.zoom > 1.0005f;
     auto pdf_pan_delta_for_page_button = [&](Button button) -> int {
       const int page_action = PdfTapPageActionForButton(pdf_rotation, button);
@@ -107,19 +118,24 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
       return pan_sign * deps.tap_step_px;
     };
     if (deps.input.IsJustPressed(Button::L2)) {
-      deps.pdf_runtime.RotateLeft();
+      if (active_module) active_module->RotateLeft();
+      else deps.pdf_runtime.RotateLeft();
     }
     if (deps.input.IsJustPressed(Button::R2)) {
-      deps.pdf_runtime.RotateRight();
+      if (active_module) active_module->RotateRight();
+      else deps.pdf_runtime.RotateRight();
     }
     if (deps.input.IsJustPressed(Button::L1)) {
-      deps.pdf_runtime.ZoomOut();
+      if (active_module) active_module->ZoomOut();
+      else deps.pdf_runtime.ZoomOut();
     }
     if (deps.input.IsJustPressed(Button::R1)) {
-      deps.pdf_runtime.ZoomIn();
+      if (active_module) active_module->ZoomIn();
+      else deps.pdf_runtime.ZoomIn();
     }
     if (deps.input.IsJustPressed(Button::A)) {
-      deps.pdf_runtime.ResetView();
+      if (active_module) active_module->ResetView();
+      else deps.pdf_runtime.ResetView();
     }
 
     std::array<Button, 4> dirs = {Button::Up, Button::Down, Button::Left, Button::Right};
@@ -131,7 +147,8 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
           const int pan_delta = pdf_pan_delta_for_page_button(b);
           if (pan_delta != 0 && deps.input.IsPressed(b) && deps.input.HoldTime(b) >= 0.28f) {
             long_fired[bi] = true;
-            deps.pdf_runtime.PanHorizontalByPixels(pan_delta > 0 ? 20 : -20);
+            if (active_module) active_module->PanHorizontalByPixels(pan_delta > 0 ? 20 : -20);
+            else deps.pdf_runtime.PanHorizontalByPixels(pan_delta > 0 ? 20 : -20);
           }
         }
         hold_speed[bi] = 0.0f;
@@ -139,7 +156,8 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
       }
       if (deps.input.IsPressed(b) && deps.input.HoldTime(b) >= 0.28f) {
         long_fired[bi] = true;
-        deps.pdf_runtime.ScrollByPixels(long_dir * 20);
+        if (active_module) active_module->ScrollByPixels(long_dir * 20);
+        else deps.pdf_runtime.ScrollByPixels(long_dir * 20);
       } else if (!deps.input.IsPressed(b)) {
         hold_speed[bi] = 0.0f;
       }
@@ -154,18 +172,21 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
       }
       const int tap_dir = PdfScrollDirForButton(pdf_rotation, b);
       if (tap_dir != 0) {
-        deps.pdf_runtime.ScrollByPixels(tap_dir * 60);
+        if (active_module) active_module->ScrollByPixels(tap_dir * 60);
+        else deps.pdf_runtime.ScrollByPixels(tap_dir * 60);
       } else {
         if (pdf_zoomed) {
           const int pan_delta = pdf_pan_delta_for_page_button(b);
           if (pan_delta != 0) {
-            deps.pdf_runtime.PanHorizontalByPixels(pan_delta);
+            if (active_module) active_module->PanHorizontalByPixels(pan_delta);
+            else deps.pdf_runtime.PanHorizontalByPixels(pan_delta);
             continue;
           }
         }
         const int page_action = PdfTapPageActionForButton(pdf_rotation, b);
         if (page_action != 0) {
-          deps.pdf_runtime.JumpByScreen(page_action);
+          if (active_module) active_module->JumpByScreen(page_action);
+          else deps.pdf_runtime.JumpByScreen(page_action);
         }
       }
     }
@@ -322,8 +343,15 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
       }
     }
   } else if (reader_mode == ReaderMode::ZipImage) {
-    const int zip_rotation = deps.zip_image_runtime.Progress().rotation;
-    const auto zip_progress = deps.zip_image_runtime.Progress();
+    IReaderModule *zip_module = deps.reader_manager ? deps.reader_manager->Module(ReaderMode::ZipImage) : nullptr;
+    const ReaderProgress zip_progress = zip_module && zip_module->IsOpen()
+                                            ? zip_module->Progress()
+                                            : [&]() {
+                                                const auto progress = deps.zip_image_runtime.Progress();
+                                                return ReaderProgress{progress.page, progress.rotation, progress.zoom,
+                                                                      progress.scroll_x, progress.scroll_y};
+                                              }();
+    const int zip_rotation = zip_progress.rotation;
     const bool zip_zoomed = zip_progress.zoom > 1.0005f;
     auto zip_pan_delta_for_page_button = [&](Button button) -> int {
       const int page_action = EpubTapPageActionForButton(zip_rotation, button);
@@ -332,19 +360,24 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
       return pan_sign * deps.tap_step_px;
     };
     if (deps.input.IsJustPressed(Button::L2)) {
-      deps.zip_image_runtime.RotateLeft();
+      if (zip_module) zip_module->RotateLeft();
+      else deps.zip_image_runtime.RotateLeft();
     }
     if (deps.input.IsJustPressed(Button::R2)) {
-      deps.zip_image_runtime.RotateRight();
+      if (zip_module) zip_module->RotateRight();
+      else deps.zip_image_runtime.RotateRight();
     }
     if (deps.input.IsJustPressed(Button::L1)) {
-      deps.zip_image_runtime.ZoomOut();
+      if (zip_module) zip_module->ZoomOut();
+      else deps.zip_image_runtime.ZoomOut();
     }
     if (deps.input.IsJustPressed(Button::R1)) {
-      deps.zip_image_runtime.ZoomIn();
+      if (zip_module) zip_module->ZoomIn();
+      else deps.zip_image_runtime.ZoomIn();
     }
     if (deps.input.IsJustPressed(Button::A)) {
-      deps.zip_image_runtime.ResetView();
+      if (zip_module) zip_module->ResetView();
+      else deps.zip_image_runtime.ResetView();
     }
 
     std::array<Button, 4> dirs = {Button::Up, Button::Down, Button::Left, Button::Right};
@@ -356,7 +389,8 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
           const int pan_delta = zip_pan_delta_for_page_button(b);
           if (pan_delta != 0 && deps.input.IsPressed(b) && deps.input.HoldTime(b) >= 0.28f) {
             long_fired[bi] = true;
-            deps.zip_image_runtime.PanHorizontalByPixels(pan_delta > 0 ? 20 : -20);
+            if (zip_module) zip_module->PanHorizontalByPixels(pan_delta > 0 ? 20 : -20);
+            else deps.zip_image_runtime.PanHorizontalByPixels(pan_delta > 0 ? 20 : -20);
           }
         }
         hold_speed[bi] = 0.0f;
@@ -364,7 +398,8 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
       }
       if (deps.input.IsPressed(b) && deps.input.HoldTime(b) >= 0.28f) {
         long_fired[bi] = true;
-        deps.zip_image_runtime.ScrollByPixels(long_dir * 20);
+        if (zip_module) zip_module->ScrollByPixels(long_dir * 20);
+        else deps.zip_image_runtime.ScrollByPixels(long_dir * 20);
       } else if (!deps.input.IsPressed(b)) {
         hold_speed[bi] = 0.0f;
       }
@@ -379,18 +414,21 @@ void HandleReaderInput(ReaderInputRouterDeps &deps) {
       }
       const int tap_dir = EpubScrollDirForButton(zip_rotation, b);
       if (tap_dir != 0) {
-        deps.zip_image_runtime.ScrollByPixels(tap_dir * 60);
+        if (zip_module) zip_module->ScrollByPixels(tap_dir * 60);
+        else deps.zip_image_runtime.ScrollByPixels(tap_dir * 60);
       } else {
         if (zip_zoomed) {
           const int pan_delta = zip_pan_delta_for_page_button(b);
           if (pan_delta != 0) {
-            deps.zip_image_runtime.PanHorizontalByPixels(pan_delta);
+            if (zip_module) zip_module->PanHorizontalByPixels(pan_delta);
+            else deps.zip_image_runtime.PanHorizontalByPixels(pan_delta);
             continue;
           }
         }
         const int page_action = EpubTapPageActionForButton(zip_rotation, b);
         if (page_action != 0) {
-          deps.zip_image_runtime.JumpByScreen(page_action);
+          if (zip_module) zip_module->JumpByScreen(page_action);
+          else deps.zip_image_runtime.JumpByScreen(page_action);
         }
       }
     }

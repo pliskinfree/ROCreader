@@ -1,10 +1,13 @@
 #pragma once
 
+#include "reader_chapter.h"
 #include "reader_core.h"
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct TxtReaderState {
@@ -19,11 +22,14 @@ struct TxtReaderState {
   int viewport_h = 0;
   int line_h = 28;
   int content_h = 0;
+  bool paragraph_spacing_pending = false;
+  bool last_raw_line_blank = true;
   std::string pending_raw;
   std::string pending_line;
   size_t pending_line_source_offset = 0;
   std::string cache_key;
   size_t parse_pos = 0;
+  size_t layout_total_bytes = 0;
   size_t restore_source_offset = 0;
   bool loading = false;
   bool truncated = false;
@@ -55,6 +61,8 @@ struct TxtResumeCacheEntry {
   int viewport_h = 0;
   int line_h = 0;
   int content_h = 0;
+  bool paragraph_spacing_pending = false;
+  bool last_raw_line_blank = true;
   int scroll_px = 0;
   int target_scroll_px = 0;
   size_t parse_pos = 0;
@@ -75,6 +83,17 @@ struct TxtTranscodeJob {
   std::string current_file;
 };
 
+struct TxtChapterScanState {
+  std::string cache_key;
+  size_t scan_pos = 0;
+  size_t last_anchor_line = 0;
+  bool have_last_anchor = false;
+  bool done = false;
+  std::unordered_set<std::string> seen_titles;
+  std::vector<ReaderChapterAnchor> anchors;
+  uint32_t last_tick_ms = 0;
+};
+
 struct ReaderUiState {
   ReaderUiState() : txt_reader_ptr(&txt_reader_storage) {}
 
@@ -92,6 +111,17 @@ struct ReaderUiState {
   bool progress_overlay_dirty = false;
   int progress_overlay_preview_pct = 0;
   float progress_overlay_preview_pct_f = 0.0f;
+  bool chapter_sidebar_visible = false;
+  int chapter_sidebar_selected = 0;
+  int chapter_sidebar_first_visible = 0;
+  int chapter_sidebar_page_rows = 1;
+  int chapter_marquee_selected = -1;
+  uint32_t chapter_marquee_start_ticks = 0;
+  bool chapter_loading = false;
+  int chapter_loading_pct = 0;
+  std::string chapter_cache_key;
+  std::vector<ReaderChapterAnchor> chapter_anchors;
+  TxtChapterScanState txt_chapter_scan;
   float hold_cooldown = 0.0f;
   std::array<float, kButtonCount> hold_speed{};
   std::array<bool, kButtonCount> long_fired{};

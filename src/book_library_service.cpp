@@ -1,6 +1,8 @@
 #include "book_library_service.h"
 
+#include "app_stores.h"
 #include "filesystem_compat.h"
+#include "progress_store.h"
 #include "shelf_runtime.h"
 
 #include <SDL.h>
@@ -163,6 +165,40 @@ bool MatchCategory(const BookItem &item, ShelfCategory category, const ShelfRunt
   if (category == ShelfCategory::Collections) return deps.favorites_contains(item.path);
   if (category == ShelfCategory::History) return deps.history_contains(item.path);
   return true;
+}
+
+const std::string &RealPathForItem(const BookItem &item) {
+  return item.real_path.empty() ? item.path : item.real_path;
+}
+
+ReaderProgress CompatibleProgressForItem(const BookItem &item, const ProgressStore &progress_store) {
+  const std::string &real_path = RealPathForItem(item);
+  if (progress_store.Has(real_path)) return progress_store.Get(real_path);
+  if (!item.path.empty() && item.path != real_path && progress_store.Has(item.path)) {
+    return progress_store.Get(item.path);
+  }
+  return ReaderProgress{};
+}
+
+ShelfRuntimeDeps MakeShelfRuntimeDeps(
+    std::function<std::string(const std::string &)> normalize_path_key,
+    std::function<std::string(const std::string &)> get_lower_ext,
+    std::function<std::vector<BookItem>()> all_scanned_books,
+    const RecentPathStore &favorites_store,
+    const RecentPathStore &history_store,
+    uint32_t cache_ttl_ms,
+    size_t max_cache_entries) {
+  return ShelfRuntimeDeps{
+      std::move(normalize_path_key),
+      std::move(get_lower_ext),
+      std::move(all_scanned_books),
+      [&](const std::string &path) { return favorites_store.Contains(path); },
+      [&](const std::string &path) { return history_store.Contains(path); },
+      [&]() { return favorites_store.OrderedPaths(); },
+      [&]() { return history_store.OrderedPaths(); },
+      cache_ttl_ms,
+      max_cache_entries,
+  };
 }
 
 std::vector<BookItem> ScanBaseItems(ShelfRuntimeState &state, ShelfCategory category,

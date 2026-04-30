@@ -9,6 +9,16 @@ namespace {
 int ClampIntLocal(int value, int lo, int hi) {
   return std::max(lo, std::min(hi, value));
 }
+
+IReaderModule *ActiveReaderModule(const ReaderProgressControllerDeps &deps) {
+  return deps.reader_manager ? deps.reader_manager->Module(deps.ui.mode) : nullptr;
+}
+
+int ModuleProgressPercent(const IReaderModule &module) {
+  const int page_count = std::max(1, module.PageCount());
+  const int page_idx = ClampIntLocal(module.Progress().page, 0, page_count - 1);
+  return ReaderPageProgressPercent(page_idx, page_count);
+}
 }  // namespace
 
 int ReaderPageProgressPercent(int page_index, int page_count) {
@@ -49,6 +59,10 @@ void ReaderJumpToPercent(ReaderProgressControllerDeps &deps, int pct) {
     if (deps.text_jump_to_percent) deps.text_jump_to_percent(pct);
     return;
   }
+  if (IReaderModule *module = ActiveReaderModule(deps); module && module->IsOpen()) {
+    module->SetPage(ReaderPageIndexForPercent(module->CurrentPage(), pct, std::max(1, module->PageCount())));
+    return;
+  }
   if (reader_mode == ReaderMode::Pdf && deps.pdf_runtime.IsOpen()) {
     deps.pdf_runtime.SetPage(ReaderPageIndexForPercent(deps.pdf_runtime.CurrentPage(),
                                                        pct,
@@ -80,6 +94,9 @@ int CurrentReaderProgressPercent(const ReaderProgressControllerDeps &deps) {
   const TxtReaderState &txt_reader = deps.ui.Txt();
   if (reader_mode == ReaderMode::Txt && txt_reader.open) {
     return TxtReaderProgressPercent(txt_reader);
+  }
+  if (const IReaderModule *module = ActiveReaderModule(deps); module && module->IsOpen()) {
+    return ModuleProgressPercent(*module);
   }
   if (reader_mode == ReaderMode::Pdf && deps.pdf_runtime.IsOpen()) {
     const int page_count = std::max(1, deps.pdf_runtime.PageCount());
@@ -113,7 +130,7 @@ int CurrentReaderProgressPercent(const ReaderProgressControllerDeps &deps) {
 int CurrentTxtLayoutProgressPercent(const ReaderUiState &ui) {
   if (!(ui.mode == ReaderMode::Txt && ui.Txt().open)) return 0;
   if (!ui.Txt().loading) return 100;
-  const size_t total = ui.Txt().pending_raw.size();
+  const size_t total = ui.Txt().layout_total_bytes > 0 ? ui.Txt().layout_total_bytes : ui.Txt().pending_raw.size();
   if (total == 0) return 0;
   return ClampIntLocal(static_cast<int>((static_cast<int64_t>(ui.Txt().parse_pos) * 100) / total), 0, 100);
 }
@@ -160,12 +177,12 @@ void DrawReaderProgressOverlay(ReaderProgressOverlayRenderDeps &deps) {
 
   SDL_Color tc{245, 245, 245, 255};
   const std::string pct_text = (pct < 10) ? ("0" + std::to_string(pct)) : std::to_string(pct);
+  const IReaderModule *module = ActiveReaderModule(deps.progress);
   const bool render_pending =
-      (reader_mode == ReaderMode::Pdf && deps.progress.pdf_runtime.IsRenderPending()) ||
-      (reader_mode == ReaderMode::Epub &&
-       (deps.progress.reader_manager ? deps.progress.reader_manager->Module(ReaderMode::Epub)->IsRenderPending()
-                                     : deps.progress.epub_runtime.IsRenderPending())) ||
-      (reader_mode == ReaderMode::ZipImage && deps.progress.zip_image_runtime.IsRenderPending());
+      (module && module->IsRenderPending()) ||
+      (!module && reader_mode == ReaderMode::Pdf && deps.progress.pdf_runtime.IsRenderPending()) ||
+      (!module && reader_mode == ReaderMode::Epub && deps.progress.epub_runtime.IsRenderPending()) ||
+      (!module && reader_mode == ReaderMode::ZipImage && deps.progress.zip_image_runtime.IsRenderPending());
   const std::string percent =
       txt_progress_computing ? ("(Calculating " + pct_text + "%)")
                              : (render_pending ? ("(Rendering) " + std::to_string(pct) + "%")

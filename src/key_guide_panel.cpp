@@ -105,8 +105,8 @@ void DrawKeyGuidePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect,
   const SDL_Color divider_color{66, 95, 124, 255};
 
   auto get_text = [&](const std::string &text, SDL_Color color, bool emphasis = false) -> TextCacheEntry * {
-    if (emphasis && deps.get_title_text_texture) return deps.get_title_text_texture(text, color);
-    if (deps.get_text_texture) return deps.get_text_texture(text, color);
+    if (emphasis && deps.services.get_title_text_texture) return deps.services.get_title_text_texture(text, color);
+    if (deps.services.get_text_texture) return deps.services.get_text_texture(text, color);
     return nullptr;
   };
 
@@ -126,7 +126,7 @@ void DrawKeyGuidePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect,
     SDL_Rect dst{left, divider_y - profile->h - ScalePx(scale, 8), profile->w, profile->h};
     SDL_RenderCopy(deps.renderer, profile->texture, nullptr, &dst);
   }
-  deps.draw_rect(preview_rect.x + ScalePx(scale, 10),
+  deps.services.draw_rect(preview_rect.x + ScalePx(scale, 10),
                  divider_y,
                  std::max(0, preview_rect.w - ScalePx(scale, 20)),
                  ScalePx(scale, 1),

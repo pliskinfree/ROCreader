@@ -43,15 +43,20 @@
 #include "app_context.h"
 #include "app_layout.h"
 #include "app_stores.h"
+#include "avatar_badge_runtime.h"
 #include "audio_runtime.h"
+#include "book_library_service.h"
 #include "book_scanner.h"
+#include "boot_scene.h"
 #include "boot_runtime.h"
 #include "contributor_avatar_runtime.h"
+#include "cover_cache_runtime.h"
 #include "cover_service.h"
 #include "epub_runtime.h"
 #include "epub_reader.h"
 #include "input_manager.h"
 #include "lid_power_control.h"
+#include "menu_scene.h"
 #include "pdf_reader.h"
 #include "pdf_reader_module.h"
 #include "pdf_runtime.h"
@@ -61,6 +66,8 @@
 #include "reader_input_router.h"
 #include "reader_manager.h"
 #include "reader_progress_controller.h"
+#include "reader_launch_service.h"
+#include "reader_scene.h"
 #include "reader_session_ops.h"
 #include "reader_session_state.h"
 #include "runtime_log.h"
@@ -71,6 +78,7 @@
 #include "shelf_runtime.h"
 #include "settings_runtime.h"
 #include "sdl_utils.h"
+#include "shelf_scene.h"
 #include "storage_paths.h"
 #include "status_bar_runtime.h"
 #include "system_status.h"
@@ -78,6 +86,9 @@
 #include "txt_reader_module.h"
 #include "txt_reader_runtime.h"
 #include "txt_text_service.h"
+#include "txt_session_facade.h"
+#include "txt_transcode_service.h"
+#include "texture_registry.h"
 #include "ui_assets.h"
 #include "ui_assets_loader.h"
 #include "ui_text_cache.h"
@@ -115,11 +126,6 @@ constexpr float kCardScaleTailRatio = 0.52f;     // last 52% enters slow tail
 constexpr float kCardScaleTailMinMul = 0.10f;    // tail minimum speed multiplier
 constexpr float kPageSlideDurationSec = 0.52f;
 constexpr int kReaderTapStepPx = 56;
-constexpr int kTxtProgressOverlayTapStepPct = 1;
-constexpr float kTxtProgressOverlayHoldDelaySec = 0.25f;
-constexpr float kTxtProgressOverlayHoldSpeedMinPct = 6.0f;
-constexpr float kTxtProgressOverlayHoldSpeedMaxPct = 26.0f;
-constexpr float kTxtProgressOverlayHoldAccelPct = 36.0f;
 constexpr float kSettingsToggleGuardSec = 0.16f;
 constexpr float kMenuToggleDebounceSec = 0.12f;
 constexpr uint32_t kDeferredSaveDelayMs = 1500;
@@ -134,7 +140,7 @@ constexpr uint32_t kTransientMessageDurationMs = 1800;
 constexpr uint32_t kReaderFastFlipThresholdMs = 200;
 constexpr uint32_t kReaderPageFlipDebounceMs = 150;
 constexpr int kTxtLineSpacing = 8;
-constexpr int kTxtLayoutCacheVersion = 3;
+constexpr int kTxtLayoutCacheVersion = 5;
 constexpr size_t kTxtMaxBytes = 64 * 1024 * 1024;
 constexpr size_t kTxtMaxWrappedLines = 250000;
 constexpr size_t kTxtLayoutCacheMaxEntries = 4;
@@ -148,14 +154,6 @@ void FatalSignalHandler(int sig) {
 }
 
 std::string NormalizePathKey(const std::string &path);
-struct CoverCacheEntry {
-  SDL_Texture *texture = nullptr;
-  int w = 0;
-  int h = 0;
-  size_t bytes = 0;
-  uint32_t last_use = 0;
-  bool owned = true;
-};
 
 int ClampInt(int v, int lo, int hi) { return std::max(lo, std::min(hi, v)); }
 
@@ -756,28 +754,10 @@ int main(int, char **argv) {
   };
 
   UiAssets ui_assets;
-  std::unordered_map<SDL_Texture *, SDL_Point> texture_sizes;
-  auto forget_texture_size = [&](SDL_Texture *tex) {
-    if (!tex) return;
-    texture_sizes.erase(tex);
-  };
-  auto remember_texture_size = [&](SDL_Texture *tex, int w, int h) {
-    if (!tex) return;
-    texture_sizes[tex] = SDL_Point{w, h};
-  };
-  auto get_texture_size = [&](SDL_Texture *tex, int &w, int &h) {
-    w = 0;
-    h = 0;
-    if (!tex) return;
-    auto it = texture_sizes.find(tex);
-    if (it != texture_sizes.end()) {
-      w = it->second.x;
-      h = it->second.y;
-      return;
-    }
-    SDL_QueryTexture(tex, nullptr, nullptr, &w, &h);
-    remember_texture_size(tex, w, h);
-  };
+  TextureRegistry texture_registry;
+  auto forget_texture_size = [&](SDL_Texture *tex) { texture_registry.Forget(tex); };
+  auto remember_texture_size = [&](SDL_Texture *tex, int w, int h) { texture_registry.Remember(tex, w, h); };
+  auto get_texture_size = [&](SDL_Texture *tex, int &w, int &h) { texture_registry.Get(tex, w, h); };
   UiAssetsLoaderDeps ui_assets_loader_deps{
       renderer,
       exe_path,
@@ -829,47 +809,15 @@ int main(int, char **argv) {
   } else {
     runtime_log::Line("main: contributor avatars preload skipped");
   }
-  SDL_Texture *selected_avatar_badge_texture = nullptr;
-  int selected_contributor_avatar_index = -1;
-  auto destroy_selected_avatar_badge_texture = [&]() {
-    if (!selected_avatar_badge_texture) return;
-    forget_texture_size(selected_avatar_badge_texture);
-    SDL_DestroyTexture(selected_avatar_badge_texture);
-    selected_avatar_badge_texture = nullptr;
-  };
-  auto update_selected_avatar_badge_texture = [&](int selected_index) {
-    selected_contributor_avatar_index = -1;
-    destroy_selected_avatar_badge_texture();
-    if (selected_index < 0 || selected_index >= static_cast<int>(contributor_avatar_entries.size())) return;
-    SDL_Texture *source = contributor_avatar_entries[selected_index].texture;
-    if (!source) return;
-    const int badge_size = ScalePx(28);
-    selected_avatar_badge_texture = CreateScaledTextureCache(renderer, source, badge_size, badge_size);
-    if (!selected_avatar_badge_texture) return;
-    selected_contributor_avatar_index = selected_index;
-    remember_texture_size(selected_avatar_badge_texture, badge_size, badge_size);
-  };
-  auto find_default_contributor_avatar_index = [&]() -> int {
-    if (contributor_avatar_entries.empty()) return 0;
-    for (size_t i = 0; i < contributor_avatar_entries.size(); ++i) {
-      if (contributor_avatar_entries[i].raw_label.find("BloodROC") != std::string::npos) {
-        return static_cast<int>(i);
-      }
-    }
-    for (size_t i = 0; i < contributor_avatar_entries.size(); ++i) {
-      if (contributor_avatar_entries[i].raw_label.find("MAX") != std::string::npos) {
-        return static_cast<int>(i);
-      }
-    }
-    return 0;
-  };
-  auto find_contributor_avatar_index_by_label = [&](const std::string &saved_label) -> int {
-    if (saved_label.empty()) return -1;
-    for (size_t i = 0; i < contributor_avatar_entries.size(); ++i) {
-      if (contributor_avatar_entries[i].raw_label == saved_label) return static_cast<int>(i);
-    }
-    return -1;
-  };
+  AvatarBadgeRuntime avatar_badge;
+  avatar_badge.Configure(AvatarBadgeRuntimeDeps{
+      renderer,
+      contributor_avatar_entries,
+      [](int value) { return ScalePx(value); },
+      CreateScaledTextureCache,
+      remember_texture_size,
+      forget_texture_size,
+  });
 
   std::vector<std::string> books_roots = storage_paths::DetectBooksRoots();
   runtime_log::Line(std::string("main: DetectBooksRoots count=") + std::to_string(books_roots.size()));
@@ -982,10 +930,7 @@ int main(int, char **argv) {
     config.MarkDirty();
     config.Save();
   }
-  {
-    const int saved_index = find_contributor_avatar_index_by_label(config.Get().selected_contributor_avatar_label);
-    update_selected_avatar_badge_texture(saved_index >= 0 ? saved_index : find_default_contributor_avatar_index());
-  }
+  avatar_badge.SelectSavedOrDefault(config.Get().selected_contributor_avatar_label);
   ProgressStore progress(progress_path.string());
   RecentPathStore favorites_store(favorites_path.string(), NormalizePathKey);
   RecentPathStore history_store(history_path.string(), NormalizePathKey);
@@ -1009,8 +954,8 @@ int main(int, char **argv) {
     txt_settings_state.font_size_level = clamped;
   };
   ContributorAvatarState contributor_avatar_state{};
-  if (selected_contributor_avatar_index >= 0) {
-    contributor_avatar_state.focus_index = selected_contributor_avatar_index;
+  if (avatar_badge.SelectedIndex() >= 0) {
+    contributor_avatar_state.focus_index = avatar_badge.SelectedIndex();
   }
   if (use_h700_defaults) {
     bool changed = false;
@@ -1129,6 +1074,7 @@ int main(int, char **argv) {
   }
   ShelfRenderCache shelf_render_cache;
   ShelfRuntimeState shelf_runtime;
+  ShelfScene shelf_scene;
   uint64_t &shelf_content_version = shelf_runtime.content_version;
 
   AppScene &state = app_shell.Scenes().CurrentRef();
@@ -1145,30 +1091,14 @@ int main(int, char **argv) {
       InitializeBootRuntimeReplay(boot_runtime, boot_status_path);
     }
   }
+  BootScene boot_scene(boot_runtime, [&]() { app_shell.RequestQuit(); });
   std::vector<BookItem> &shelf_items = shelf_runtime.items;
-  std::unordered_map<std::string, CoverCacheEntry> cover_textures;
-  std::unordered_map<std::string, std::string> manual_cover_path_cache;
-  std::string current_folder;
-  std::unordered_map<std::string, int> folder_focus;
-  int focus_index = 0;
-  std::unordered_map<int, GridItemAnim> grid_item_anims;
-  int shelf_page = 0;
-  int page_anim_from = 0;
-  int page_anim_to = 0;
-  int page_anim_dir = 0;
-  bool page_animating = false;
-  animation::TweenFloat page_slide(0.0f);
-  bool any_grid_animating = false;
-  int title_focus_index = -1;
-  float title_marquee_wait = kTitleMarqueePauseSec;
-  float title_marquee_offset = 0.0f;
-  bool title_marquee_active = false;
+  CoverCacheRuntime cover_cache(kCoverCacheMaxEntries, kCoverCacheMaxBytes);
+  ShelfSceneState shelf_state;
+  shelf_state.title_marquee_wait = kTitleMarqueePauseSec;
 
-  animation::TweenFloat menu_anim(0.0f);
-  bool menu_closing = false;
-  float settings_toggle_guard = 0.0f;
-  bool settings_close_armed = true;
-  std::vector<SettingId> menu_items = {
+  MenuSceneState menu_state;
+  menu_state.items = {
       SettingId::KeyGuide,
       SettingId::SystemControls,
       SettingId::TxtToUtf8,
@@ -1179,7 +1109,6 @@ int main(int, char **argv) {
   VersionUpdateState version_update_state{};
   version_update_state.current_version = DetectVersionLabel({});
   InitializeVersionUpdateState(version_update_state);
-  int menu_selected = 0;
   bool lid_close_screen_off_enabled = config.Get().lid_close_screen_off;
   lid_power_controller.SetEnabled(lid_close_screen_off_enabled);
   system_settings_state.lid_close_screen_off_enabled = lid_close_screen_off_enabled;
@@ -1192,10 +1121,8 @@ int main(int, char **argv) {
   ReaderMode &reader_mode = reader_ui.mode;
   bool &reader_progress_overlay_visible = reader_ui.progress_overlay_visible;
   float &hold_cooldown = reader_ui.hold_cooldown;
-  int nav_selected_index = 0; // 0: ALL COMICS, 1: ALL BOOKS, 2: COLLECTIONS, 3: HISTORY
-
   auto current_category = [&]() -> ShelfCategory {
-    return ClampShelfCategory(nav_selected_index);
+    return ClampShelfCategory(shelf_state.nav_selected_index);
   };
   auto file_exists_fs = [&](const std::filesystem::path &path) -> bool {
     std::error_code ec;
@@ -1205,7 +1132,7 @@ int main(int, char **argv) {
     return !path.empty() && file_exists_fs(std::filesystem::path(path));
   };
   auto item_real_path = [&](const BookItem &item) -> const std::string & {
-    return item.real_path.empty() ? item.path : item.real_path;
+    return book_library_service::RealPathForItem(item);
   };
   auto item_fs_path = [&](const BookItem &item) -> std::filesystem::path {
     if (!item.native_fs_path.empty()) return item.native_fs_path;
@@ -1213,29 +1140,21 @@ int main(int, char **argv) {
     return real_path.empty() ? std::filesystem::path(item.path) : std::filesystem::path(real_path);
   };
   auto get_compatible_progress = [&](const BookItem &item) -> ReaderProgress {
-    const std::string &real_path = item_real_path(item);
-    if (progress.Has(real_path)) return progress.Get(real_path);
-    if (!item.path.empty() && item.path != real_path && progress.Has(item.path)) {
-      return progress.Get(item.path);
-    }
-    return ReaderProgress{};
+    return book_library_service::CompatibleProgressForItem(item, progress);
   };
   auto make_shelf_runtime_deps = [&]() {
-    return ShelfRuntimeDeps{
+    return book_library_service::MakeShelfRuntimeDeps(
         NormalizePathKey,
         GetLowerExt,
         [&]() { return boot_runtime.scanned_books; },
-        [&](const std::string &path) { return favorites_store.Contains(path); },
-        [&](const std::string &path) { return history_store.Contains(path); },
-        [&]() { return favorites_store.OrderedPaths(); },
-        [&]() { return history_store.OrderedPaths(); },
+        favorites_store,
+        history_store,
         kShelfScanCacheTtlMs,
-        kShelfScanCacheMaxEntries,
-    };
+        kShelfScanCacheMaxEntries);
   };
 
   auto rebuild_shelf_items = [&]() {
-    RebuildShelfItems(shelf_runtime, current_category(), current_folder, books_roots, make_shelf_runtime_deps());
+    RebuildShelfItems(shelf_runtime, current_category(), shelf_state.current_folder, books_roots, make_shelf_runtime_deps());
   };
   std::string transient_message;
   uint32_t transient_message_until = 0;
@@ -1256,36 +1175,17 @@ int main(int, char **argv) {
     return false;
   };
 
-  auto prune_cover_cache = [&]() {
-    auto cover_cache_total_bytes = [&]() -> size_t {
-      size_t total = 0;
-      for (const auto &kv : cover_textures) total += kv.second.bytes;
-      return total;
-    };
-    while (cover_textures.size() > kCoverCacheMaxEntries || cover_cache_total_bytes() > kCoverCacheMaxBytes) {
-      auto oldest = cover_textures.end();
-      for (auto it = cover_textures.begin(); it != cover_textures.end(); ++it) {
-        if (oldest == cover_textures.end() || it->second.last_use < oldest->second.last_use) oldest = it;
-      }
-      if (oldest == cover_textures.end()) break;
-      if (oldest->second.texture && oldest->second.owned) {
-        forget_texture_size(oldest->second.texture);
-        SDL_DestroyTexture(oldest->second.texture);
-      }
-      cover_textures.erase(oldest);
-    }
-  };
-
   auto clear_cover_cache = [&]() {
-    for (auto &kv : cover_textures) {
-      if (kv.second.texture && kv.second.owned) {
-        forget_texture_size(kv.second.texture);
-        SDL_DestroyTexture(kv.second.texture);
-      }
-    }
-    cover_textures.clear();
-    manual_cover_path_cache.clear();
+    cover_cache.Clear(forget_texture_size);
     ++shelf_content_version;
+  };
+  auto clear_history_and_refresh_shelf = [&]() {
+    history_store.Clear();
+    if (current_category() == ShelfCategory::History) {
+      shelf_scene.ResetToCategoryRoot(shelf_state);
+      clear_cover_cache();
+      rebuild_shelf_items();
+    }
   };
   auto clear_directory_files = [&](const std::filesystem::path &dir_path) {
     std::error_code ec;
@@ -1304,15 +1204,15 @@ int main(int, char **argv) {
   auto make_cover_service_deps = [&]() {
     return CoverServiceDeps{
         renderer,
-        Layout().cover_w,
-        Layout().cover_h,
+        FocusedCoverW(),
+        FocusedCoverH(),
         kCoverAspect,
         cover_thumb_cache_dir,
         removable_cover_thumb_cache_dir,
         cover_roots,
         ui_assets.book_cover_txt,
         ui_assets.book_cover_pdf,
-        &manual_cover_path_cache,
+        &cover_cache.ManualPathCache(),
         NormalizePathKey,
         GetLowerExt,
         LoadSurfaceFromFile,
@@ -1346,10 +1246,10 @@ int main(int, char **argv) {
 
   auto get_cover_texture = [&](const BookItem &item) -> SDL_Texture * {
     const std::string &real_path = item_real_path(item);
-    auto it = cover_textures.find(real_path);
-    if (it != cover_textures.end()) {
-      it->second.last_use = SDL_GetTicks();
-      return it->second.texture;
+    const std::string cover_cache_key =
+        real_path + "|cover|" + std::to_string(FocusedCoverW()) + "x" + std::to_string(FocusedCoverH());
+    if (SDL_Texture *cached = cover_cache.FindTexture(cover_cache_key)) {
+      return cached;
     }
 
     CoverServiceDeps deps = make_cover_service_deps();
@@ -1362,12 +1262,7 @@ int main(int, char **argv) {
     const bool shared_ui_cover = (tex == ui_assets.book_cover_txt ||
                                   tex == ui_assets.book_cover_pdf);
     const bool owned = (tex != nullptr && !shared_ui_cover);
-    int tw = 0;
-    int th = 0;
-    if (tex) get_texture_size(tex, tw, th);
-    const size_t tex_bytes = (owned && tw > 0 && th > 0) ? (static_cast<size_t>(tw) * static_cast<size_t>(th) * 4u) : 0u;
-    cover_textures[real_path] = CoverCacheEntry{tex, tw, th, tex_bytes, SDL_GetTicks(), owned};
-    prune_cover_cache();
+    cover_cache.PutTexture(cover_cache_key, tex, owned, get_texture_size, forget_texture_size);
     return tex;
   };
 
@@ -1452,9 +1347,9 @@ int main(int, char **argv) {
 
   auto focused_title_needs_marquee = [&]() -> bool {
     if (state != AppScene::Shelf) return false;
-    if (focus_index < 0 || focus_index >= static_cast<int>(shelf_items.size())) return false;
+    if (shelf_state.focus_index < 0 || shelf_state.focus_index >= static_cast<int>(shelf_items.size())) return false;
     SDL_Color title_color{248, 250, 255, 255};
-    const std::string display = shelf_title_text(shelf_items[focus_index]);
+    const std::string display = shelf_title_text(shelf_items[shelf_state.focus_index]);
     if (display.empty()) return false;
     TextCacheEntry *te = get_text_texture(display, title_color);
     const int text_area_w = std::max(8, FocusedCoverW() - Layout().title_text_pad_x * 2);
@@ -1479,102 +1374,22 @@ int main(int, char **argv) {
     }
   };
 
-  auto collect_scanned_txt_files = [&]() {
-    std::vector<std::string> out;
-    std::unordered_set<std::string> seen;
-    for (const auto &root : books_roots) {
-      std::error_code ec;
-      if (!std::filesystem::exists(root, ec) || ec) continue;
-      const auto opts = std::filesystem::directory_options::skip_permission_denied;
-      for (std::filesystem::recursive_directory_iterator it(root, opts, ec), end; it != end; it.increment(ec)) {
-        if (ec) {
-          ec.clear();
-          continue;
-        }
-        if (!filesystem_compat::IsRegularFile(*it, ec) || ec) {
-          ec.clear();
-          continue;
-        }
-        const std::string path = it->path().string();
-        if (GetLowerExt(path) != ".txt") continue;
-        const std::string key = NormalizePathKey(path);
-        if (seen.insert(key).second) out.push_back(path);
-      }
-    }
-    std::sort(out.begin(), out.end());
-    return out;
+  TxtTranscodeServiceDeps txt_transcode_deps{
+      books_roots,
+      NormalizePathKey,
+      GetLowerExt,
+      ReadFileBytes,
+      DecodeTextBytesToUtf8,
+      WriteFileBytesAtomically,
+      clear_runtime_cache_files,
+      verbose_log,
   };
 
-  auto start_txt_transcode_job = [&]() {
-    if (txt_transcode_job.active) return;
-    txt_transcode_job = TxtTranscodeJob{};
-    txt_transcode_job.files = collect_scanned_txt_files();
-    txt_transcode_job.total = txt_transcode_job.files.size();
-    txt_transcode_job.active = txt_transcode_job.total > 0;
-    txt_transcode_job.current_file.clear();
-    if (verbose_log) {
-      std::cout << "[native_h700] txt transcode queued: files=" << txt_transcode_job.total << "\n";
-    }
-  };
-
-  auto process_txt_transcode_step = [&]() {
-    if (!txt_transcode_job.active) return;
-    if (txt_transcode_job.processed >= txt_transcode_job.total) {
-      txt_transcode_job.active = false;
-      txt_transcode_job.current_file.clear();
-      clear_runtime_cache_files();
-      if (verbose_log || txt_transcode_job.failed > 0) {
-        std::cout << "[native_h700] txt transcode finished: processed=" << txt_transcode_job.processed
-                  << " converted=" << txt_transcode_job.converted
-                  << " failed=" << txt_transcode_job.failed << "\n";
-      }
-      return;
-    }
-
-    const size_t idx = txt_transcode_job.processed;
-    const std::filesystem::path file_path(txt_transcode_job.files[idx]);
-    txt_transcode_job.current_file = file_path.filename().string();
-
-    std::string raw;
-    std::string utf8;
-    std::string detected_encoding;
-    bool success = ReadFileBytes(file_path, raw) && DecodeTextBytesToUtf8(raw, utf8, &detected_encoding);
-    bool converted = false;
-    if (success) {
-      if (utf8 != raw) {
-        success = WriteFileBytesAtomically(file_path, utf8);
-        converted = success;
-      }
-    }
-    if (!success) {
-      ++txt_transcode_job.failed;
-      std::cout << "[native_h700] txt transcode failed: " << file_path.string() << "\n";
-    } else if (converted) {
-      ++txt_transcode_job.converted;
-      if (verbose_log) {
-        std::cout << "[native_h700] txt transcoded: " << file_path.string()
-                  << " encoding=" << detected_encoding << "\n";
-      }
-    }
-    ++txt_transcode_job.processed;
-    if (txt_transcode_job.processed >= txt_transcode_job.total) {
-      txt_transcode_job.active = false;
-      txt_transcode_job.current_file.clear();
-      clear_runtime_cache_files();
-      if (verbose_log || txt_transcode_job.failed > 0) {
-        std::cout << "[native_h700] txt transcode finished: processed=" << txt_transcode_job.processed
-                  << " converted=" << txt_transcode_job.converted
-                  << " failed=" << txt_transcode_job.failed << "\n";
-      }
-    }
-  };
+  auto start_txt_transcode_job = [&]() { StartTxtTranscodeJob(txt_transcode_job, txt_transcode_deps); };
+  auto process_txt_transcode_step = [&]() { ProcessTxtTranscodeStep(txt_transcode_job, txt_transcode_deps); };
 
   auto destroy_shelf_render_cache = [&]() {
     DestroyShelfRenderCache(shelf_render_cache, forget_texture_size);
-  };
-
-  auto invalidate_shelf_render_cache = [&]() {
-    InvalidateShelfRenderCache(shelf_render_cache, forget_texture_size);
   };
 
   auto invalidate_all_render_cache = [&]() {};
@@ -1642,10 +1457,10 @@ int main(int, char **argv) {
 #endif
   };
 
-  auto make_txt_session_deps = [&]() {
-    return TxtReaderSessionDeps{
+  TxtSessionFacade txt_session_facade{
+      TxtSessionFacadeDeps{
         reader_ui,
-        txt_text_service.layout_cache,
+        txt_text_service,
         open_ui_font,
         [&]() -> bool { return ui_text_cache.reader_font != nullptr; },
         [&]() -> int {
@@ -1656,87 +1471,42 @@ int main(int, char **argv) {
 #endif
         },
         get_text_viewport_bounds,
-        [&](const std::string &path, const SDL_Rect &bounds, int line_h, uintmax_t file_size, long long file_mtime) {
-          return MakeTxtLayoutCacheKey(path, bounds, line_h, file_size, file_mtime, NormalizePathKey) +
-                 "|v" + std::to_string(kTxtLayoutCacheVersion) +
-                 "|bytes=" + std::to_string(kTxtMaxBytes) +
-                 "|lines=" + std::to_string(kTxtMaxWrappedLines);
-        },
-        [&](const std::string &cache_key, const std::string &book_path, TxtLayoutCacheEntry &entry) {
-          return LoadTxtLayoutCacheFromDisk(txt_text_service, cache_key, book_path, entry);
-        },
-        [&](const std::string &cache_key, const std::string &book_path, const TxtLayoutCacheEntry &entry) {
-          SaveTxtLayoutCacheToDisk(txt_text_service, cache_key, book_path, entry);
-        },
-        [&](const std::string &cache_key, const std::string &book_path, TxtResumeCacheEntry &entry) {
-          return LoadTxtResumeCacheFromDisk(txt_text_service, cache_key, book_path, entry);
-        },
-        [&](const std::string &cache_key, const std::string &book_path, const TxtReaderState &state) {
-          SaveTxtResumeCacheToDisk(txt_text_service, cache_key, book_path, state);
-        },
-        [&]() { PruneTxtLayoutCache(txt_text_service); },
+        NormalizePathKey,
         [&](const std::string &raw, std::string &out) { return DecodeTextBytesToUtf8(raw, out); },
         append_wrapped_text_line,
         invalidate_all_render_cache,
         clamp_text_scroll,
+        txt_layout_cache_dir / "epub_assets",
         ScalePx(kTxtLineSpacing),
         kTxtMaxBytes,
+        kTxtMaxWrappedLines,
         kTxtResumeSaveDelayMs,
-    };
+        kTxtLayoutCacheVersion,
+      },
   };
 
   persist_current_txt_resume_snapshot = [&](const std::string &book_path, bool force) {
-    auto deps = make_txt_session_deps();
-    PersistCurrentTxtResumeSnapshot(book_path, force, deps);
+    txt_session_facade.PersistResumeSnapshot(book_path, force);
   };
 
   auto open_text_book = [&](const std::string &path) -> bool {
-#ifndef HAVE_SDL2_TTF
-    (void)path;
-    std::cerr << "[reader] txt reader requires SDL_ttf build support.\n";
-    return false;
-#else
-    auto deps = make_txt_session_deps();
-    return OpenTextBookSession(path, deps);
-#endif
+    return txt_session_facade.OpenTextBook(path);
   };
 
   auto open_epub_text_book = [&](const std::string &path) -> bool {
-#ifndef HAVE_SDL2_TTF
-    (void)path;
-    return false;
-#else
-    EpubReader epub_reader;
-    EpubReader::ExtractedText extracted;
-    std::string error;
-    const std::filesystem::path asset_cache_dir = txt_layout_cache_dir / "epub_assets";
-    if (!epub_reader.ExtractText(path, asset_cache_dir.string(), extracted, error)) {
-      runtime_log::Line("[reader][epub] text fallback failed path=" + path + " error=" + error);
-      std::cerr << "[reader][epub] text fallback failed: " << error << " path=" << path << "\n";
-      return false;
-    }
-    auto deps = make_txt_session_deps();
-    const bool opened = OpenTextBufferSession(path, std::move(extracted.text), extracted.logical_size,
-                                              extracted.logical_mtime, deps);
-    runtime_log::Line(std::string("[reader][epub] text fallback ") +
-                      (opened ? "opened " : "failed ") + path);
-    return opened;
-#endif
+    return txt_session_facade.OpenEpubTextFallback(path);
   };
 
   auto text_scroll_by = [&](int delta_px) {
-    auto deps = make_txt_session_deps();
-    TextScrollBy(delta_px, current_book, deps);
+    txt_session_facade.ScrollBy(current_book, delta_px);
   };
 
   auto text_page_by = [&](int dir) {
-    auto deps = make_txt_session_deps();
-    TextPageBy(dir, current_book, deps);
+    txt_session_facade.PageBy(current_book, dir);
   };
 
   auto text_jump_to_percent = [&](int pct) {
-    auto deps = make_txt_session_deps();
-    TextJumpToPercent(pct, current_book, deps);
+    txt_session_facade.JumpToPercent(current_book, pct);
   };
 
   TxtReaderModule txt_reader_module(
@@ -1752,6 +1522,11 @@ int main(int, char **argv) {
   reader_manager.Register(ReaderMode::Epub, &epub_reader_module);
   reader_manager.Register(ReaderMode::Txt, &txt_reader_module);
   reader_manager.Register(ReaderMode::ZipImage, &zip_image_reader_module);
+  ReaderScene reader_scene([&]() {
+    app_shell.Scenes().EnterShelf();
+    app_shell.StartSceneFlash();
+  });
+  MenuScene menu_scene;
 
   ReaderProgressControllerDeps reader_progress_deps{
       reader_ui,
@@ -1763,9 +1538,268 @@ int main(int, char **argv) {
   };
 
   auto reader_jump_to_percent = [&](int pct) { ReaderJumpToPercent(reader_progress_deps, pct); };
+  auto reader_jump_to_txt_source_offset = [&](size_t source_offset) {
+    txt_session_facade.JumpToSourceOffset(current_book, source_offset);
+  };
 
   auto current_reader_progress_pct = [&]() -> int {
     return CurrentReaderProgressPercent(reader_progress_deps);
+  };
+  auto make_reader_progress_input_config = [&]() {
+    return MakeReaderSceneProgressInputConfig(ScalePx(kReaderTapStepPx));
+  };
+  auto make_reader_progress_overlay_metrics = [&]() {
+    return MakeReaderSceneProgressOverlayMetrics(Layout());
+  };
+  auto make_reader_scene_input_services = [&]() {
+    return MakeReaderSceneInputServices(
+        close_text_reader,
+        persist_current_txt_resume_snapshot,
+        ReaderSceneInputActions{
+            current_reader_progress_pct,
+            reader_jump_to_percent,
+            reader_jump_to_txt_source_offset,
+            text_scroll_by,
+            text_page_by,
+            show_transient_message,
+        });
+  };
+  auto make_reader_scene_render_services = [&]() {
+    return MakeReaderSceneRenderServices(
+        renderer,
+        [](int value) { return ScalePx(value); },
+        [&](int x, int y, int w, int h, SDL_Color c, bool filled) { DrawRect(renderer, x, y, w, h, c, filled); },
+        clamp_text_scroll,
+        get_text_texture,
+        get_reader_text_texture);
+  };
+  auto make_menu_scene_layout_metrics = [&]() {
+    return MakeMenuSceneLayoutMetrics(Layout());
+  };
+  auto make_system_settings_callbacks = [&]() {
+    return SystemSettingsCallbacks{
+        [&](SystemControlLevels &levels) {
+          system_control_service.Refresh(levels);
+        },
+        [&](int delta, SystemControlLevels &levels) {
+          const bool ok = system_control_service.AdjustVolume(delta, levels);
+          system_control_service.Refresh(levels);
+          if (levels.volume.available) {
+            const int saved_percent =
+                std::clamp((levels.volume.level * 100) / std::max(1, levels.volume.max_level), 0, 100);
+            app_ui.volume_display_percent = saved_percent;
+            if (config.Mutable().system_volume_percent != saved_percent) {
+              config.Mutable().system_volume_percent = saved_percent;
+              config.MarkDirty();
+            }
+          }
+          return ok;
+        },
+        [&](int delta, SystemControlLevels &levels) {
+          const bool ok = system_control_service.AdjustBrightness(delta, levels);
+          if (ok && levels.brightness.available) {
+            const int saved_level =
+                std::clamp(levels.brightness.level, 0, std::max(1, levels.brightness.max_level));
+            if (config.Mutable().screen_brightness_level != saved_level) {
+              config.Mutable().screen_brightness_level = saved_level;
+              config.MarkDirty();
+            }
+          }
+          return ok;
+        },
+        [&](SystemSettingsState &settings_state) {
+          settings_state.lid_close_screen_off_enabled = config.Get().lid_close_screen_off;
+          settings_state.auto_sleep_interval_index = ClampAutoSleepIntervalIndex(config.Get().auto_sleep_interval_index);
+          settings_state.system_language_index = SystemLanguageIndexFromConfigValue(config.Get().system_language);
+        },
+        [&](bool enabled, SystemSettingsState &settings_state) {
+          NativeConfig &cfg = config.Mutable();
+          cfg.lid_close_screen_off = enabled;
+          config.MarkDirty();
+          lid_power_controller.SetEnabled(enabled);
+          settings_state.lid_close_screen_off_enabled = enabled;
+          last_user_input_tick = SDL_GetTicks();
+          auto_sleep_waiting_for_input = false;
+          return true;
+        },
+        [&](int delta, SystemSettingsState &settings_state) {
+          const int next_index = ClampAutoSleepIntervalIndex(settings_state.auto_sleep_interval_index + delta);
+          if (next_index == settings_state.auto_sleep_interval_index) return false;
+          config.Mutable().auto_sleep_interval_index = next_index;
+          config.MarkDirty();
+          config.Save();
+          settings_state.auto_sleep_interval_index = next_index;
+          last_user_input_tick = SDL_GetTicks();
+          auto_sleep_waiting_for_input = false;
+          return true;
+        },
+        [&](int delta, SystemSettingsState &settings_state) {
+          const int language_count = std::max(1, SystemLanguageCount());
+          int next_index = settings_state.system_language_index;
+          if (delta > 0) {
+            next_index = (next_index + 1) % language_count;
+          } else if (delta < 0) {
+            next_index = (next_index - 1 + language_count) % language_count;
+          }
+          if (next_index == settings_state.system_language_index) return false;
+          config.Mutable().system_language = SystemLanguageConfigValue(next_index);
+          config.MarkDirty();
+          config.Save();
+          settings_state.system_language_index = next_index;
+          last_user_input_tick = SDL_GetTicks();
+          return true;
+        },
+        [&]() {
+          clear_runtime_cache_files();
+          return true;
+        },
+        [&]() {
+          clear_history_and_refresh_shelf();
+          return true;
+        },
+    };
+  };
+  auto make_txt_settings_callbacks = [&]() {
+    return TxtSettingsCallbacks{
+        [&](TxtSettingsState &settings_state) {
+          settings_state.background_color = ClampTxtColorIndex(config.Get().txt_background_color);
+          settings_state.font_color = ClampTxtColorIndex(config.Get().txt_font_color);
+          settings_state.font_size_level = ClampTxtFontSizeLevel(config.Get().txt_font_size_level);
+          if (settings_state.selected_row == 0) settings_state.selected_option = settings_state.background_color;
+          else if (settings_state.selected_row == 1) settings_state.selected_option = settings_state.font_color;
+          else if (settings_state.selected_row == 2) settings_state.selected_option = 1;
+          else settings_state.selected_option = 0;
+        },
+        [&](int color_index, TxtSettingsState &settings_state) {
+          const int clamped = ClampTxtColorIndex(color_index);
+          config.Mutable().txt_background_color = clamped;
+          config.MarkDirty();
+          config.Save();
+          settings_state.background_color = clamped;
+          settings_state.selected_option = clamped;
+          apply_epub_flow_theme();
+          return true;
+        },
+        [&](int color_index, TxtSettingsState &settings_state) {
+          const int clamped = ClampTxtColorIndex(color_index);
+          config.Mutable().txt_font_color = clamped;
+          config.MarkDirty();
+          config.Save();
+          settings_state.font_color = clamped;
+          settings_state.selected_option = clamped;
+          apply_epub_flow_theme();
+          return true;
+        },
+        [&](int delta, TxtSettingsState &settings_state) {
+          const int next_level = ClampTxtFontSizeLevel(settings_state.font_size_level + delta);
+          if (next_level == settings_state.font_size_level) return false;
+          apply_txt_font_size_level(next_level);
+          if (reader_mode == ReaderMode::Txt && reader_ui.Txt().open && !current_book.empty()) {
+            reader = txt_reader_module.Progress();
+            open_text_book(current_book);
+          }
+          settings_state.font_size_level = next_level;
+          settings_state.selected_option = delta < 0 ? 0 : 1;
+          return true;
+        },
+        [&]() {
+          start_txt_transcode_job();
+          return true;
+        },
+    };
+  };
+  auto make_settings_input_actions = [&]() {
+    return SettingsRuntimeInputActions{
+        false,
+        [&]() { app_shell.Scenes().ReturnFromSettings(); },
+        [&]() { app_shell.RequestQuit(); },
+        clear_history_and_refresh_shelf,
+        clear_runtime_cache_files,
+        start_txt_transcode_job,
+        [&](int selected_index) {
+          if (selected_index < 0 || selected_index >= static_cast<int>(contributor_avatar_entries.size())) return;
+          const std::string &selected_label = contributor_avatar_entries[selected_index].raw_label;
+          if (config.Mutable().selected_contributor_avatar_label != selected_label) {
+            config.Mutable().selected_contributor_avatar_label = selected_label;
+            config.MarkDirty();
+            config.Save();
+          }
+          avatar_badge.SelectIndex(selected_index);
+        },
+    };
+  };
+  auto make_settings_render_services = [&](const std::function<void()> &draw_volume_overlay) {
+    return MakeMenuSceneRenderServices(MenuSceneRenderServiceCallbacks{
+        [&](int x, int y, int w, int h, SDL_Color c, bool filled) {
+          DrawRect(renderer, x, y, w, h, c, filled);
+        },
+        get_texture_size,
+        get_text_texture,
+        get_title_text_texture,
+        get_reader_text_texture,
+        Utf8Ellipsize,
+        draw_volume_overlay,
+    });
+  };
+  auto make_version_update_callbacks = [&]() {
+    return VersionUpdateCallbacks{
+        [&](VersionUpdateState &update_state) { BeginVersionUpdateDownload(update_state); },
+    };
+  };
+  auto make_shelf_scene_input_services = [&]() {
+    return ShelfSceneInputServices{
+        focused_title_needs_marquee,
+        clear_cover_cache,
+        rebuild_shelf_items,
+        [&](const std::string &path) { favorites_store.Add(path); },
+        [&](const std::string &path) { favorites_store.Remove(path); },
+        current_category,
+        MakeShelfReaderLaunchHandler(ShelfReaderLaunchHandlerDeps{
+            renderer,
+            [&]() { return Layout().screen_w; },
+            [&]() { return Layout().screen_h; },
+            reader_ui,
+            &reader_manager,
+            &pdf_runtime,
+            &epub_runtime,
+            &zip_image_runtime,
+            [&]() { return current_reader_font_pt; },
+            [&]() { return GetTxtBackgroundColor(config.Get().txt_background_color); },
+            [&]() { return GetTxtFontColor(config.Get().txt_font_color); },
+            open_text_book,
+            close_text_reader,
+            file_exists,
+            item_real_path,
+            get_compatible_progress,
+            GetLowerExt,
+            open_epub_text_book,
+            [&](const std::string &path) { history_store.Add(path); },
+            [&]() { app_shell.Scenes().EnterReader(); },
+            [&]() { app_shell.Scenes().EnterShelf(); },
+            [&]() { app_shell.StartSceneFlash(); },
+            [&](const std::string &message) { show_transient_message(message); },
+        }),
+    };
+  };
+  auto make_shelf_scene_render_services = [&]() {
+    return MakeShelfSceneRenderServices(ShelfSceneRenderServiceCallbacks{
+        [&](int x, int y, int w, int h, SDL_Color c, bool fill) { DrawRect(renderer, x, y, w, h, c, fill); },
+        [&](SDL_Texture *tex, int &w, int &h) { get_texture_size(tex, w, h); },
+        [&](const BookItem &item) { return get_cover_texture(item); },
+        get_text_texture,
+        [&](const std::string &raw_name, int text_area_w, const std::function<int(const std::string &)> &measure) {
+          return get_title_ellipsized(raw_name, text_area_w, measure);
+        },
+        [&](const BookItem &item) { return shelf_title_text(item); },
+        forget_texture_size,
+    });
+  };
+  auto make_menu_scene_input_services = [&]() {
+    return MakeMenuSceneInputServices(
+        make_system_settings_callbacks(),
+        make_txt_settings_callbacks(),
+        make_version_update_callbacks(),
+        make_settings_input_actions());
   };
 
   uint32_t prev_ticks = SDL_GetTicks();
@@ -1776,7 +1810,7 @@ int main(int, char **argv) {
     const float dt = frame.dt;
 
     hold_cooldown = std::max(0.0f, hold_cooldown - dt);
-    settings_toggle_guard = std::max(0.0f, settings_toggle_guard - dt);
+    menu_scene.Tick(menu_state, dt);
     TickAppUiState(app_ui, dt);
     TickVersionUpdateState(version_update_state, dt);
 
@@ -1784,15 +1818,11 @@ int main(int, char **argv) {
     const bool animate_enabled = config.Get().animations;
     const bool contributor_marquee_active =
         state == AppScene::Settings &&
-        !menu_items.empty() &&
-        menu_items[std::clamp(menu_selected, 0, static_cast<int>(menu_items.size()) - 1)] ==
-            SettingId::ContributorAvatars &&
+        menu_scene.IsSelected(menu_state, SettingId::ContributorAvatars) &&
         !contributor_avatar_entries.empty();
     const bool version_update_download_active =
         state == AppScene::Settings &&
-        !menu_items.empty() &&
-        menu_items[std::clamp(menu_selected, 0, static_cast<int>(menu_items.size()) - 1)] ==
-            SettingId::VersionUpdate &&
+        menu_scene.IsSelected(menu_state, SettingId::VersionUpdate) &&
         version_update_state.download_in_progress;
     const bool has_active_animation =
         state == AppScene::Boot || input.AnyPressed() ||
@@ -1801,13 +1831,11 @@ int main(int, char **argv) {
         version_update_download_active ||
         contributor_marquee_active ||
         (animate_enabled &&
-         (menu_anim.IsAnimating() || app_shell.IsSceneFlashAnimating() || page_animating || any_grid_animating));
+         (menu_scene.IsAnimating(menu_state) || app_shell.IsSceneFlashAnimating() || shelf_state.page_animating ||
+          shelf_state.any_grid_animating));
     const bool needs_periodic_tick =
-        (state == AppScene::Shelf && title_marquee_active) ||
-        (state == AppScene::Reader &&
-         ((reader_mode == ReaderMode::Pdf && pdf_runtime.IsRenderPending()) ||
-          (reader_mode == ReaderMode::Epub && reader_manager.Module(ReaderMode::Epub)->IsRenderPending()) ||
-          (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsRenderPending())));
+        (state == AppScene::Shelf && shelf_state.title_marquee_active) ||
+        (state == AppScene::Reader && reader_scene.IsRenderPending(reader_ui, &reader_manager));
     const uint32_t loop_now = SDL_GetTicks();
     const bool has_pending_flush =
         config.ShouldFlush(loop_now, kDeferredSaveDelayMs) ||
@@ -1881,8 +1909,7 @@ int main(int, char **argv) {
     system_status.Poll(now);
 
     if (reader_mode == ReaderMode::Txt && reader_ui.Txt().open && reader_ui.Txt().loading) {
-      auto deps = make_txt_session_deps();
-      TickTextBookSession(current_book, deps, 5, 24576);
+      txt_session_facade.TickLoading(current_book, 5, 24576);
     }
     process_txt_transcode_step();
     flush_deferred_writes(false);
@@ -1949,29 +1976,26 @@ int main(int, char **argv) {
     // Dedicated settings toggle path (single entry for Start / Select mapping).
     const MenuToggleAction menu_toggle_action =
         HandleMenuToggleInput(app_ui, input, state == AppScene::Settings, state == AppScene::Shelf,
-                              state == AppScene::Reader, settings_close_armed, settings_toggle_guard, menu_closing,
+                              state == AppScene::Reader, menu_scene.CanCloseWithToggle(menu_state), 0.0f,
+                              false,
                               kMenuToggleDebounceSec, input_profile);
     if (menu_toggle_action == MenuToggleAction::CloseSettings) {
-      const NativeConfig &ui_cfg = config.Get();
-      if (ui_cfg.animations) menu_anim.AnimateTo(0.0f, 0.16f, animation::Ease::InOutCubic);
-      else menu_anim.Snap(0.0f);
-      menu_closing = true;
+      menu_scene.BeginClose(
+          menu_state,
+          MenuSceneAnimationConfig{config.Get().animations, 0.16f, 0.20f, kSettingsToggleGuardSec});
       play_sfx(SfxId::Back);
     } else if (menu_toggle_action == MenuToggleAction::OpenFromShelf ||
                menu_toggle_action == MenuToggleAction::OpenFromReader) {
       app_shell.Scenes().OpenSettingsFrom(
           (menu_toggle_action == MenuToggleAction::OpenFromShelf) ? AppScene::Shelf : AppScene::Reader);
-      menu_anim.Snap(0.0f);
-      if (config.Get().animations) menu_anim.AnimateTo(1.0f, 0.20f, animation::Ease::OutCubic);
-      else menu_anim.Snap(1.0f);
-      settings_toggle_guard = kSettingsToggleGuardSec;
-      settings_close_armed = false;
-      menu_closing = false;
+      menu_scene.BeginOpen(
+          menu_state,
+          MenuSceneAnimationConfig{config.Get().animations, 0.16f, 0.20f, kSettingsToggleGuardSec});
       play_sfx(SfxId::Back);
     }
 
     if (state == AppScene::Boot) {
-      BootRuntimeTickDeps boot_tick_deps{
+      BootSceneTickDeps boot_tick_deps{
           books_roots,
           kBootCountBatchEntries,
           kBootScanBatchEntries,
@@ -1991,386 +2015,104 @@ int main(int, char **argv) {
             forget_texture_size(generated);
             SDL_DestroyTexture(generated);
           },
-          [&]() {
-            const char *command = std::getenv("ROCREADER_UPDATE_INSTALL_COMMAND");
-            if (!command || !*command) return false;
-            runtime_log::Line("boot: pending update install begin");
-            const int rc = std::system(command);
-            const bool ok = (rc == 0);
-            runtime_log::Line(std::string("boot: pending update install ") + (ok ? "success" : "failed") +
-                              " rc=" + std::to_string(rc));
-            return ok;
-          },
-          [&]() {
-            runtime_log::Line("boot: pending update installed; restart via launcher");
-            app_shell.RequestQuit();
-            std::exit(23);
-          },
+          [&]() { return boot_scene.InstallPendingUpdateFromEnvironment(); },
+          [&]() { boot_scene.RestartAfterInstalledUpdate(); },
           [&](size_t total_books, size_t cover_generate_count) {
-            current_folder.clear();
-            nav_selected_index = 0;
-            rebuild_shelf_items();
-            focus_index = 0;
-            shelf_page = 0;
-            page_animating = false;
-            page_slide.Snap(0.0f);
-            grid_item_anims.clear();
-            title_focus_index = -1;
-            title_marquee_active = false;
-            title_marquee_offset = 0.0f;
-            title_marquee_wait = kTitleMarqueePauseSec;
-            runtime_log::Line(std::string("boot: scan complete books=") + std::to_string(total_books) +
-                              " cover_generate=" + std::to_string(cover_generate_count));
-            if (verbose_log) {
-              std::cout << "[native_h700] boot scan complete: books=" << total_books
-                        << " cover_generate=" << cover_generate_count << "\n";
-            }
-            app_shell.Scenes().EnterShelf();
+            boot_scene.FinishScanAndEnterShelf(
+                total_books,
+                cover_generate_count,
+                BootSceneFinishDeps{
+                    BootSceneShelfResetDeps{
+                        shelf_state,
+                        kTitleMarqueePauseSec,
+                    },
+                    rebuild_shelf_items,
+                    [&]() { app_shell.Scenes().EnterShelf(); },
+                    verbose_log,
+                });
           },
       };
-      TickBootRuntime(boot_runtime, dt, boot_tick_deps);
+      boot_scene.Tick(dt, boot_tick_deps);
     } else if (state == AppScene::Shelf) {
       const NativeConfig &ui_cfg = config.Get();
-      ShelfRuntimeInputDeps shelf_input_deps{
+      ShelfSceneInputContext shelf_input_context{
           input,
           shelf_runtime,
-          folder_focus,
-          current_folder,
-          focus_index,
-          shelf_page,
-          nav_selected_index,
+          shelf_state,
           ShelfGridCols(),
           dt,
           ui_cfg.animations,
-          page_animating,
-          page_anim_from,
-          page_anim_to,
-          page_anim_dir,
-          title_focus_index,
-          title_marquee_active,
-          title_marquee_wait,
-          title_marquee_offset,
+          kPageSlideDurationSec,
           kTitleMarqueePauseSec,
           ScaleFloat(kTitleMarqueeSpeedPx),
-          grid_item_anims,
-          focused_title_needs_marquee,
-          clear_cover_cache,
-          rebuild_shelf_items,
-          [&]() { page_slide.Snap(0.0f); },
-          [&]() { page_slide.AnimateTo(1.0f, kPageSlideDurationSec, animation::Ease::OutCubic); },
-          [&](const std::string &path) { favorites_store.Add(path); },
-          [&](const std::string &path) { favorites_store.Remove(path); },
-          current_category,
-          [&](const BookItem &item) {
-            const std::string &real_path = item_real_path(item);
-            const std::string ext = GetLowerExt(real_path);
-            const std::string open_path = real_path;
-            reader = get_compatible_progress(item);
-            ReaderOpenDeps open_deps{
-                renderer,
-                Layout().screen_w,
-                Layout().screen_h,
-                reader_ui,
-                &reader_manager,
-                pdf_runtime,
-                epub_runtime,
-                zip_image_runtime,
-                [&]() { return current_reader_font_pt; },
-                [&]() { return GetTxtBackgroundColor(config.Get().txt_background_color); },
-                [&]() { return GetTxtFontColor(config.Get().txt_font_color); },
-                open_text_book,
-                close_text_reader,
-                file_exists,
-            };
-            const bool opened = OpenReaderSession(open_path, ext, open_deps);
-            bool final_opened = opened;
-            if (!final_opened && ext == ".epub") {
-              reader_ui.current_book = open_path;
-              final_opened = open_epub_text_book(open_path);
-              if (final_opened) {
-                epub_runtime.Close();
-                pdf_runtime.Close();
-                zip_image_runtime.Close();
-                reader_ui.mode = ReaderMode::Txt;
-              }
-            }
-            if (final_opened) {
-              history_store.Add(open_path);
-              reader_ui.current_book = open_path;
-              app_shell.Scenes().EnterReader();
-              app_shell.StartSceneFlash();
-            } else {
-              show_transient_message("Open failed");
-              app_shell.Scenes().EnterShelf();
-            }
-            return final_opened;
-          },
+          make_shelf_scene_input_services(),
       };
-      HandleShelfInput(shelf_input_deps);
+      shelf_scene.HandleInput(shelf_input_context);
     } else if (state == AppScene::Settings) {
       const NativeConfig &ui_cfg = config.Get();
-      if (!menu_items.empty() &&
-          menu_items[std::clamp(menu_selected, 0, static_cast<int>(menu_items.size()) - 1)] == SettingId::SystemControls) {
+      if (menu_scene.IsSelected(menu_state, SettingId::SystemControls)) {
         system_control_service.Refresh(system_settings_state.levels);
       }
       SyncContributorAvatarState(contributor_avatar_state, contributor_avatar_entries.size());
-      SettingsRuntimeInputDeps settings_input_deps{
+      MenuSceneInputContext menu_input_context{
           input,
           ui_cfg,
           dt,
-          menu_closing,
-          settings_close_armed,
-          settings_toggle_guard,
-          menu_selected,
-          menu_items,
-          menu_anim,
+          menu_state,
           system_settings_state,
-          SystemSettingsCallbacks{
-              [&](SystemControlLevels &levels) {
-                system_control_service.Refresh(levels);
-              },
-              [&](int delta, SystemControlLevels &levels) {
-                const bool ok = system_control_service.AdjustVolume(delta, levels);
-                system_control_service.Refresh(levels);
-                if (levels.volume.available) {
-                  const int saved_percent =
-                      std::clamp((levels.volume.level * 100) / std::max(1, levels.volume.max_level), 0, 100);
-                  app_ui.volume_display_percent = saved_percent;
-                  if (config.Mutable().system_volume_percent != saved_percent) {
-                    config.Mutable().system_volume_percent = saved_percent;
-                    config.MarkDirty();
-                  }
-                }
-                return ok;
-              },
-              [&](int delta, SystemControlLevels &levels) {
-                const bool ok = system_control_service.AdjustBrightness(delta, levels);
-                if (ok && levels.brightness.available) {
-                  const int saved_level =
-                      std::clamp(levels.brightness.level, 0, std::max(1, levels.brightness.max_level));
-                  if (config.Mutable().screen_brightness_level != saved_level) {
-                    config.Mutable().screen_brightness_level = saved_level;
-                    config.MarkDirty();
-                  }
-                }
-                return ok;
-              },
-              [&](SystemSettingsState &settings_state) {
-                settings_state.lid_close_screen_off_enabled = config.Get().lid_close_screen_off;
-                settings_state.auto_sleep_interval_index = ClampAutoSleepIntervalIndex(config.Get().auto_sleep_interval_index);
-                settings_state.system_language_index = SystemLanguageIndexFromConfigValue(config.Get().system_language);
-              },
-              [&](bool enabled, SystemSettingsState &settings_state) {
-                NativeConfig &cfg = config.Mutable();
-                cfg.lid_close_screen_off = enabled;
-                config.MarkDirty();
-                lid_power_controller.SetEnabled(enabled);
-                settings_state.lid_close_screen_off_enabled = enabled;
-                last_user_input_tick = SDL_GetTicks();
-                auto_sleep_waiting_for_input = false;
-                return true;
-              },
-              [&](int delta, SystemSettingsState &settings_state) {
-                const int next_index =
-                    ClampAutoSleepIntervalIndex(settings_state.auto_sleep_interval_index + delta);
-                if (next_index == settings_state.auto_sleep_interval_index) return false;
-                config.Mutable().auto_sleep_interval_index = next_index;
-                config.MarkDirty();
-                config.Save();
-                settings_state.auto_sleep_interval_index = next_index;
-                last_user_input_tick = SDL_GetTicks();
-                auto_sleep_waiting_for_input = false;
-                return true;
-              },
-              [&](int delta, SystemSettingsState &settings_state) {
-                const int language_count = std::max(1, SystemLanguageCount());
-                int next_index = settings_state.system_language_index;
-                if (delta > 0) {
-                  next_index = (next_index + 1) % language_count;
-                } else if (delta < 0) {
-                  next_index = (next_index - 1 + language_count) % language_count;
-                }
-                if (next_index == settings_state.system_language_index) return false;
-                config.Mutable().system_language = SystemLanguageConfigValue(next_index);
-                config.MarkDirty();
-                config.Save();
-                settings_state.system_language_index = next_index;
-                last_user_input_tick = SDL_GetTicks();
-                return true;
-              },
-              [&]() {
-                clear_runtime_cache_files();
-                return true;
-              },
-              [&]() {
-                history_store.Clear();
-                if (current_category() == ShelfCategory::History) {
-                  current_folder.clear();
-                  clear_cover_cache();
-                  rebuild_shelf_items();
-                  focus_index = 0;
-                  shelf_page = 0;
-                  page_animating = false;
-                  page_slide.Snap(0.0f);
-                  grid_item_anims.clear();
-                }
-                return true;
-              },
-          },
           txt_settings_state,
-          TxtSettingsCallbacks{
-              [&](TxtSettingsState &settings_state) {
-                settings_state.background_color = ClampTxtColorIndex(config.Get().txt_background_color);
-                settings_state.font_color = ClampTxtColorIndex(config.Get().txt_font_color);
-                settings_state.font_size_level = ClampTxtFontSizeLevel(config.Get().txt_font_size_level);
-                if (settings_state.selected_row == 0) settings_state.selected_option = settings_state.background_color;
-                else if (settings_state.selected_row == 1) settings_state.selected_option = settings_state.font_color;
-                else if (settings_state.selected_row == 2) settings_state.selected_option = 1;
-                else settings_state.selected_option = 0;
-              },
-              [&](int color_index, TxtSettingsState &settings_state) {
-                const int clamped = ClampTxtColorIndex(color_index);
-                config.Mutable().txt_background_color = clamped;
-                config.MarkDirty();
-                config.Save();
-                settings_state.background_color = clamped;
-                settings_state.selected_option = clamped;
-                apply_epub_flow_theme();
-                return true;
-              },
-              [&](int color_index, TxtSettingsState &settings_state) {
-                const int clamped = ClampTxtColorIndex(color_index);
-                config.Mutable().txt_font_color = clamped;
-                config.MarkDirty();
-                config.Save();
-                settings_state.font_color = clamped;
-                settings_state.selected_option = clamped;
-                apply_epub_flow_theme();
-                return true;
-              },
-              [&](int delta, TxtSettingsState &settings_state) {
-                const int next_level = ClampTxtFontSizeLevel(settings_state.font_size_level + delta);
-                if (next_level == settings_state.font_size_level) return false;
-                apply_txt_font_size_level(next_level);
-                if (reader_mode == ReaderMode::Txt && reader_ui.Txt().open && !current_book.empty()) {
-                  reader = txt_reader_module.Progress();
-                  open_text_book(current_book);
-                }
-                settings_state.font_size_level = next_level;
-                settings_state.selected_option = delta < 0 ? 0 : 1;
-                return true;
-              },
-              [&]() {
-                start_txt_transcode_job();
-                return true;
-              },
-          },
           contributor_avatar_state,
           contributor_avatar_entries.size(),
-          [&](int selected_index) {
-            if (selected_index < 0 || selected_index >= static_cast<int>(contributor_avatar_entries.size())) return;
-            const std::string &selected_label = contributor_avatar_entries[selected_index].raw_label;
-            if (config.Mutable().selected_contributor_avatar_label != selected_label) {
-              config.Mutable().selected_contributor_avatar_label = selected_label;
-              config.MarkDirty();
-              config.Save();
-            }
-            update_selected_avatar_badge_texture(selected_index);
-          },
           version_update_state,
-          VersionUpdateCallbacks{
-              [&](VersionUpdateState &update_state) { BeginVersionUpdateDownload(update_state); },
-          },
-          false,
-          [&]() { app_shell.Scenes().ReturnFromSettings(); },
-          [&]() { app_shell.RequestQuit(); },
-          [&]() {
-            history_store.Clear();
-            if (current_category() == ShelfCategory::History) {
-              current_folder.clear();
-              clear_cover_cache();
-              rebuild_shelf_items();
-              focus_index = 0;
-              shelf_page = 0;
-              page_animating = false;
-              page_slide.Snap(0.0f);
-              grid_item_anims.clear();
-            }
-          },
-          clear_runtime_cache_files,
-          start_txt_transcode_job,
+          make_menu_scene_input_services(),
       };
-      HandleSettingsInput(settings_input_deps);
+      menu_scene.HandleInput(menu_input_context);
     } else if (state == AppScene::Reader) {
-      if (input.IsJustPressed(Button::B)) {
-        ReaderCloseDeps close_deps{
-            reader_ui,
-            progress,
-            &reader_manager,
-            pdf_runtime,
-            epub_runtime,
-            zip_image_runtime,
-            close_text_reader,
-            persist_current_txt_resume_snapshot,
-        };
-        CloseReaderSession(close_deps);
-        app_shell.Scenes().EnterShelf();
-        app_shell.StartSceneFlash();
-      } else {
-        ReaderInputRouterDeps reader_input_deps{
-            input,
-            reader_ui,
-            pdf_runtime,
-            epub_runtime,
-            zip_image_runtime,
-            &reader_manager,
-            dt,
-            ScalePx(kReaderTapStepPx),
-            kTxtProgressOverlayTapStepPct,
-            kTxtProgressOverlayHoldDelaySec,
-            kTxtProgressOverlayHoldSpeedMinPct,
-            kTxtProgressOverlayHoldSpeedMaxPct,
-            kTxtProgressOverlayHoldAccelPct,
-            transient_message_dismissed_this_frame,
-            current_reader_progress_pct,
-            reader_jump_to_percent,
-            text_scroll_by,
-            text_page_by,
-            show_transient_message,
-        };
-        HandleReaderInput(reader_input_deps);
-      }
+      ReaderSceneInputDeps reader_input_deps{
+          input,
+          reader_ui,
+          progress,
+          &reader_manager,
+          pdf_runtime,
+          epub_runtime,
+          zip_image_runtime,
+          dt,
+          make_reader_progress_input_config(),
+          transient_message_dismissed_this_frame,
+          make_reader_scene_input_services(),
+      };
+      reader_scene.HandleInput(reader_input_deps);
     }
 
-    any_grid_animating = false;
+    shelf_state.any_grid_animating = false;
     if (animate_enabled) {
       app_shell.TickSceneFlash(dt, true);
-      page_slide.Update(dt);
-      if (page_animating && !page_slide.IsAnimating() && page_slide.Value() >= 0.999f) {
-        page_animating = false;
-        page_slide.Snap(0.0f);
+      shelf_state.page_slide.Update(dt);
+      if (shelf_state.page_animating && !shelf_state.page_slide.IsAnimating() &&
+          shelf_state.page_slide.Value() >= 0.999f) {
+        shelf_state.page_animating = false;
+        shelf_state.page_slide.Snap(0.0f);
       }
     } else {
-      page_animating = false;
-      page_slide.Snap(0.0f);
+      shelf_state.page_animating = false;
+      shelf_state.page_slide.Snap(0.0f);
       app_shell.TickSceneFlash(dt, false);
-      if (state != AppScene::Settings) menu_anim.Snap(0.0f);
+      if (state != AppScene::Settings) menu_scene.SnapClosed(menu_state);
     }
 
     // Draw
     app_shell.BeginDraw();
 
     if (state == AppScene::Boot) {
-      BootRuntimeRenderDeps boot_render_deps{
+      BootSceneRenderDeps boot_render_deps{
           renderer,
-          boot_runtime,
           SystemLanguageIndexFromConfigValue(config.Get().system_language),
           Layout().screen_w,
           Layout().screen_h,
           [&](int x, int y, int w, int h, SDL_Color c, bool filled) { DrawRect(renderer, x, y, w, h, c, filled); },
           get_text_texture,
       };
-      DrawBootRuntime(boot_render_deps);
+      boot_scene.Draw(boot_render_deps);
     } else {
       const NativeConfig &cfg = config.Get();
       boot_runtime.language_index = SystemLanguageIndexFromConfigValue(cfg.system_language);
@@ -2402,14 +2144,14 @@ int main(int, char **argv) {
               Layout().screen_w,
               Layout().top_bar_y,
               Layout().top_bar_h,
-              selected_avatar_badge_texture,
+              avatar_badge.BadgeTexture(),
               [](int value) { return ScalePx(value); },
               [&](int x, int y, int w, int h, SDL_Color c, bool filled) { DrawRect(renderer, x, y, w, h, c, filled); },
               get_text_texture,
           };
           DrawStatusBarRuntime(status_deps);
         };
-        ShelfRuntimeRenderDeps shelf_render_deps{
+        ShelfSceneRenderContext shelf_render_context{
             renderer,
             ui_assets,
 #ifdef HAVE_SDL2_TTF
@@ -2418,49 +2160,13 @@ int main(int, char **argv) {
             nullptr,
 #endif
             shelf_runtime,
+            shelf_state,
             shelf_render_cache,
-            grid_item_anims,
-            ShelfLayoutMetrics{
-                Layout().screen_w,
-                Layout().screen_h,
-                Layout().top_bar_y,
-                Layout().top_bar_h,
-                Layout().bottom_bar_y,
-                Layout().bottom_bar_h,
-                Layout().cover_w,
-                Layout().cover_h,
-                Layout().card_frame_w,
-                Layout().card_frame_h,
-                Layout().grid_gap_x,
-                Layout().grid_gap_y,
-                Layout().grid_start_x,
-                Layout().grid_start_y,
-                Layout().title_overlay_h,
-                Layout().title_text_pad_x,
-                Layout().title_text_pad_bottom,
-                Layout().title_marquee_gap_px,
-                Layout().nav_l1_x,
-                Layout().nav_l1_y,
-                Layout().nav_r1_x,
-                Layout().nav_r1_y,
-                Layout().nav_start_x,
-                Layout().nav_slot_w,
-                Layout().nav_y,
-            },
+            MakeShelfSceneLayoutMetrics(Layout()),
             ShelfGridCols(),
             ShelfItemsPerPage(),
             dt,
             animate_enabled,
-            any_grid_animating,
-            page_animating,
-            page_anim_from,
-            page_anim_to,
-            page_anim_dir,
-            page_slide.Value(),
-            shelf_page,
-            focus_index,
-            nav_selected_index,
-            title_marquee_offset,
             renderer_supports_target_textures,
             shelf_content_version,
             static_cast<float>(kUnfocusedAlpha),
@@ -2475,22 +2181,9 @@ int main(int, char **argv) {
             kCardScaleLinearSpeedH,
             kCardScaleTailRatio,
             kCardScaleTailMinMul,
-            [&](int x, int y, int w, int h, SDL_Color c, bool fill) { DrawRect(renderer, x, y, w, h, c, fill); },
-            [&](SDL_Texture *tex, int &w, int &h) { get_texture_size(tex, w, h); },
-            [&](const BookItem &item) { return get_cover_texture(item); },
-            [&](const std::string &text, SDL_Color color, int &w, int &h, SDL_Texture *&tex) {
-                TextCacheEntry *entry = get_text_texture(text, color);
-                tex = entry ? entry->texture : nullptr;
-                w = entry ? entry->w : 0;
-                h = entry ? entry->h : 0;
-            },
-            [&](const std::string &raw_name, int text_area_w, const std::function<int(const std::string &)> &measure) {
-                return get_title_ellipsized(raw_name, text_area_w, measure);
-            },
-            [&](const BookItem &item) { return shelf_title_text(item); },
-            forget_texture_size,
+            make_shelf_scene_render_services(),
         };
-        DrawShelfRuntime(shelf_render_deps);
+        shelf_scene.Draw(shelf_render_context);
         draw_system_status_overlay();
 
         if (state != AppScene::Settings) {
@@ -2499,75 +2192,30 @@ int main(int, char **argv) {
       }
 
       if (state == AppScene::Reader) {
-        const SDL_Color reader_bg =
-            (reader_mode == ReaderMode::Txt && reader_ui.Txt().open)
-                ? GetTxtBackgroundColor(config.Get().txt_background_color)
-                : SDL_Color{12, 12, 12, 255};
-        DrawRect(renderer, 0, 0, Layout().screen_w, Layout().screen_h, reader_bg);
-        if (reader_mode == ReaderMode::Txt && reader_ui.Txt().open) {
-          TxtReaderRenderDeps txt_render_deps{
-              renderer,
-              reader_ui,
-              clamp_text_scroll,
-              [&](const SDL_Rect &clip) { SDL_RenderSetClipRect(renderer, &clip); },
-              [&]() { SDL_RenderSetClipRect(renderer, nullptr); },
-              [&](const std::string &text, int x, int y) {
-#ifdef HAVE_SDL2_TTF
-                const SDL_Color color = GetTxtFontColor(config.Get().txt_font_color);
-                TextCacheEntry *te = get_reader_text_texture(text, color);
-                if (te && te->texture) {
-                  SDL_Rect td{x, y, te->w, te->h};
-                  SDL_RenderCopy(renderer, te->texture, nullptr, &td);
-                }
-#else
-                (void)text;
-                (void)x;
-                (void)y;
-#endif
-              },
-          };
-          DrawTxtReaderRuntime(txt_render_deps);
-        } else if (reader_mode == ReaderMode::Pdf && pdf_runtime.IsOpen()) {
-          pdf_runtime.UpdateViewport(Layout().screen_w, Layout().screen_h);
-          pdf_runtime.Tick();
-          pdf_runtime.Draw(renderer);
-        } else if (reader_mode == ReaderMode::Epub && reader_manager.Module(ReaderMode::Epub)->IsOpen()) {
-          IReaderModule *epub_module = reader_manager.Module(ReaderMode::Epub);
-          epub_module->UpdateViewport(Layout().screen_w, Layout().screen_h);
-          epub_module->Tick(dt);
-          epub_module->Draw(renderer);
-        } else if (reader_mode == ReaderMode::ZipImage && zip_image_runtime.IsOpen()) {
-          zip_image_runtime.UpdateViewport(Layout().screen_w, Layout().screen_h);
-          zip_image_runtime.Tick();
-          zip_image_runtime.Draw(renderer);
-        }
-        ReaderProgressOverlayRenderDeps progress_overlay_deps{
+        ReaderSceneRenderDeps reader_render_deps{
             renderer,
+            reader_ui,
+            &reader_manager,
             reader_progress_deps,
-            ReaderProgressOverlayLayout{
-                Layout().screen_w,
-                Layout().screen_h,
-                Layout().reader_progress_panel_margin_x,
-                Layout().reader_progress_panel_margin_bottom,
-                Layout().reader_progress_bar_margin_x,
-                Layout().reader_progress_percent_margin_x,
-            },
-            [](int value) { return ScalePx(value); },
-            [&](int x, int y, int w, int h, SDL_Color c, bool filled) { DrawRect(renderer, x, y, w, h, c, filled); },
-            get_text_texture,
+            dt,
+            Layout().screen_w,
+            Layout().screen_h,
+            GetTxtBackgroundColor(config.Get().txt_background_color),
+            GetTxtFontColor(config.Get().txt_font_color),
+            Layout().settings_sidebar_w,
+            make_reader_progress_overlay_metrics(),
+            make_reader_scene_render_services(),
         };
-        DrawReaderProgressOverlay(progress_overlay_deps);
+        reader_scene.Draw(reader_render_deps);
       }
 
       if (state == AppScene::Settings) {
-        SettingsRuntimeRenderDeps settings_render_deps{
+        MenuSceneRenderContext menu_render_context{
             renderer,
             ui_assets,
             cfg,
             input_profile,
-            menu_items,
-            menu_selected,
-            menu_anim,
+            menu_state,
             kSidebarMaskMaxAlpha,
             txt_transcode_job,
             system_settings_state,
@@ -2575,27 +2223,10 @@ int main(int, char **argv) {
             contributor_avatar_entries,
             contributor_avatar_state,
             version_update_state,
-            SettingsRuntimeLayout{
-                Layout().screen_w,
-                Layout().screen_h,
-                Layout().top_bar_y,
-                Layout().top_bar_h,
-                Layout().bottom_bar_y,
-                Layout().bottom_bar_h,
-                Layout().settings_sidebar_w,
-                Layout().settings_y_offset,
-                Layout().settings_content_offset_y,
-                Layout().ui_scale,
-            },
-            [&](int x, int y, int w, int h, SDL_Color c, bool filled) { DrawRect(renderer, x, y, w, h, c, filled); },
-            get_texture_size,
-            get_text_texture,
-            get_title_text_texture,
-            get_reader_text_texture,
-            Utf8Ellipsize,
-            draw_volume_overlay,
+            make_menu_scene_layout_metrics(),
+            make_settings_render_services(draw_volume_overlay),
         };
-        DrawSettingsRuntime(settings_render_deps);
+        menu_scene.Draw(menu_render_context);
         draw_system_status_overlay();
       }
 
@@ -2667,7 +2298,7 @@ int main(int, char **argv) {
   flush_deferred_writes(true);
   ShutdownVersionUpdateState(version_update_state);
   clear_cover_cache();
-  destroy_selected_avatar_badge_texture();
+  avatar_badge.Shutdown();
   DestroyContributorAvatarEntries(contributor_avatar_entries, forget_texture_size);
   DestroyUiAssets(ui_assets, forget_texture_size);
 #ifdef HAVE_SDL2_TTF

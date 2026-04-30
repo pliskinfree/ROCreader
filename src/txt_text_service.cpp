@@ -355,6 +355,8 @@ bool LoadTxtResumeCacheFromDisk(TxtTextServiceState &state, const std::string &c
   entry.truncated = (flags & 2u) != 0;
   entry.limit_hit = (flags & 4u) != 0;
   entry.truncation_notice_added = (flags & 8u) != 0;
+  entry.paragraph_spacing_pending = (flags & 16u) != 0;
+  entry.last_raw_line_blank = (flags & 32u) != 0;
   entry.lines.clear();
   entry.lines.reserve(line_count);
   entry.line_source_offsets.clear();
@@ -403,7 +405,9 @@ void SaveTxtResumeCacheToDisk(TxtTextServiceState &state, const std::string &cac
   uint32_t flags = (state_to_save.loading ? 1u : 0u) |
                    (state_to_save.truncated ? 2u : 0u) |
                    (state_to_save.limit_hit ? 4u : 0u) |
-                   (state_to_save.truncation_notice_added ? 8u : 0u);
+                   (state_to_save.truncation_notice_added ? 8u : 0u) |
+                   (state_to_save.paragraph_spacing_pending ? 16u : 0u) |
+                   (state_to_save.last_raw_line_blank ? 32u : 0u);
   write_u32(flags);
   for (size_t i = 0; i < state_to_save.lines.size(); ++i) {
     write_string(state_to_save.lines[i]);
@@ -459,10 +463,31 @@ SDL_Rect GetTxtViewportBounds(SDL_Renderer *renderer, const TxtViewportRequest &
 bool AppendWrappedTextLine(TxtReaderState &state, const std::string &line, TTF_Font *font,
                            size_t source_line_offset, size_t max_wrapped_lines) {
   const NormalizedParagraph paragraph = NormalizeTextParagraph(line);
-  if (paragraph.text.empty()) return true;
+  if (paragraph.text.empty()) {
+    if (!state.lines.empty() && !state.last_raw_line_blank) {
+      state.lines.emplace_back("");
+      state.line_source_offsets.push_back(source_line_offset);
+      state.paragraph_spacing_pending = false;
+      state.last_raw_line_blank = true;
+      if (state.lines.size() >= max_wrapped_lines) {
+        state.content_h = static_cast<int>(state.lines.size()) * state.line_h;
+        return false;
+      }
+      state.content_h = static_cast<int>(state.lines.size()) * state.line_h;
+    }
+    return true;
+  }
   const int wrap_width_px = std::max(40, state.viewport_w - 2);
   std::vector<TxtWrappedLine> wrapped =
       WrapTextLine(paragraph, wrap_width_px, source_line_offset, font);
+  if (state.paragraph_spacing_pending && !state.last_raw_line_blank && !state.lines.empty()) {
+    state.lines.emplace_back("");
+    state.line_source_offsets.push_back(source_line_offset + paragraph.source_trim_offset);
+    if (state.lines.size() >= max_wrapped_lines) {
+      state.content_h = static_cast<int>(state.lines.size()) * state.line_h;
+      return false;
+    }
+  }
   for (const TxtWrappedLine &wline : wrapped) {
     state.lines.push_back(wline.text);
     state.line_source_offsets.push_back(wline.source_offset);
@@ -471,6 +496,8 @@ bool AppendWrappedTextLine(TxtReaderState &state, const std::string &line, TTF_F
       return false;
     }
   }
+  state.paragraph_spacing_pending = true;
+  state.last_raw_line_blank = false;
   state.content_h = static_cast<int>(state.lines.size()) * state.line_h;
   return true;
 }

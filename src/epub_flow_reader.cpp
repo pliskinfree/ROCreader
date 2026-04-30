@@ -3,6 +3,7 @@
 #include "epub_runtime.h"
 #include "async_image_render_queue.h"
 #include "image_decode.h"
+#include "chapter_detection.h"
 #include "runtime_log.h"
 
 #include <SDL.h>
@@ -16,6 +17,7 @@
 #include <cstring>
 #include <cstdlib>
 #include "filesystem_compat.h"
+#include <limits>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -55,11 +57,89 @@ bool FlowImagePerfLogEnabled() {
   return env && *env && std::string(env) != "0";
 }
 
+void ApplyImageTextureFiltering(SDL_Texture *texture) {
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+  if (texture) SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear);
+#else
+  (void)texture;
+#endif
+}
+
+bool ResampleRgbaSurface(SDL_Surface *src, int dst_w, int dst_h, std::vector<unsigned char> &out,
+                         std::atomic<bool> &cancel) {
+  if (!src || src->w <= 0 || src->h <= 0 || dst_w <= 0 || dst_h <= 0) return false;
+  out.assign(static_cast<size_t>(dst_w * dst_h * 4), 0);
+  const bool area = dst_w < src->w || dst_h < src->h;
+  for (int y = 0; y < dst_h; ++y) {
+    if (cancel.load()) {
+      out.clear();
+      return false;
+    }
+    for (int x = 0; x < dst_w; ++x) {
+      const size_t di = static_cast<size_t>((y * dst_w + x) * 4);
+      if (area) {
+        const double x0 = static_cast<double>(x) * src->w / dst_w;
+        const double x1 = static_cast<double>(x + 1) * src->w / dst_w;
+        const double y0 = static_cast<double>(y) * src->h / dst_h;
+        const double y1 = static_cast<double>(y + 1) * src->h / dst_h;
+        const int ix0 = std::max(0, static_cast<int>(std::floor(x0)));
+        const int ix1 = std::min(src->w, static_cast<int>(std::ceil(x1)));
+        const int iy0 = std::max(0, static_cast<int>(std::floor(y0)));
+        const int iy1 = std::min(src->h, static_cast<int>(std::ceil(y1)));
+        double sum[4] = {0.0, 0.0, 0.0, 0.0};
+        double total = 0.0;
+        for (int sy = iy0; sy < iy1; ++sy) {
+          const double wy = std::max(0.0, std::min(y1, static_cast<double>(sy + 1)) -
+                                              std::max(y0, static_cast<double>(sy)));
+          if (wy <= 0.0) continue;
+          const unsigned char *row = static_cast<const unsigned char *>(src->pixels) + sy * src->pitch;
+          for (int sx = ix0; sx < ix1; ++sx) {
+            const double wx = std::max(0.0, std::min(x1, static_cast<double>(sx + 1)) -
+                                                std::max(x0, static_cast<double>(sx)));
+            const double weight = wx * wy;
+            if (weight <= 0.0) continue;
+            const unsigned char *p = row + sx * 4;
+            for (int c = 0; c < 4; ++c) sum[c] += static_cast<double>(p[c]) * weight;
+            total += weight;
+          }
+        }
+        if (total <= 0.0) total = 1.0;
+        for (int c = 0; c < 4; ++c) {
+          out[di + c] = static_cast<unsigned char>(std::clamp(static_cast<int>(std::lround(sum[c] / total)), 0, 255));
+        }
+      } else {
+        const double sx = (static_cast<double>(x) + 0.5) * src->w / dst_w - 0.5;
+        const double sy = (static_cast<double>(y) + 0.5) * src->h / dst_h - 0.5;
+        const int x0 = std::clamp(static_cast<int>(std::floor(sx)), 0, src->w - 1);
+        const int y0 = std::clamp(static_cast<int>(std::floor(sy)), 0, src->h - 1);
+        const int x1 = std::min(x0 + 1, src->w - 1);
+        const int y1 = std::min(y0 + 1, src->h - 1);
+        const double fx = std::clamp(sx - std::floor(sx), 0.0, 1.0);
+        const double fy = std::clamp(sy - std::floor(sy), 0.0, 1.0);
+        const unsigned char *row0 = static_cast<const unsigned char *>(src->pixels) + y0 * src->pitch;
+        const unsigned char *row1 = static_cast<const unsigned char *>(src->pixels) + y1 * src->pitch;
+        const unsigned char *p00 = row0 + x0 * 4;
+        const unsigned char *p10 = row0 + x1 * 4;
+        const unsigned char *p01 = row1 + x0 * 4;
+        const unsigned char *p11 = row1 + x1 * 4;
+        for (int c = 0; c < 4; ++c) {
+          const double top = p00[c] * (1.0 - fx) + p10[c] * fx;
+          const double bottom = p01[c] * (1.0 - fx) + p11[c] * fx;
+          out[di + c] =
+              static_cast<unsigned char>(std::clamp(static_cast<int>(std::lround(top * (1.0 - fy) + bottom * fy)), 0, 255));
+        }
+      }
+    }
+  }
+  return true;
+}
+
 enum class FlowBlockType { Paragraph, Header, ListItem, Image, Space };
 
 struct FlowBlock {
   FlowBlockType type = FlowBlockType::Paragraph;
   std::string text;
+  std::string doc_path;
   std::string resource;
   std::vector<std::string> lines;
   int heading_level = 0;
@@ -69,6 +149,13 @@ struct FlowBlock {
   int image_h = 0;
   int draw_w = 0;
   int draw_h = 0;
+};
+
+struct FlowDocAnchor {
+  std::string doc_path;
+  std::string title;
+  size_t doc_index = 0;
+  size_t block_index = std::numeric_limits<size_t>::max();
 };
 
 struct TextTextureEntry {
@@ -109,6 +196,7 @@ struct ParsedPackage {
   std::string opf_dir;
   std::unordered_map<std::string, ManifestItem> id_to_item;
   std::unordered_map<std::string, std::string> href_to_media_type;
+  std::unordered_map<std::string, std::string> toc_titles_by_doc;
   std::vector<std::string> ordered_docs;
   std::vector<std::string> manifest_html_docs;
 };
@@ -200,6 +288,58 @@ bool PickFirstMatch(const std::string &src, const std::regex &re, std::string &o
 bool IsHtmlMediaType(const std::string &media_type) {
   return media_type == "application/xhtml+xml" || media_type == "text/html";
 }
+
+size_t Utf8CharLen(unsigned char c);
+std::string StripTagsToText(std::string html);
+#ifdef HAVE_LIBZIP
+bool ReadZipEntry(zip_t *za, const std::string &name, std::string &out);
+#endif
+
+std::string TruncateUtf8Bytes(std::string text, size_t max_bytes) {
+  if (text.size() <= max_bytes) return text;
+  size_t end = 0;
+  while (end < text.size()) {
+    const size_t len = Utf8CharLen(static_cast<unsigned char>(text[end]));
+    if (end + len > max_bytes) break;
+    end += len;
+  }
+  text.resize(end);
+  return text;
+}
+
+#ifdef HAVE_LIBZIP
+void ParseNcxToc(zip_t *za, const std::string &ncx_path, ParsedPackage &pkg) {
+  std::string ncx;
+  if (!za || ncx_path.empty() || !ReadZipEntry(za, ncx_path, ncx)) return;
+
+  const std::string ncx_dir = std::filesystem::path(ncx_path).parent_path().generic_string();
+  const std::regex nav_point_re("<navPoint\\b[^>]*>([\\s\\S]*?)</navPoint>", std::regex::icase);
+  const std::regex label_re("<navLabel\\b[^>]*>[\\s\\S]*?<text\\b[^>]*>([\\s\\S]*?)</text>[\\s\\S]*?</navLabel>",
+                            std::regex::icase);
+  const std::regex content_re("<content\\b([^>]*)>", std::regex::icase);
+
+  size_t parsed = 0;
+  for (std::sregex_iterator it(ncx.begin(), ncx.end(), nav_point_re), end; it != end; ++it) {
+    const std::string nav_point = (*it)[1].str();
+    std::string raw_label;
+    std::string content_attrs_raw;
+    if (!PickFirstMatch(nav_point, label_re, raw_label) ||
+        !PickFirstMatch(nav_point, content_re, content_attrs_raw)) {
+      continue;
+    }
+    AttrMap content_attrs = ParseTagAttrs(content_attrs_raw);
+    const auto src_it = content_attrs.find("src");
+    if (src_it == content_attrs.end() || src_it->second.empty()) continue;
+
+    std::string title = TruncateUtf8Bytes(TrimSpaces(StripTagsToText(raw_label)), 96);
+    if (title.empty()) continue;
+    const std::string doc = ResolveRelative(ncx_dir, src_it->second);
+    if (doc.empty()) continue;
+    pkg.toc_titles_by_doc.emplace(doc, std::move(title));
+    if (++parsed >= 1024) break;
+  }
+}
+#endif
 
 bool IsLikelyContentCodepoint(uint32_t cp) {
   return (cp >= 0x4E00 && cp <= 0x9FFF) ||
@@ -471,6 +611,7 @@ bool ParsePackage(zip_t *za, ParsedPackage &pkg, std::string &error) {
   }
 
   const std::regex item_re("<item\\b([^>]*)>", std::regex::icase);
+  std::string ncx_path;
   for (std::sregex_iterator it(opf.begin(), opf.end(), item_re), end; it != end; ++it) {
     AttrMap attrs = ParseTagAttrs((*it)[1].str());
     const auto id_it = attrs.find("id");
@@ -483,6 +624,9 @@ bool ParsePackage(zip_t *za, ParsedPackage &pkg, std::string &error) {
     pkg.id_to_item[id_it->second] = item;
     pkg.href_to_media_type[item.href] = item.media_type;
     if (IsHtmlMediaType(item.media_type)) pkg.manifest_html_docs.push_back(item.href);
+    if (item.media_type == "application/x-dtbncx+xml" || LowerAscii(id_it->second).find("ncx") != std::string::npos) {
+      ncx_path = item.href;
+    }
   }
 
   const std::regex spine_re("<itemref\\b[^>]*idref\\s*=\\s*['\"]([^'\"]+)['\"][^>]*>", std::regex::icase);
@@ -496,6 +640,7 @@ bool ParsePackage(zip_t *za, ParsedPackage &pkg, std::string &error) {
     error = "no html/xhtml spine content";
     return false;
   }
+  ParseNcxToc(za, ncx_path, pkg);
   return true;
 }
 #endif
@@ -572,11 +717,13 @@ std::string StripTagsToText(std::string html) {
   return TrimSpaces(out);
 }
 
-void PushTextBlock(std::vector<FlowBlock> &blocks, FlowBlockType type, std::string text, int heading_level = 0) {
+void PushTextBlock(std::vector<FlowBlock> &blocks, const std::string &doc_path,
+                   FlowBlockType type, std::string text, int heading_level = 0) {
   text = StripTagsToText(std::move(text));
   if (text.empty()) return;
   FlowBlock block;
   block.type = type;
+  block.doc_path = doc_path;
   block.text = std::move(text);
   block.heading_level = heading_level;
   blocks.push_back(std::move(block));
@@ -588,6 +735,7 @@ void PushImageBlock(std::vector<FlowBlock> &blocks, const std::string &doc_base,
   if (src_it == attrs.end() || src_it->second.empty()) return;
   FlowBlock block;
   block.type = FlowBlockType::Image;
+  block.doc_path = doc_base;
   block.resource = ResolveRelative(doc_base, src_it->second);
   blocks.push_back(std::move(block));
 }
@@ -632,10 +780,11 @@ int HeadingLevelForTag(const std::string &tag) {
 }
 
 void FlushFlowText(std::vector<FlowBlock> &blocks,
+                   const std::string &doc_path,
                    std::string &text,
                    FlowBlockType type,
                    int heading_level) {
-  PushTextBlock(blocks, type, text, heading_level);
+  PushTextBlock(blocks, doc_path, type, text, heading_level);
   text.clear();
 }
 
@@ -674,20 +823,31 @@ void ParseHtmlBlocks(const std::string &html, const std::string &doc_path, std::
     if (!closing && tag == "br") {
       text.push_back('\n');
     } else if (!closing && tag == "img") {
-      FlushFlowText(blocks, text, current_type, current_heading);
+      FlushFlowText(blocks, doc_path, text, current_type, current_heading);
       PushImageBlock(blocks, doc_base, attrs_raw);
     } else if (!closing && IsBlockTag(tag)) {
-      FlushFlowText(blocks, text, current_type, current_heading);
+      FlushFlowText(blocks, doc_path, text, current_type, current_heading);
       current_type = TypeForTag(tag);
       current_heading = HeadingLevelForTag(tag);
     } else if (closing && IsBlockTag(tag)) {
-      FlushFlowText(blocks, text, current_type, current_heading);
+      FlushFlowText(blocks, doc_path, text, current_type, current_heading);
       current_type = FlowBlockType::Paragraph;
       current_heading = 0;
     }
     cursor = gt + 1;
   }
-  FlushFlowText(blocks, text, current_type, current_heading);
+  FlushFlowText(blocks, doc_path, text, current_type, current_heading);
+}
+
+std::string TitleFromHtml(const std::string &html, const std::string &fallback) {
+  std::string title;
+  static const std::regex heading_re("<h[1-3]\\b[^>]*>(.*?)</h[1-3]>", std::regex::icase);
+  static const std::regex title_re("<title\\b[^>]*>(.*?)</title>", std::regex::icase);
+  if (!PickFirstMatch(html, heading_re, title)) PickFirstMatch(html, title_re, title);
+  title = TrimSpaces(StripTagsToText(title));
+  if (title.empty()) title = fallback;
+  if (title.size() > 96) title.resize(96);
+  return title;
 }
 
 int NormalizeRotation(int rotation) {
@@ -714,22 +874,7 @@ bool RenderFlowImageJob(const std::string &epub_path, const AsyncImageRenderJob 
     return false;
   }
 
-  SDL_Surface *texture_surface = surface;
-  SDL_Surface *scaled_surface = nullptr;
-  if (job.viewport_w > 0 && job.viewport_h > 0 &&
-      (surface->w > job.viewport_w || surface->h > job.viewport_h)) {
-    scaled_surface = SDL_CreateRGBSurfaceWithFormat(0, job.viewport_w, job.viewport_h, 32, SDL_PIXELFORMAT_RGBA32);
-    if (scaled_surface) {
-      SDL_Rect src{0, 0, surface->w, surface->h};
-      SDL_Rect dst{0, 0, job.viewport_w, job.viewport_h};
-      if (SDL_BlitScaled(surface, &src, scaled_surface, &dst) == 0) {
-        texture_surface = scaled_surface;
-      }
-    }
-  }
-
-  SDL_Surface *rgba_surface = SDL_ConvertSurfaceFormat(texture_surface, SDL_PIXELFORMAT_RGBA32, 0);
-  if (scaled_surface) SDL_FreeSurface(scaled_surface);
+  SDL_Surface *rgba_surface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
   SDL_FreeSurface(surface);
   if (!rgba_surface || cancel.load()) {
     if (rgba_surface) SDL_FreeSurface(rgba_surface);
@@ -738,11 +883,14 @@ bool RenderFlowImageJob(const std::string &epub_path, const AsyncImageRenderJob 
 
   out.width = rgba_surface->w;
   out.height = rgba_surface->h;
-  out.rgba.resize(static_cast<size_t>(out.width) * static_cast<size_t>(out.height) * 4);
-  for (int y = 0; y < out.height; ++y) {
-    const unsigned char *src_row = static_cast<const unsigned char *>(rgba_surface->pixels) + y * rgba_surface->pitch;
-    unsigned char *dst_row = out.rgba.data() + static_cast<size_t>(y) * static_cast<size_t>(out.width) * 4;
-    std::memcpy(dst_row, src_row, static_cast<size_t>(out.width) * 4);
+  if (job.viewport_w > 0 && job.viewport_h > 0 &&
+      (rgba_surface->w > job.viewport_w || rgba_surface->h > job.viewport_h)) {
+    out.width = job.viewport_w;
+    out.height = job.viewport_h;
+  }
+  if (!ResampleRgbaSurface(rgba_surface, out.width, out.height, out.rgba, cancel)) {
+    SDL_FreeSurface(rgba_surface);
+    return false;
   }
   SDL_FreeSurface(rgba_surface);
   return !cancel.load() && out.width > 0 && out.height > 0 && !out.rgba.empty();
@@ -777,6 +925,8 @@ struct EpubFlowReader::Impl {
   bool all_docs_loaded = true;
   bool lazy_load_requested = false;
   std::vector<FlowBlock> source_blocks;
+  std::vector<FlowDocAnchor> doc_anchors;
+  std::unordered_map<std::string, std::string> toc_titles_by_doc;
   mutable AsyncImageRenderQueue image_queue;
   mutable std::unordered_map<std::string, SDL_Texture *> image_textures;
   mutable std::unordered_map<std::string, SDL_Point> image_natural_sizes;
@@ -1056,6 +1206,7 @@ struct EpubFlowReader::Impl {
     if (!texture) return false;
     const Uint32 perf_create = FlowImagePerfLogEnabled() ? SDL_GetTicks() : 0;
     SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    ApplyImageTextureFiltering(texture);
     if (SDL_UpdateTexture(texture, nullptr, ready.rgba.data(), ready.width * 4) != 0) {
       SDL_DestroyTexture(texture);
       return false;
@@ -1182,10 +1333,13 @@ struct EpubFlowReader::Impl {
     const size_t before_blocks = source_blocks.size();
     size_t loaded = 0;
     while (next_doc_index < ordered_docs.size() && loaded < max_docs) {
+      const size_t doc_index = next_doc_index;
       const std::string doc = ordered_docs[next_doc_index++];
       std::string html;
       if (ReadZipEntry(za, doc, html)) {
+        const size_t doc_block_start = source_blocks.size();
         ParseHtmlBlocks(html, doc, source_blocks);
+        if (source_blocks.size() > doc_block_start) AddDocAnchor(doc_index, doc, html, doc_block_start);
         ++loaded;
       }
     }
@@ -1227,6 +1381,40 @@ struct EpubFlowReader::Impl {
     }
     return lo;
   }
+
+  void InitializeDocAnchors() {
+    doc_anchors.clear();
+    doc_anchors.reserve(ordered_docs.size());
+    for (size_t i = 0; i < ordered_docs.size(); ++i) {
+      FlowDocAnchor anchor;
+      anchor.doc_path = ordered_docs[i];
+      const auto toc_it = toc_titles_by_doc.find(anchor.doc_path);
+      anchor.title = toc_it != toc_titles_by_doc.end() ? toc_it->second
+                                                       : u8"\u7b2c " + std::to_string(i + 1) + u8" \u7ae0";
+      anchor.doc_index = i;
+      doc_anchors.push_back(std::move(anchor));
+    }
+  }
+
+  void AddDocAnchor(size_t doc_index, const std::string &doc, const std::string &html, size_t block_index) {
+    if (doc_index < doc_anchors.size()) {
+      doc_anchors[doc_index].doc_path = doc;
+      if (toc_titles_by_doc.find(doc) == toc_titles_by_doc.end()) {
+        doc_anchors[doc_index].title = TitleFromHtml(html, doc_anchors[doc_index].title);
+      }
+      doc_anchors[doc_index].block_index = block_index;
+      return;
+    }
+    FlowDocAnchor anchor;
+    anchor.doc_path = doc;
+    const auto toc_it = toc_titles_by_doc.find(doc);
+    anchor.title = toc_it != toc_titles_by_doc.end()
+                       ? toc_it->second
+                       : TitleFromHtml(html, u8"\u7b2c " + std::to_string(doc_index + 1) + u8" \u7ae0");
+    anchor.doc_index = doc_index;
+    anchor.block_index = block_index;
+    doc_anchors.push_back(std::move(anchor));
+  }
 };
 
 EpubFlowReader::EpubFlowReader() : impl_(new Impl()) {}
@@ -1265,15 +1453,20 @@ bool EpubFlowReader::Open(const std::string &path, SDL_Renderer *renderer, int s
   impl_->path = path;
   impl_->StartImageQueue();
   impl_->ordered_docs = pkg.ordered_docs;
+  impl_->toc_titles_by_doc = std::move(pkg.toc_titles_by_doc);
   impl_->next_doc_index = 0;
   impl_->all_docs_loaded = impl_->ordered_docs.empty();
+  impl_->InitializeDocAnchors();
   std::vector<FlowBlock> blocks;
   size_t docs_loaded = 0;
   while (impl_->next_doc_index < impl_->ordered_docs.size() && docs_loaded < kInitialFlowDocsToLoad) {
+    const size_t doc_index = impl_->next_doc_index;
     const auto &doc = impl_->ordered_docs[impl_->next_doc_index++];
     std::string html;
     if (!ReadZipEntry(za, doc, html)) continue;
+    const size_t doc_block_start = blocks.size();
     ParseHtmlBlocks(html, doc, blocks);
+    if (blocks.size() > doc_block_start) impl_->AddDocAnchor(doc_index, doc, html, doc_block_start);
     ++docs_loaded;
     if (blocks.size() >= kInitialFlowMinBlocks) break;
   }
@@ -1317,10 +1510,12 @@ void EpubFlowReader::Close() {
   impl_->CloseFonts();
   impl_->path.clear();
   impl_->ordered_docs.clear();
+  impl_->toc_titles_by_doc.clear();
   impl_->next_doc_index = 0;
   impl_->all_docs_loaded = true;
   impl_->lazy_load_requested = false;
   impl_->source_blocks.clear();
+  impl_->doc_anchors.clear();
   impl_->scroll_y = 0;
   impl_->doc_h = 1;
   impl_->base_font_pt = kDefaultBaseFontPt;
@@ -1351,7 +1546,7 @@ void EpubFlowReader::UpdateViewport(int screen_w, int screen_h) {
 
 void EpubFlowReader::Tick() {
   if (!IsOpen()) return;
-  if (impl_->lazy_load_requested) {
+  if (impl_->lazy_load_requested || !impl_->all_docs_loaded) {
     impl_->lazy_load_requested = false;
     impl_->LoadMoreDocs(kMoreFlowDocsToLoad);
   }
@@ -1476,6 +1671,54 @@ void EpubFlowReader::SetPage(int page_index) {
   const int pages = PageCount();
   const int page = std::clamp(page_index, 0, std::max(0, pages - 1));
   impl_->scroll_y = std::clamp(page * impl_->ViewHeight(), 0, impl_->MaxScroll());
+  impl_->LoadAheadIfNeeded();
+}
+
+std::vector<ReaderChapterAnchor> EpubFlowReader::Chapters() const {
+  if (!IsOpen()) return {};
+  std::vector<ReaderChapterAnchor> out;
+  for (const FlowDocAnchor &doc : impl_->doc_anchors) {
+    if (doc.block_index >= impl_->source_blocks.size()) continue;
+    ReaderChapterAnchor anchor;
+    anchor.title = doc.title.empty() ? u8"\u6b63\u6587" : doc.title;
+    anchor.scroll_y = impl_->source_blocks[doc.block_index].y;
+    anchor.page = static_cast<int>(doc.doc_index);
+    out.push_back(std::move(anchor));
+  }
+  if (out.size() <= 1 && impl_->doc_h <= impl_->ViewHeight() * 2) return {MakeBodyChapterAnchor()};
+  if (out.empty()) out.push_back(MakeBodyChapterAnchor());
+  return out;
+}
+
+bool EpubFlowReader::ChaptersLoading() const {
+  return IsOpen() && impl_ && !impl_->all_docs_loaded;
+}
+
+int EpubFlowReader::ChaptersLoadingPercent() const {
+  if (!IsOpen() || !impl_) return 0;
+  if (impl_->all_docs_loaded) return 100;
+  const size_t total = impl_->ordered_docs.size();
+  if (total == 0) return 100;
+  return std::clamp(static_cast<int>((impl_->next_doc_index * 100) / total), 0, 99);
+}
+
+void EpubFlowReader::JumpToChapter(const ReaderChapterAnchor &chapter) {
+  if (!IsOpen()) return;
+  const size_t selected_index = static_cast<size_t>(std::max(0, chapter.page));
+  if (selected_index < impl_->doc_anchors.size()) {
+    if (selected_index < impl_->doc_anchors.size()) {
+      const size_t block_index = impl_->doc_anchors[selected_index].block_index;
+      if (block_index < impl_->source_blocks.size()) {
+        impl_->scroll_y = std::clamp(impl_->source_blocks[block_index].y, 0, impl_->MaxScroll());
+        impl_->LoadAheadIfNeeded();
+        return;
+      }
+    }
+  }
+  while (!impl_->all_docs_loaded && chapter.scroll_y > impl_->MaxScroll() - impl_->ViewHeight()) {
+    if (!impl_->LoadMoreDocs(kMoreFlowDocsToLoad)) break;
+  }
+  impl_->scroll_y = std::clamp(std::max(0, chapter.scroll_y), 0, impl_->MaxScroll());
   impl_->LoadAheadIfNeeded();
 }
 

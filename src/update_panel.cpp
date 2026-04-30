@@ -15,8 +15,8 @@ void DrawUpdatePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect,
       deps.cfg.theme != 0,
       language_index,
       scale,
-      deps.draw_rect,
-      deps.get_text_texture,
-      deps.get_title_text_texture,
+      deps.services.draw_rect,
+      deps.services.get_text_texture,
+      deps.services.get_title_text_texture,
   });
 }

@@ -88,6 +88,22 @@ void EpubFlowReaderModule::SetPage(int page_index) {
   reader_.SetPage(page_index);
 }
 
+std::vector<ReaderChapterAnchor> EpubFlowReaderModule::Chapters() const {
+  return reader_.Chapters();
+}
+
+bool EpubFlowReaderModule::ChaptersLoading() const {
+  return reader_.ChaptersLoading();
+}
+
+int EpubFlowReaderModule::ChaptersLoadingPercent() const {
+  return reader_.ChaptersLoadingPercent();
+}
+
+void EpubFlowReaderModule::JumpToChapter(const ReaderChapterAnchor &chapter) {
+  reader_.JumpToChapter(chapter);
+}
+
 void EpubFlowReaderModule::SetFlowBaseFontPointSize(int base_font_pt) {
   reader_.SetBaseFontPointSize(base_font_pt);
 }

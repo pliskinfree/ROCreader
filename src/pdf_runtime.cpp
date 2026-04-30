@@ -32,6 +32,14 @@ bool PdfLowMemoryMode() {
   return env && *env && std::string(env) != "0";
 }
 
+void ApplyImageTextureFiltering(SDL_Texture *texture) {
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+  if (texture) SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear);
+#else
+  (void)texture;
+#endif
+}
+
 struct ViewState {
   float zoom = 1.0f;
   int rotation = 0;
@@ -517,6 +525,7 @@ struct PdfRuntime::Impl {
     }
     if (!next) return nullptr;
     SDL_SetTextureBlendMode(next, SDL_BLENDMODE_BLEND);
+    ApplyImageTextureFiltering(next);
     if (SDL_UpdateTexture(next, nullptr, ready.rgba.data(), ready.texture_w * 4) != 0) {
       SDL_DestroyTexture(next);
       return nullptr;

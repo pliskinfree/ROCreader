@@ -85,7 +85,7 @@ std::vector<std::string> WrapTextByWidth(
 }  // namespace
 
 void DrawContactPanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect, int language_index) {
-  if (!deps.renderer || !deps.get_text_texture) return;
+  if (!deps.renderer || !deps.services.get_text_texture) return;
 
   const SDL_Color hint_color{240, 246, 255, 255};
   const std::string hint_text = LocalizedAppText(language_index, AppTextId::ContactRewardHint);
@@ -100,8 +100,8 @@ void DrawContactPanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect, in
 
   using TextGetter = std::function<TextCacheEntry *(const std::string &, SDL_Color)>;
   std::vector<TextGetter> getters;
-  if (deps.get_text_texture) getters.push_back(deps.get_text_texture);
-  if (deps.get_reader_text_texture) getters.push_back(deps.get_reader_text_texture);
+  if (deps.services.get_text_texture) getters.push_back(deps.services.get_text_texture);
+  if (deps.services.get_reader_text_texture) getters.push_back(deps.services.get_reader_text_texture);
 
   std::vector<std::string> fitted_lines;
   int total_h = 0;
