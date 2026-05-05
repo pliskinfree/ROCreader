@@ -1113,7 +1113,8 @@ int main(int, char **argv) {
   lid_power_controller.SetEnabled(lid_close_screen_off_enabled);
   system_settings_state.lid_close_screen_off_enabled = lid_close_screen_off_enabled;
   uint32_t last_user_input_tick = SDL_GetTicks();
-  bool auto_sleep_waiting_for_input = false;
+  enum class ScreenOffMode { Awake, Manual, Auto };
+  ScreenOffMode screen_off_mode = ScreenOffMode::Awake;
   TxtTranscodeJob txt_transcode_job{};
   ReaderUiState reader_ui{};
   std::string &current_book = reader_ui.current_book;
@@ -1625,7 +1626,7 @@ int main(int, char **argv) {
           lid_power_controller.SetEnabled(enabled);
           settings_state.lid_close_screen_off_enabled = enabled;
           last_user_input_tick = SDL_GetTicks();
-          auto_sleep_waiting_for_input = false;
+          screen_off_mode = ScreenOffMode::Awake;
           return true;
         },
         [&](int delta, SystemSettingsState &settings_state) {
@@ -1636,7 +1637,7 @@ int main(int, char **argv) {
           config.Save();
           settings_state.auto_sleep_interval_index = next_index;
           last_user_input_tick = SDL_GetTicks();
-          auto_sleep_waiting_for_input = false;
+          screen_off_mode = ScreenOffMode::Awake;
           return true;
         },
         [&](int delta, SystemSettingsState &settings_state) {
@@ -1864,21 +1865,22 @@ int main(int, char **argv) {
     };
     auto note_user_input = [&](const SDL_Event &event) {
       if (!is_user_input_event(event)) return;
+      if (screen_off_mode != ScreenOffMode::Awake) return;
       last_user_input_tick = SDL_GetTicks();
-      auto_sleep_waiting_for_input = false;
     };
     auto maybe_trigger_auto_sleep = [&]() {
-      if (!use_h700_defaults || !config.Get().lid_close_screen_off || auto_sleep_waiting_for_input) return;
+      if (screen_off_mode != ScreenOffMode::Awake || !use_h700_defaults || !config.Get().lid_close_screen_off) return;
       const uint32_t now = SDL_GetTicks();
       const uint32_t idle_ms = AutoSleepIntervalMsFromIndex(system_settings_state.auto_sleep_interval_index);
       if (now - last_user_input_tick < idle_ms) return;
       if (lid_power_controller.TriggerAutoIfEnabled()) {
-        auto_sleep_waiting_for_input = true;
+        screen_off_mode = ScreenOffMode::Auto;
       }
     };
     const AppEventPumpResult event_pump =
         app_shell.PumpEvents(input, has_active_animation, idle_wait_ms, note_user_input);
     bool input_end_frame_done = false;
+    bool observed_input_this_frame = false;
     if (has_active_animation) {
       maybe_trigger_auto_sleep();
     } else {
@@ -1889,13 +1891,12 @@ int main(int, char **argv) {
         system_status.Poll(SDL_GetTicks());
         if (has_pending_flush && !needs_periodic_tick) {
         // Wake only to flush deferred IO; keep the current frame untouched.
-          const bool polled_input = input.EndFrame();
-          if (polled_input) {
-            last_user_input_tick = SDL_GetTicks();
-            auto_sleep_waiting_for_input = false;
+          observed_input_this_frame = input.EndFrame();
+          if (observed_input_this_frame) {
+            if (screen_off_mode == ScreenOffMode::Awake) last_user_input_tick = SDL_GetTicks();
             input_end_frame_done = true;
           }
-          if (!polled_input) {
+          if (!observed_input_this_frame && screen_off_mode == ScreenOffMode::Awake) {
             flush_deferred_writes(false);
             app_shell.ResetFrameClock(prev_ticks);
             continue;
@@ -1904,29 +1905,40 @@ int main(int, char **argv) {
         if (!needs_periodic_tick && !has_pending_flush) {
         // Fully idle: no input, no animation, no incremental loading.
         // Skip update/render work and keep sleeping until something changes.
-          const bool polled_input = input.EndFrame();
-          if (polled_input) {
-            last_user_input_tick = SDL_GetTicks();
-            auto_sleep_waiting_for_input = false;
+          observed_input_this_frame = input.EndFrame();
+          if (observed_input_this_frame) {
+            if (screen_off_mode == ScreenOffMode::Awake) last_user_input_tick = SDL_GetTicks();
             input_end_frame_done = true;
           }
-          if (!polled_input) {
+          if (!observed_input_this_frame && screen_off_mode == ScreenOffMode::Awake) {
             app_shell.ResetFrameClock(prev_ticks);
             continue;
           }
         }
       }
     }
-    if (!input_end_frame_done && input.EndFrame()) {
-      last_user_input_tick = SDL_GetTicks();
-      auto_sleep_waiting_for_input = false;
+    if (!input_end_frame_done) {
+      observed_input_this_frame = input.EndFrame();
+      if (observed_input_this_frame && screen_off_mode == ScreenOffMode::Awake) last_user_input_tick = SDL_GetTicks();
+    }
+
+    if (screen_off_mode != ScreenOffMode::Awake) {
+      if (input.IsJustPressed(Button::Power)) {
+        screen_off_mode = ScreenOffMode::Awake;
+        last_user_input_tick = SDL_GetTicks();
+      }
+      input.ResetAll();
+      app_shell.ResetFrameClock(prev_ticks);
+      continue;
     }
 
     if (input.IsJustPressed(Button::Power)) {
       if (lid_power_controller.TriggerPowerKeyScreenOff(input_profile)) {
+        screen_off_mode = ScreenOffMode::Manual;
         last_user_input_tick = SDL_GetTicks();
-        auto_sleep_waiting_for_input = false;
         input.ResetAll();
+        app_shell.ResetFrameClock(prev_ticks);
+        continue;
       }
     }
 

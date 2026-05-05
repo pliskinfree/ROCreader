@@ -77,8 +77,7 @@ bool LidPowerController::TriggerPowerKeyScreenOff(InputProfile input_profile) co
   }
   if (RunCommandQuiet(EscapeShellArg(power_script_path_) + " powerkey")) return true;
   if (RunCommandQuiet(EscapeShellArg(power_script_path_) + " manual")) return true;
-  if (RunCommandQuiet(EscapeShellArg(power_script_path_) + " off")) return true;
-  return RunCommandQuiet(EscapeShellArg(power_script_path_) + " auto");
+  return RunCommandQuiet(EscapeShellArg(power_script_path_) + " off");
 }
 
 std::string LidPowerController::PowerScriptPath() const { return power_script_path_.string(); }
