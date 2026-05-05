@@ -72,9 +72,13 @@ bool LidPowerController::TriggerPowerKeyScreenOff(InputProfile input_profile) co
       (input_profile == InputProfile::H700Default || input_profile == InputProfile::H70034xxSp)
           ? "ROCREADER_H700_POWER_KEY_ARG"
           : "ROCREADER_POWER_KEY_ARG";
-  const std::string arg = EnvOrDefault(env_name, "auto");
-  const std::string command = EscapeShellArg(power_script_path_) + " " + EscapeShellArg(arg);
-  return RunCommandQuiet(command);
+  if (const char *arg = std::getenv(env_name); arg && *arg) {
+    return RunCommandQuiet(EscapeShellArg(power_script_path_) + " " + EscapeShellArg(std::string(arg)));
+  }
+  if (RunCommandQuiet(EscapeShellArg(power_script_path_) + " powerkey")) return true;
+  if (RunCommandQuiet(EscapeShellArg(power_script_path_) + " manual")) return true;
+  if (RunCommandQuiet(EscapeShellArg(power_script_path_) + " off")) return true;
+  return RunCommandQuiet(EscapeShellArg(power_script_path_) + " auto");
 }
 
 std::string LidPowerController::PowerScriptPath() const { return power_script_path_.string(); }

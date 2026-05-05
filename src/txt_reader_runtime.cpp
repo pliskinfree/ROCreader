@@ -20,6 +20,7 @@ void SyncOverlayPreviewFromCurrent(ReaderUiState &ui, int current_pct) {
 void HandleTxtReaderInput(TxtReaderInputDeps &deps) {
   if (deps.ui.mode != ReaderMode::Txt || !deps.ui.Txt().open) return;
 
+  const float scroll_dt = std::min(deps.dt, 1.0f / 30.0f);
   std::array<Button, 2> vdirs = {Button::Up, Button::Down};
   for (Button b : vdirs) {
     int bi = static_cast<int>(b);
@@ -34,8 +35,8 @@ void HandleTxtReaderInput(TxtReaderInputDeps &deps) {
         deps.ui.long_fired[bi] = true;
         deps.ui.hold_speed[bi] = (deps.ui.hold_speed[bi] <= 0.0f)
                                      ? speed_min
-                                     : std::min(speed_max, deps.ui.hold_speed[bi] + speed_accel * deps.dt);
-        const int step_px = std::max(1, static_cast<int>(deps.ui.hold_speed[bi] * deps.dt));
+                                     : std::min(speed_max, deps.ui.hold_speed[bi] + speed_accel * scroll_dt);
+        const int step_px = std::max(1, static_cast<int>(deps.ui.hold_speed[bi] * scroll_dt));
         deps.text_scroll_by(long_dir * step_px);
       } else {
         deps.ui.hold_speed[bi] = 0.0f;

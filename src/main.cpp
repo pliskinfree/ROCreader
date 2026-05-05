@@ -145,7 +145,7 @@ constexpr size_t kTxtMaxBytes = 64 * 1024 * 1024;
 constexpr size_t kTxtMaxWrappedLines = 250000;
 constexpr size_t kTxtLayoutCacheMaxEntries = 4;
 #ifdef HAVE_SDL2_TTF
-constexpr size_t kTextCacheMaxEntries = 128;
+constexpr size_t kTextCacheMaxEntries = 384;
 #endif
 
 void FatalSignalHandler(int sig) {
@@ -1878,6 +1878,7 @@ int main(int, char **argv) {
     };
     const AppEventPumpResult event_pump =
         app_shell.PumpEvents(input, has_active_animation, idle_wait_ms, note_user_input);
+    bool input_end_frame_done = false;
     if (has_active_animation) {
       maybe_trigger_auto_sleep();
     } else {
@@ -1888,26 +1889,43 @@ int main(int, char **argv) {
         system_status.Poll(SDL_GetTicks());
         if (has_pending_flush && !needs_periodic_tick) {
         // Wake only to flush deferred IO; keep the current frame untouched.
-          input.EndFrame();
-          flush_deferred_writes(false);
-          app_shell.ResetFrameClock(prev_ticks);
-          continue;
+          const bool polled_input = input.EndFrame();
+          if (polled_input) {
+            last_user_input_tick = SDL_GetTicks();
+            auto_sleep_waiting_for_input = false;
+            input_end_frame_done = true;
+          }
+          if (!polled_input) {
+            flush_deferred_writes(false);
+            app_shell.ResetFrameClock(prev_ticks);
+            continue;
+          }
         }
         if (!needs_periodic_tick && !has_pending_flush) {
         // Fully idle: no input, no animation, no incremental loading.
         // Skip update/render work and keep sleeping until something changes.
-          app_shell.ResetFrameClock(prev_ticks);
-          input.EndFrame();
-          continue;
+          const bool polled_input = input.EndFrame();
+          if (polled_input) {
+            last_user_input_tick = SDL_GetTicks();
+            auto_sleep_waiting_for_input = false;
+            input_end_frame_done = true;
+          }
+          if (!polled_input) {
+            app_shell.ResetFrameClock(prev_ticks);
+            continue;
+          }
         }
       }
     }
-    input.EndFrame();
+    if (!input_end_frame_done && input.EndFrame()) {
+      last_user_input_tick = SDL_GetTicks();
+      auto_sleep_waiting_for_input = false;
+    }
 
     if (input.IsJustPressed(Button::Power)) {
       if (lid_power_controller.TriggerPowerKeyScreenOff(input_profile)) {
         last_user_input_tick = SDL_GetTicks();
-        auto_sleep_waiting_for_input = true;
+        auto_sleep_waiting_for_input = false;
         input.ResetAll();
       }
     }
@@ -1915,7 +1933,13 @@ int main(int, char **argv) {
     system_status.Poll(now);
 
     if (reader_mode == ReaderMode::Txt && reader_ui.Txt().open && reader_ui.Txt().loading) {
-      txt_session_facade.TickLoading(current_book, 5, 24576);
+      const bool txt_scroll_input_active =
+          state == AppScene::Reader &&
+          (input.IsPressed(Button::Up) || input.IsPressed(Button::Down) ||
+           input.IsPressed(Button::Left) || input.IsPressed(Button::Right));
+      txt_session_facade.TickLoading(current_book,
+                                     txt_scroll_input_active ? 1 : 5,
+                                     txt_scroll_input_active ? 8192 : 24576);
     }
     process_txt_transcode_step();
     flush_deferred_writes(false);

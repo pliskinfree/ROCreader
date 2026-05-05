@@ -209,9 +209,12 @@ void InputManager::HandleEvent(const SDL_Event &e) {
   }
 }
 
-void InputManager::EndFrame() {
+bool InputManager::EndFrame() {
+  const bool had_pressed_before_poll = AnyPressed();
   PollDeviceInputEvents();
+  bool had_input = false;
   for (auto &s : states_) {
+    if (s.just_pressed || s.just_released) had_input = true;
     if (!s.down) {
       s.hold_time = 0.0f;
       s.repeat_timer = 0.0f;
@@ -226,14 +229,17 @@ void InputManager::EndFrame() {
       s.repeat_active = true;
       s.repeat_timer = 0.4f;
       s.repeated = true;
+      had_input = true;
     } else {
       s.repeat_timer -= dt_;
       if (s.repeat_timer <= 0.0f) {
         s.repeated = true;
         s.repeat_timer = 0.1f;
+        had_input = true;
       }
     }
   }
+  return had_input || (!had_pressed_before_poll && AnyPressed());
 }
 
 bool InputManager::IsPressed(Button b) const { return Get(b).down; }

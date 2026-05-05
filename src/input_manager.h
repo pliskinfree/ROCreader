@@ -59,7 +59,7 @@ public:
 
   void BeginFrame(float dt);
   void HandleEvent(const SDL_Event &e);
-  void EndFrame();
+  bool EndFrame();
 
   bool IsPressed(Button b) const;
   bool IsJustPressed(Button b) const;
