@@ -1,0 +1,5 @@
+Github项目地址https://github.com/LPF970915/ROCreader/tree/main（最新安装包在Downloads文件夹里）
+使用教程：
+1.下载压缩包后解压到内存卡一的根目录（就是把压缩包里的Roms文件夹整个放到内存卡根目录）
+2.将你自己的漫画资源放到Roms/APPS/ROCreaders/books里面，封面放到Roms/APPS/ROCreaders/book_covers里面，封面图片名称与漫画文件名称一致即可识别。漫画存储支持双卡，但是卡二格式必须为FAT32，漫画和小说必须放进books文件夹里，封面必须放进book_covers文件夹里，books和book_covers这两个文件夹放在哪里随意。
+3.开机进入应用中心Apps里面即可看到软件，按A进入即可

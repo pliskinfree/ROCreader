@@ -11,7 +11,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
-$ToolchainDir = Join-Path $ProjectRoot "trimui-smart-pro-toolchain"
+$ToolchainDir = Join-Path $ScriptDir "toolchain"
 $WorkspaceDir = Join-Path $ScriptDir "workspace"
 $SourceDir = Join-Path $WorkspaceDir "source"
 $DistDir = Join-Path $ScriptDir "dist_lowglibc"
@@ -55,7 +55,7 @@ rsync -a --delete \
   --exclude='.git/' \
   --exclude='.vs/' \
   --exclude='TrimuiBrick/' \
-  --exclude='trimui-smart-pro-toolchain/' \
+  --exclude='TrimuiBrick/toolchain/' \
   --exclude='sysroot_device/' \
   --exclude='build/' \
   --exclude='dist_lowglibc/' \

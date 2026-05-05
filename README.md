@@ -105,7 +105,7 @@ synced from the device itself:
 cd /path/to/ROCreader
 chmod +x sync_device_sysroot.sh cross_compile_low_glibc.sh
 DEVICE_HOST=root@192.168.31.141 ./sync_device_sysroot.sh
-SYSROOT=/path/to/ROCreader/sysroot_device \
+SYSROOT=/path/to/ROCreader/H700/sysroot_device \
 CROSS_TOOL_PREFIX=aarch64-linux-gnu \
 REQUIRE_MUPDF=1 \
 ./cross_compile_low_glibc.sh
@@ -113,13 +113,14 @@ REQUIRE_MUPDF=1 \
 
 Output packages:
 
-- `dist_lowglibc/ROCreader_APPS_lowglibc.tar.gz`
-- `Downloads/ROC全能漫画阅读器verX.Y.zip`
+- `H700/dist_lowglibc/ROCreader_APPS_lowglibc.tar.gz`
+- `H700/Downloads/<versioned H700 release zip>`
 
 Release zip rules:
 
-- `Downloads` only stores final release `.zip` files
-- staging files are generated under `dist_lowglibc/release_stage`
+- `H700/Downloads` stores the H700 final release `.zip` files
+- root `Downloads` is kept as the legacy online-update mirror for old H700 builds and is updated automatically during H700 packaging
+- staging files are generated under `H700/dist_lowglibc/release_stage`
 - zip root contains:
   - `Roms/APPS/Imgs/ROCreader.png`
   - `Roms/APPS/ROCreader.sh`
@@ -134,7 +135,7 @@ Release zip rules:
   - `lib/`
   - `lib_system_sdl/`
   - empty `books/`, `book_covers/`, `cache/` directories
-- zip version is auto-incremented from the latest existing `ROC全能漫画阅读器verX.Y.zip`
+- zip version is auto-incremented from the latest existing H700 release zip
 
 ## Runtime Crash Logs (on device)
 

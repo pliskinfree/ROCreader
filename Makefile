@@ -3,7 +3,7 @@ PKG_CONFIG ?= pkg-config
 REQUIRE_MUPDF ?= 0
 H700_OPTIMIZE ?= 0
 
-TARGET := build/rocreader_sdl
+TARGET ?= build/rocreader_sdl
 APP_SRCS := \
   src/main.cpp \
   src/app_runtime.cpp \

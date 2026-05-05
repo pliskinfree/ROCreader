@@ -18,17 +18,17 @@ echo "[roc_native] log: $LOG_FILE"
   echo "===== $(date '+%F %T') ====="
   echo "[roc_native] REQUIRE_MUPDF=$REQUIRE_MUPDF"
   echo "[roc_native] make print-config"
-make print-config REQUIRE_MUPDF="$REQUIRE_MUPDF"
+make print-config REQUIRE_MUPDF="$REQUIRE_MUPDF" TARGET=Windows/build/rocreader_sdl
 
-  if [ ! -x "./build/rocreader_sdl" ]; then
+  if [ ! -x "./Windows/build/rocreader_sdl" ]; then
     echo "[roc_native] build binary missing, running make..."
-make clean REQUIRE_MUPDF="$REQUIRE_MUPDF"
-make REQUIRE_MUPDF="$REQUIRE_MUPDF"
+make clean REQUIRE_MUPDF="$REQUIRE_MUPDF" TARGET=Windows/build/rocreader_sdl
+make REQUIRE_MUPDF="$REQUIRE_MUPDF" TARGET=Windows/build/rocreader_sdl
   fi
 
   rm -rf "$OUT_DIR" "$APPS_DIR/ROCreader_native" "$APPS_DIR/ROCreader_native.sh"
   mkdir -p "$OUT_DIR"
-  cp ./build/rocreader_sdl "$OUT_DIR/"
+  cp ./Windows/build/rocreader_sdl "$OUT_DIR/"
   if [ -d "$SELF_DIR/ui" ]; then
     command -v python3 >/dev/null 2>&1
     rm -f "$OUT_DIR/ui.pack"

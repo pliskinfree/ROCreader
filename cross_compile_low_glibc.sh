@@ -4,19 +4,33 @@ set -eu
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SELF_DIR"
 
-LOG_DIR="${ROC_NATIVE_LOG_DIR:-$SELF_DIR/logs}"
+REQUIRE_MUPDF="${REQUIRE_MUPDF:-1}"
+TRIMUI_BRICK_LAYOUT="${TRIMUI_BRICK_LAYOUT:-0}"
+H700_ROOT="${H700_ROOT:-$SELF_DIR/H700}"
+
+if [ "$TRIMUI_BRICK_LAYOUT" = "1" ] || [ ! -d "$H700_ROOT" ]; then
+  DEFAULT_LOG_DIR="$SELF_DIR/logs"
+  DEFAULT_SYSROOT="$SELF_DIR/sysroot_device"
+  DEFAULT_DIST_ROOT="$SELF_DIR/dist_lowglibc"
+  DEFAULT_DOWNLOADS_ROOT="$SELF_DIR/Downloads"
+else
+  DEFAULT_LOG_DIR="$H700_ROOT/logs"
+  DEFAULT_SYSROOT="$H700_ROOT/sysroot_device"
+  DEFAULT_DIST_ROOT="$H700_ROOT/dist_lowglibc"
+  DEFAULT_DOWNLOADS_ROOT="$H700_ROOT/Downloads"
+fi
+
+LOG_DIR="${ROC_NATIVE_LOG_DIR:-$DEFAULT_LOG_DIR}"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/cross_low_glibc_$(date +%Y%m%d_%H%M%S).log"
 
-SYSROOT="${SYSROOT:-$SELF_DIR/sysroot_device}"
+SYSROOT="${SYSROOT:-$DEFAULT_SYSROOT}"
 TOOL_PREFIX="${CROSS_TOOL_PREFIX:-aarch64-linux-gnu}"
 CXX_CMD="${CROSS_CXX:-${TOOL_PREFIX}-g++}"
 READ_ELF="${CROSS_READELF:-${TOOL_PREFIX}-readelf}"
 PKG_CMD="${CROSS_PKG_CONFIG:-pkg-config}"
-REQUIRE_MUPDF="${REQUIRE_MUPDF:-1}"
-TRIMUI_BRICK_LAYOUT="${TRIMUI_BRICK_LAYOUT:-0}"
 
-DIST_ROOT="${DIST_ROOT:-$SELF_DIR/dist_lowglibc}"
+DIST_ROOT="${DIST_ROOT:-$DEFAULT_DIST_ROOT}"
 if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
   APPS_OUT="$DIST_ROOT/Apps"
   RUNTIME_DIR="$APPS_OUT/ROCreader"
@@ -32,7 +46,7 @@ TARBALL="$DIST_ROOT/ROCreader_APPS_lowglibc.tar.gz"
 # - Roms/APPS/Imgs/ROCreader.png
 # - Roms/APPS/ROCreader.sh
 # - Roms/APPS/ROCreader/ (with fonts/sounds/lib/lib_system_sdl plus empty books/book_covers/cache)
-DOWNLOADS_ROOT="${DOWNLOADS_ROOT:-$SELF_DIR/Downloads}"
+DOWNLOADS_ROOT="${DOWNLOADS_ROOT:-$DEFAULT_DOWNLOADS_ROOT}"
 ZIP_STAGE_ROOT="$DIST_ROOT/release_stage"
 if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
   ZIP_STAGE_APPS="$ZIP_STAGE_ROOT/Apps"
@@ -1257,6 +1271,16 @@ with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
             rel = os.path.relpath(full, src).replace("\\", "/")
             zf.write(full, rel)
 PY
+
+  if [ "$TRIMUI_BRICK_LAYOUT" != "1" ]; then
+    LEGACY_DOWNLOADS_ROOT="$SELF_DIR/Downloads"
+    LEGACY_ZIPFILE="$LEGACY_DOWNLOADS_ROOT/$(basename "$ZIPFILE")"
+    if [ "$DOWNLOADS_ROOT" != "$LEGACY_DOWNLOADS_ROOT" ]; then
+      mkdir -p "$LEGACY_DOWNLOADS_ROOT"
+      cp -f "$ZIPFILE" "$LEGACY_ZIPFILE"
+      echo "[low_glibc] legacy H700 download mirror: $LEGACY_ZIPFILE"
+    fi
+  fi
 
   echo "[low_glibc] done"
   echo "[low_glibc] output: $TARBALL"

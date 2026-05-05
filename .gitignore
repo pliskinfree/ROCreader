@@ -1,5 +1,9 @@
+.vs/
 sysroot_device/
+H700/sysroot_device/
 build/
+Windows/build/
+Windows/logs/
 cache/
 logs/
 log.txt
@@ -9,7 +13,11 @@ books/
 ui/
 sounds/
 trimui-smart-pro-toolchain/
+TrimuiBrick/toolchain/
 dist_lowglibc/
+H700/build/
+H700/dist_lowglibc/
+H700/logs/
 TrimuiBrick/.build
 TrimuiBrick/deb_cache/
 TrimuiBrick/dist/
@@ -20,5 +28,10 @@ TrimuiBrick/workspace/
 
 !Downloads/
 !Downloads/**
+!H700/
+!H700/Downloads/
+!H700/Downloads/**
+!H700/toolchain/
+!H700/toolchain/**
 !TrimuiBrick/Downloads/
 !TrimuiBrick/Downloads/**

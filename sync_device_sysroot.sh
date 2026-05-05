@@ -2,7 +2,7 @@
 set -eu
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-SYSROOT="${SYSROOT:-$SELF_DIR/sysroot_device}"
+SYSROOT="${SYSROOT:-$SELF_DIR/H700/sysroot_device}"
 DEVICE_HOST="${DEVICE_HOST:-root@192.168.31.141}"
 SSH_PORT="${SSH_PORT:-22}"
 

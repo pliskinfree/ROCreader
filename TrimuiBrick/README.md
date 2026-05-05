@@ -35,7 +35,7 @@ To produce a package without a PDF backend, run:
 .\TrimuiBrick\build_low_glibc_docker.ps1 -NoBuildImage -RequireMupdf 0
 ```
 
-The script builds the local `trimui-smart-pro-toolchain` Docker image, mirrors
+The script builds the local `TrimuiBrick/toolchain` Docker image, mirrors
 the project into `TrimuiBrick/workspace/source`, and runs the low-glibc package
 flow there. Build intermediates, logs, staged APPS output, tarballs, and final
 zip files are kept under this `TrimuiBrick` folder.
