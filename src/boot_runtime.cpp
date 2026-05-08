@@ -54,7 +54,12 @@ float BootProgressRatio(const BootRuntimeState &state) {
     return state.cover_generate_queue.empty()
                ? 1.0f
                : (0.55f + 0.45f * (static_cast<float>(state.cover_generate_index) /
-                                   static_cast<float>(std::max<size_t>(1, state.cover_generate_queue.size()))));
+                                    static_cast<float>(std::max<size_t>(1, state.cover_generate_queue.size()))));
+  case BootPhase::PreloadShelfCovers:
+    return state.cover_preload_queue.empty()
+               ? 1.0f
+               : (0.94f + 0.06f * (static_cast<float>(state.cover_preload_index) /
+                                   static_cast<float>(std::max<size_t>(1, state.cover_preload_queue.size()))));
   case BootPhase::Finalize:
   case BootPhase::Done:
     return 1.0f;
@@ -79,6 +84,13 @@ std::string MakeBootCoverText(size_t current, size_t total) {
 }
 std::string MakeUpdateReplayText(float ratio, bool success, const std::string &version) {
   return LocalizedUpdateReplayText(0, ratio, success, version);
+}
+
+void BeginShelfCoverPreload(BootRuntimeState &state, const BootRuntimeTickDeps &deps) {
+  state.cover_preload_queue =
+      deps.build_shelf_cover_preload_items ? deps.build_shelf_cover_preload_items() : std::vector<BookItem>{};
+  state.cover_preload_index = 0;
+  state.phase = state.cover_preload_queue.empty() ? BootPhase::Finalize : BootPhase::PreloadShelfCovers;
 }
 
 bool LoadUpdateReplayStatus(const std::filesystem::path &status_path, bool &out_success, std::string &out_version) {
@@ -237,7 +249,7 @@ void TickBootRuntime(BootRuntimeState &state, float dt, const BootRuntimeTickDep
       state.phase = BootPhase::GenerateCovers;
       state.status_text = LocalizedBootCoverText(state.language_index, 0, state.cover_generate_queue.size());
       if (state.cover_generate_queue.empty()) {
-        state.phase = BootPhase::Finalize;
+        BeginShelfCoverPreload(state, deps);
       }
     }
   } else if (state.phase == BootPhase::GenerateCovers) {
@@ -256,6 +268,21 @@ void TickBootRuntime(BootRuntimeState &state, float dt, const BootRuntimeTickDep
     state.status_text =
         LocalizedBootCoverText(state.language_index, state.cover_generate_index, state.cover_generate_queue.size());
     if (state.cover_generate_index >= state.cover_generate_queue.size()) {
+      BeginShelfCoverPreload(state, deps);
+    }
+  } else if (state.phase == BootPhase::PreloadShelfCovers) {
+    size_t processed = 0;
+    while (processed < deps.cover_preload_batch_entries &&
+           state.cover_preload_index < state.cover_preload_queue.size()) {
+      if (deps.preload_shelf_cover_texture) {
+        deps.preload_shelf_cover_texture(state.cover_preload_queue[state.cover_preload_index]);
+      }
+      ++state.cover_preload_index;
+      ++processed;
+    }
+    state.status_text =
+        LocalizedBootCoverText(state.language_index, state.cover_preload_index, state.cover_preload_queue.size());
+    if (state.cover_preload_index >= state.cover_preload_queue.size()) {
       state.phase = BootPhase::Finalize;
     }
   }

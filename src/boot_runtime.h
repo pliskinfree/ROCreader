@@ -12,7 +12,16 @@
 #include <unordered_set>
 #include <vector>
 
-enum class BootPhase { UpdateInstall, UpdateReplay, CountBooks, ScanBooks, GenerateCovers, Finalize, Done };
+enum class BootPhase {
+  UpdateInstall,
+  UpdateReplay,
+  CountBooks,
+  ScanBooks,
+  GenerateCovers,
+  PreloadShelfCovers,
+  Finalize,
+  Done
+};
 
 struct BootRuntimeState {
   float timer = 0.0f;
@@ -23,6 +32,8 @@ struct BootRuntimeState {
   size_t scan_index = 0;
   std::vector<std::string> cover_generate_queue;
   size_t cover_generate_index = 0;
+  std::vector<BookItem> cover_preload_queue;
+  size_t cover_preload_index = 0;
   size_t total_books = 0;
   std::filesystem::recursive_directory_iterator count_it;
   std::filesystem::recursive_directory_iterator count_end;
@@ -43,12 +54,15 @@ struct BootRuntimeTickDeps {
   size_t count_batch_entries = 0;
   size_t scan_batch_entries = 0;
   size_t cover_generate_batch_entries = 0;
+  size_t cover_preload_batch_entries = 0;
   std::function<std::string(const std::string &)> get_lower_ext;
   std::function<bool(const std::string &)> doc_cover_backend_available;
   std::function<bool(const BookItem &)> has_manual_cover_exact_or_fuzzy;
   std::function<bool(const std::string &)> has_cached_doc_cover_on_disk;
   std::function<SDL_Texture *(const std::string &)> create_doc_first_page_cover_texture;
   std::function<void(SDL_Texture *)> destroy_generated_cover_texture;
+  std::function<std::vector<BookItem>()> build_shelf_cover_preload_items;
+  std::function<void(const BookItem &)> preload_shelf_cover_texture;
   std::function<bool()> install_pending_update;
   std::function<void()> on_update_installed_restart;
   std::function<void(size_t, size_t)> on_finish;

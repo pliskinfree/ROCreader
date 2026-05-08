@@ -205,6 +205,12 @@ void DestroyShelfRenderCache(ShelfRenderCache &cache,
     if (forget_texture_size) forget_texture_size(cache.texture);
     SDL_DestroyTexture(cache.texture);
   }
+  for (auto &kv : cache.static_page_textures) {
+    if (kv.second) {
+      if (forget_texture_size) forget_texture_size(kv.second);
+      SDL_DestroyTexture(kv.second);
+    }
+  }
   cache = ShelfRenderCache{};
 }
 
@@ -278,6 +284,33 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
     }
   }
 
+  auto static_page_key = [&](int page) {
+    return std::to_string(page) + "|" + std::to_string(deps.nav_selected_index) + "|" +
+           std::to_string(deps.shelf_content_version) + "|" + std::to_string(deps.layout.screen_w) + "x" +
+           std::to_string(deps.layout.screen_h);
+  };
+
+  auto clear_static_page_cache_if_needed = [&]() {
+    const bool matches = deps.render_cache.static_nav_selected_index == deps.nav_selected_index &&
+                         deps.render_cache.static_content_version == deps.shelf_content_version &&
+                         deps.render_cache.static_screen_w == deps.layout.screen_w &&
+                         deps.render_cache.static_screen_h == deps.layout.screen_h;
+    if (matches) return;
+    for (auto &kv : deps.render_cache.static_page_textures) {
+      if (kv.second) {
+        if (deps.forget_texture_size) deps.forget_texture_size(kv.second);
+        SDL_DestroyTexture(kv.second);
+      }
+    }
+    deps.render_cache.static_page_textures.clear();
+    deps.render_cache.static_nav_selected_index = deps.nav_selected_index;
+    deps.render_cache.static_content_version = deps.shelf_content_version;
+    deps.render_cache.static_screen_w = deps.layout.screen_w;
+    deps.render_cache.static_screen_h = deps.layout.screen_h;
+  };
+
+  clear_static_page_cache_if_needed();
+
   auto draw_cover = [&](const BookItem &item, SDL_Rect dst, Uint8 alpha) {
     SDL_Texture *cover_tex = deps.get_cover_texture(item);
     if (cover_tex) {
@@ -302,6 +335,31 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
     }
     SDL_Color c = item.is_dir ? SDL_Color{86, 121, 157, alpha} : SDL_Color{66, 81, 102, alpha};
     deps.draw_rect(dst.x, dst.y, dst.w, dst.h, c, true);
+  };
+
+  auto draw_cached_cover = [&](const BookItem &item, SDL_Rect dst, Uint8 alpha) {
+    SDL_Texture *cover_tex = deps.get_cached_cover_texture ? deps.get_cached_cover_texture(item) : nullptr;
+    if (cover_tex) {
+      int tw = 0;
+      int th = 0;
+      deps.get_texture_size(cover_tex, tw, th);
+      if (tw > 0 && th > 0) {
+        const float src_aspect = static_cast<float>(tw) / static_cast<float>(th);
+        SDL_Rect src{0, 0, tw, th};
+        if (src_aspect > deps.cover_aspect) {
+          src.w = static_cast<int>(std::round(th * deps.cover_aspect));
+          src.x = (tw - src.w) / 2;
+        } else if (src_aspect < deps.cover_aspect) {
+          src.h = static_cast<int>(std::round(tw / deps.cover_aspect));
+          src.y = (th - src.h) / 2;
+        }
+        SDL_SetTextureAlphaMod(cover_tex, alpha);
+        SDL_RenderCopy(deps.renderer, cover_tex, &src, &dst);
+        SDL_SetTextureAlphaMod(cover_tex, 255);
+        return true;
+      }
+    }
+    return false;
   };
 
   auto make_outer_frame_rect = [&](const SDL_Rect &cover_rect) {
@@ -427,6 +485,116 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
     }
   };
 
+  auto page_covers_are_cached = [&](int page) {
+    if (!deps.get_cached_cover_texture) return false;
+    const int start = page * deps.k_grid_cols;
+    const int end = std::min<int>(start + deps.k_items_per_page, deps.shelf_runtime.items.size());
+    for (int i = start; i < end; ++i) {
+      if (!deps.get_cached_cover_texture(deps.shelf_runtime.items[i])) return false;
+    }
+    return true;
+  };
+
+  auto render_static_page_cards = [&](int page, float shift_y, bool skip_focused, bool cached_only) {
+    const int start = page * deps.k_grid_cols;
+    const int end = std::min<int>(start + deps.k_items_per_page, deps.shelf_runtime.items.size());
+    for (int i = start; i < end; ++i) {
+      if (skip_focused && i == deps.focus_index) continue;
+      const int local = i - start;
+      const int row = local / deps.k_grid_cols;
+      const int col = local % deps.k_grid_cols;
+      SDL_Rect dst{
+          deps.layout.grid_start_x + col * (deps.layout.cover_w + deps.layout.grid_gap_x),
+          static_cast<int>(std::round(static_cast<float>(deps.layout.grid_start_y +
+                                                         row * (deps.layout.cover_h + deps.layout.grid_gap_y)) +
+                                      shift_y)),
+          deps.layout.cover_w,
+          deps.layout.cover_h,
+      };
+      const SDL_Rect outer = make_outer_frame_rect(dst);
+      const BookItem &item = deps.shelf_runtime.items[i];
+      draw_cover_under_shadow(outer);
+      const Uint8 alpha = static_cast<Uint8>(std::clamp(deps.unfocused_alpha, 0.0f, 255.0f));
+      if (cached_only) {
+        if (draw_cached_cover(item, dst, alpha)) draw_title_overlay(item, dst, false);
+      } else {
+        draw_cover(item, dst, alpha);
+        draw_title_overlay(item, dst, false);
+      }
+    }
+  };
+
+  auto get_or_create_static_page_texture = [&](int page) -> SDL_Texture * {
+    if (!deps.renderer_supports_target_textures || deps.layout.screen_w <= 0 || deps.layout.screen_h <= 0) return nullptr;
+    const std::string key = static_page_key(page);
+    auto it = deps.render_cache.static_page_textures.find(key);
+    if (it != deps.render_cache.static_page_textures.end()) return it->second;
+    if (!page_covers_are_cached(page) && deps.ensure_page_cover_textures) {
+      deps.ensure_page_cover_textures(page);
+    }
+    if (!page_covers_are_cached(page)) return nullptr;
+
+    SDL_Texture *texture = SDL_CreateTexture(deps.renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET,
+                                             deps.layout.screen_w, deps.layout.screen_h);
+    if (!texture) return nullptr;
+    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    if (SDL_SetRenderTarget(deps.renderer, texture) != 0) {
+      SDL_DestroyTexture(texture);
+      return nullptr;
+    }
+    SDL_SetRenderDrawColor(deps.renderer, 0, 0, 0, 0);
+    SDL_RenderClear(deps.renderer);
+    render_static_page_cards(page, 0.0f, false, true);
+    SDL_SetRenderTarget(deps.renderer, nullptr);
+    deps.render_cache.static_page_textures[key] = texture;
+    return texture;
+  };
+
+  auto draw_shelf_background = [&]() {
+    if (deps.ui_assets.background_main) {
+      SDL_Rect bg_dst{0, 0, deps.layout.screen_w, deps.layout.screen_h};
+      SDL_RenderCopy(deps.renderer, deps.ui_assets.background_main, nullptr, &bg_dst);
+    }
+  };
+
+  auto draw_shelf_chrome = [&]() {
+    if (deps.ui_assets.top_status_bar) draw_native(deps.ui_assets.top_status_bar, 0, 0);
+    if (deps.ui_assets.bottom_hint_bar) {
+      int bw = 0;
+      int bh = 0;
+      deps.get_texture_size(deps.ui_assets.bottom_hint_bar, bw, bh);
+      draw_native(deps.ui_assets.bottom_hint_bar, 0, deps.layout.screen_h - bh);
+    }
+    if (deps.ui_assets.nav_l1_icon) draw_native(deps.ui_assets.nav_l1_icon, deps.layout.nav_l1_x, deps.layout.nav_l1_y);
+    if (deps.ui_assets.nav_r1_icon) draw_native(deps.ui_assets.nav_r1_icon, deps.layout.nav_r1_x, deps.layout.nav_r1_y);
+    int nav_pill_h = 32;
+    if (deps.ui_assets.nav_selected_pill) {
+      int pw = 0;
+      int ph = 0;
+      deps.get_texture_size(deps.ui_assets.nav_selected_pill, pw, ph);
+      if (ph > 0) nav_pill_h = ph;
+      const int slot_center_x =
+          deps.layout.nav_start_x + deps.nav_selected_index * deps.layout.nav_slot_w + deps.layout.nav_slot_w / 2;
+      draw_native(deps.ui_assets.nav_selected_pill, slot_center_x - pw / 2, deps.layout.nav_y);
+    }
+    const std::array<std::string, 4> nav_labels = {"ALL COMICS", "ALL BOOKS", "COLLECTIONS", "HISTORY"};
+    SDL_Color nav_text{238, 242, 250, 255};
+    for (int i = 0; i < static_cast<int>(nav_labels.size()); ++i) {
+      int tw = 0;
+      int th = 0;
+      SDL_Texture *tex = nullptr;
+      deps.get_text_texture(nav_labels[i], nav_text, tw, th, tex);
+      if (!tex) continue;
+      const int slot_x = deps.layout.nav_start_x + i * deps.layout.nav_slot_w;
+      const int tx = slot_x + std::max(0, (deps.layout.nav_slot_w - tw) / 2);
+      const int ty = deps.layout.nav_y + std::max(0, (nav_pill_h - th) / 2);
+      SDL_Rect td{tx, ty, tw, th};
+      SDL_RenderCopy(deps.renderer, tex, nullptr, &td);
+    }
+  };
+
+  const bool can_use_static_page_cache = deps.renderer_supports_target_textures && !deps.page_animating &&
+                                         !deps.any_grid_animating;
   const bool can_use_shelf_render_cache = false && deps.renderer_supports_target_textures &&
                                           !deps.page_animating && !deps.any_grid_animating;
   const bool cache_matches = deps.render_cache.texture &&
@@ -434,10 +602,19 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
                              deps.render_cache.shelf_page == deps.shelf_page &&
                              deps.render_cache.nav_selected_index == deps.nav_selected_index &&
                              deps.render_cache.content_version == deps.shelf_content_version;
-  if (can_use_shelf_render_cache && cache_matches) {
+  bool chrome_deferred = false;
+  if (can_use_static_page_cache) {
+    draw_shelf_background();
+    SDL_Texture *static_page = get_or_create_static_page_texture(deps.shelf_page);
+    if (static_page) {
+      SDL_RenderCopy(deps.renderer, static_page, nullptr, nullptr);
+    } else {
+      render_static_page_cards(deps.shelf_page, 0.0f, true, true);
+    }
+    chrome_deferred = true;
+  } else if (can_use_shelf_render_cache && cache_matches) {
     SDL_RenderCopy(deps.renderer, deps.render_cache.texture, nullptr, nullptr);
   } else {
-    InvalidateShelfRenderCache(deps.render_cache, deps.forget_texture_size);
     render_shelf_static_layer();
   }
 
@@ -458,4 +635,5 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
     draw_cover_select(outer);
     break;
   }
+  if (chrome_deferred) draw_shelf_chrome();
 }

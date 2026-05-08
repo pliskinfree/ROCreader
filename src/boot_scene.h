@@ -17,12 +17,15 @@ struct BootSceneTickDeps {
   size_t count_batch_entries = 0;
   size_t scan_batch_entries = 0;
   size_t cover_generate_batch_entries = 0;
+  size_t cover_preload_batch_entries = 0;
   std::function<std::string(const std::string &)> get_lower_ext;
   std::function<bool(const std::string &)> doc_cover_backend_available;
   std::function<bool(const BookItem &)> has_manual_cover_exact_or_fuzzy;
   std::function<bool(const std::string &)> has_cached_doc_cover_on_disk;
   std::function<SDL_Texture *(const std::string &)> create_doc_first_page_cover_texture;
   std::function<void(SDL_Texture *)> destroy_generated_cover_texture;
+  std::function<std::vector<BookItem>()> build_shelf_cover_preload_items;
+  std::function<void(const BookItem &)> preload_shelf_cover_texture;
   std::function<bool()> install_pending_update;
   std::function<void()> on_update_installed_restart;
   std::function<void(size_t, size_t)> on_finish;
@@ -45,6 +48,7 @@ struct BootSceneShelfResetDeps {
 struct BootSceneFinishDeps {
   BootSceneShelfResetDeps shelf_reset;
   std::function<void()> rebuild_shelf_items;
+  std::function<void()> reset_shelf_cover_stream_preload;
   std::function<void()> enter_shelf;
   bool verbose_log = false;
 };

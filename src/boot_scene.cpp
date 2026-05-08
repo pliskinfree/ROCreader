@@ -15,12 +15,15 @@ void BootScene::Tick(float dt, const BootSceneTickDeps &deps) {
       deps.count_batch_entries,
       deps.scan_batch_entries,
       deps.cover_generate_batch_entries,
+      deps.cover_preload_batch_entries,
       deps.get_lower_ext,
       deps.doc_cover_backend_available,
       deps.has_manual_cover_exact_or_fuzzy,
       deps.has_cached_doc_cover_on_disk,
       deps.create_doc_first_page_cover_texture,
       deps.destroy_generated_cover_texture,
+      deps.build_shelf_cover_preload_items,
+      deps.preload_shelf_cover_texture,
       deps.install_pending_update,
       deps.on_update_installed_restart,
       deps.on_finish,
@@ -79,6 +82,7 @@ void BootScene::FinishScanAndEnterShelf(size_t total_books,
                                         BootSceneFinishDeps deps) const {
   if (deps.rebuild_shelf_items) deps.rebuild_shelf_items();
   ResetShelfAfterBoot(deps.shelf_reset);
+  if (deps.reset_shelf_cover_stream_preload) deps.reset_shelf_cover_stream_preload();
 
   runtime_log::Line(std::string("boot: scan complete books=") + std::to_string(total_books) +
                     " cover_generate=" + std::to_string(cover_generate_count));

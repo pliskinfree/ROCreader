@@ -111,8 +111,8 @@ constexpr float kCoverAspect = 2.0f / 3.0f;
 constexpr Uint8 kUnfocusedAlpha = 255;
 constexpr float kTitleMarqueePauseSec = 0.75f;
 constexpr float kTitleMarqueeSpeedPx = 48.0f;
-constexpr size_t kCoverCacheMaxEntries = 160;
-constexpr size_t kCoverCacheMaxBytes = 24u * 1024u * 1024u;
+constexpr size_t kCoverCacheMaxEntries = 320;
+constexpr size_t kCoverCacheMaxBytes = 96u * 1024u * 1024u;
 constexpr Uint8 kSidebarMaskMaxAlpha = 84;
 constexpr int kIdleWaitMs = 100;
 constexpr float kCardLerpSpeed = 18.0f;
@@ -136,6 +136,11 @@ constexpr uint32_t kIdleFlushOnlyWaitMs = 250;
 constexpr size_t kBootCountBatchEntries = 96;
 constexpr size_t kBootScanBatchEntries = 48;
 constexpr size_t kBootCoverGenerateBatchEntries = 1;
+constexpr size_t kBootCoverPreloadBatchEntries = 2;
+constexpr size_t kBootDefaultShelfPreloadWindows = 10;
+constexpr size_t kBootOtherShelfPreloadWindows = 2;
+constexpr size_t kShelfStreamPreloadBatchEntries = 1;
+constexpr size_t kShelfStreamPreloadLookaheadPages = 6;
 constexpr uint32_t kTransientMessageDurationMs = 1800;
 constexpr uint32_t kReaderFastFlipThresholdMs = 200;
 constexpr uint32_t kReaderPageFlipDebounceMs = 150;
@@ -1096,6 +1101,9 @@ int main(int, char **argv) {
   CoverCacheRuntime cover_cache(kCoverCacheMaxEntries, kCoverCacheMaxBytes);
   ShelfSceneState shelf_state;
   shelf_state.title_marquee_wait = kTitleMarqueePauseSec;
+  std::deque<BookItem> shelf_cover_preload_queue;
+  std::unordered_set<std::string> shelf_cover_preload_queued_keys;
+  uint64_t shelf_cover_preload_signature = 0;
 
   MenuSceneState menu_state;
   menu_state.items = {
@@ -1178,6 +1186,9 @@ int main(int, char **argv) {
 
   auto clear_cover_cache = [&]() {
     cover_cache.Clear(forget_texture_size);
+    shelf_cover_preload_queue.clear();
+    shelf_cover_preload_queued_keys.clear();
+    shelf_cover_preload_signature = 0;
     ++shelf_content_version;
   };
   auto clear_history_and_refresh_shelf = [&]() {
@@ -1253,8 +1264,9 @@ int main(int, char **argv) {
 
   auto get_cover_texture = [&](const BookItem &item) -> SDL_Texture * {
     const std::string &real_path = item_real_path(item);
-    const std::string cover_cache_key =
-        real_path + "|cover|" + std::to_string(cover_texture_w()) + "x" + std::to_string(cover_texture_h());
+    const std::string cover_cache_key = std::to_string(static_cast<int>(current_category())) + "|" +
+                                        real_path + "|cover|" + std::to_string(cover_texture_w()) + "x" +
+                                        std::to_string(cover_texture_h());
     if (SDL_Texture *cached = cover_cache.FindTexture(cover_cache_key)) {
       return cached;
     }
@@ -1271,6 +1283,174 @@ int main(int, char **argv) {
     const bool owned = (tex != nullptr && !shared_ui_cover);
     cover_cache.PutTexture(cover_cache_key, tex, owned, get_texture_size, forget_texture_size);
     return tex;
+  };
+
+  auto get_cached_cover_texture = [&](const BookItem &item) -> SDL_Texture * {
+    const std::string &real_path = item_real_path(item);
+    const std::string cover_cache_key = std::to_string(static_cast<int>(current_category())) + "|" +
+                                        real_path + "|cover|" + std::to_string(cover_texture_w()) + "x" +
+                                        std::to_string(cover_texture_h());
+    return cover_cache.FindTexture(cover_cache_key);
+  };
+
+  auto preload_cover_texture_for_category = [&](ShelfCategory category, const BookItem &item) {
+    const std::string &real_path = item_real_path(item);
+    const std::string cover_cache_key = std::to_string(static_cast<int>(category)) + "|" + real_path + "|cover|" +
+                                        std::to_string(cover_texture_w()) + "x" +
+                                        std::to_string(cover_texture_h());
+    if (cover_cache.FindTexture(cover_cache_key)) return;
+
+    CoverServiceDeps deps = make_cover_service_deps();
+    BookItem resolved_item = item;
+    resolved_item.path = real_path;
+    resolved_item.real_path = real_path;
+    resolved_item.native_fs_path = item_fs_path(item);
+    SDL_Texture *tex = ResolveBookCoverTexture(resolved_item, category, deps);
+
+    const bool shared_ui_cover = (tex == ui_assets.book_cover_txt ||
+                                  tex == ui_assets.book_cover_pdf);
+    const bool owned = (tex != nullptr && !shared_ui_cover);
+    cover_cache.PutTexture(cover_cache_key, tex, owned, get_texture_size, forget_texture_size);
+  };
+
+  auto ensure_shelf_page_cover_textures = [&](int page) {
+    if (page < 0 || ShelfGridCols() <= 0 || ShelfItemsPerPage() <= 0) return;
+    const ShelfCategory category = current_category();
+    const int start = page * ShelfGridCols();
+    const int end = std::min<int>(start + ShelfItemsPerPage(), shelf_items.size());
+    for (int i = start; i < end; ++i) {
+      preload_cover_texture_for_category(category, shelf_items[i]);
+    }
+  };
+
+  auto make_preload_queue_key = [&](ShelfCategory category, const BookItem &item) -> std::string {
+    const std::string &real_path = book_library_service::RealPathForItem(item);
+    return std::to_string(static_cast<int>(category)) + "|" + NormalizePathKey(real_path);
+  };
+
+  auto build_shelf_cover_preload_items = [&](const std::function<size_t(ShelfCategory)> &max_for_category)
+      -> std::vector<BookItem> {
+    struct PreloadEntry {
+      ShelfCategory category = ShelfCategory::AllComics;
+      BookItem item;
+    };
+
+    std::vector<PreloadEntry> entries;
+    std::unordered_set<std::string> seen;
+    const std::array<ShelfCategory, 4> categories = {
+        ShelfCategory::AllBooks,
+        ShelfCategory::Collections,
+        ShelfCategory::History,
+        ShelfCategory::AllComics,
+    };
+    for (ShelfCategory category : categories) {
+      size_t category_count = 0;
+      const size_t max_for_this_category = max_for_category ? max_for_category(category) : 0;
+      std::vector<BookItem> base =
+          ScanShelfBaseItems(shelf_runtime, category, std::string(), books_roots, make_shelf_runtime_deps());
+      for (BookItem &item : base) {
+        if (!ShelfMatchCategory(item, category, make_shelf_runtime_deps())) continue;
+        if (max_for_this_category > 0 && category_count >= max_for_this_category) break;
+        const std::string key = make_preload_queue_key(category, item);
+        if (!seen.insert(key).second) continue;
+        entries.push_back(PreloadEntry{category, std::move(item)});
+        ++category_count;
+      }
+    }
+
+    std::vector<BookItem> out;
+    out.reserve(entries.size());
+    for (const PreloadEntry &entry : entries) {
+      BookItem item = entry.item;
+      item.preload_category = static_cast<int>(entry.category);
+      out.push_back(std::move(item));
+    }
+    return out;
+  };
+
+  auto preload_shelf_cover_texture = [&](const BookItem &item) {
+    ShelfCategory category = current_category();
+    if (item.preload_category >= static_cast<int>(ShelfCategory::AllComics) &&
+        item.preload_category <= static_cast<int>(ShelfCategory::History)) {
+      category = static_cast<ShelfCategory>(item.preload_category);
+    }
+    preload_cover_texture_for_category(category, item);
+  };
+
+  auto boot_preload_item_limit = [&](ShelfCategory category) -> size_t {
+    const size_t windows = (category == ShelfCategory::AllComics)
+                               ? kBootDefaultShelfPreloadWindows
+                               : kBootOtherShelfPreloadWindows;
+    const size_t visible = static_cast<size_t>(ShelfItemsPerPage());
+    const size_t cols = static_cast<size_t>(ShelfGridCols());
+    if (windows == 0) return 0;
+    return visible + (windows - 1) * cols;
+  };
+
+  auto queue_shelf_cover_preload = [&](ShelfCategory category, const BookItem &item) {
+    const std::string key = make_preload_queue_key(category, item);
+    if (!shelf_cover_preload_queued_keys.insert(key).second) return;
+    BookItem queued = item;
+    queued.preload_category = static_cast<int>(category);
+    shelf_cover_preload_queue.push_back(std::move(queued));
+  };
+
+  auto queue_priority_shelf_cover_preload = [&](ShelfCategory category, const BookItem &item) {
+    BookItem queued = item;
+    queued.preload_category = static_cast<int>(category);
+    shelf_cover_preload_queue.push_front(std::move(queued));
+  };
+
+  auto reset_shelf_cover_stream_preload = [&]() {
+    shelf_cover_preload_queue.clear();
+    shelf_cover_preload_queued_keys.clear();
+    const std::vector<BookItem> items = build_shelf_cover_preload_items({});
+    for (const BookItem &item : items) {
+      ShelfCategory category = current_category();
+      if (item.preload_category >= static_cast<int>(ShelfCategory::AllComics) &&
+          item.preload_category <= static_cast<int>(ShelfCategory::History)) {
+        category = static_cast<ShelfCategory>(item.preload_category);
+      }
+      queue_shelf_cover_preload(category, item);
+    }
+  };
+
+  auto queue_visible_shelf_cover_lookahead = [&]() {
+    if (state != AppScene::Shelf) return;
+    const uint64_t signature = (shelf_runtime.content_version << 32) ^
+                               (static_cast<uint64_t>(shelf_state.nav_selected_index & 0xff) << 24) ^
+                               static_cast<uint64_t>(shelf_state.shelf_page & 0xffffff);
+    if (signature == shelf_cover_preload_signature) return;
+    shelf_cover_preload_signature = signature;
+
+    const ShelfCategory category = current_category();
+    auto queue_index_priority = [&](int index) {
+      if (index < 0 || index >= static_cast<int>(shelf_items.size())) return;
+      queue_priority_shelf_cover_preload(category, shelf_items[index]);
+    };
+    queue_index_priority(shelf_state.focus_index);
+    queue_index_priority(shelf_state.focus_index - 1);
+    queue_index_priority(shelf_state.focus_index + 1);
+    queue_index_priority(shelf_state.focus_index - ShelfGridCols());
+    queue_index_priority(shelf_state.focus_index + ShelfGridCols());
+
+    const int start = std::max(0, shelf_state.shelf_page * ShelfGridCols());
+    const int max_count = ShelfItemsPerPage() * static_cast<int>(1 + kShelfStreamPreloadLookaheadPages);
+    const int end = std::min<int>(start + max_count, shelf_items.size());
+    for (int i = end - 1; i >= start; --i) {
+      queue_priority_shelf_cover_preload(category, shelf_items[i]);
+    }
+  };
+
+  auto process_shelf_cover_stream_preload = [&]() {
+    if (state != AppScene::Shelf || input.AnyPressed() || shelf_state.page_animating) return;
+    size_t processed = 0;
+    while (processed < kShelfStreamPreloadBatchEntries && !shelf_cover_preload_queue.empty()) {
+      BookItem item = std::move(shelf_cover_preload_queue.front());
+      shelf_cover_preload_queue.pop_front();
+      preload_shelf_cover_texture(item);
+      ++processed;
+    }
   };
 
 #ifdef HAVE_SDL2_TTF
@@ -1793,6 +1973,8 @@ int main(int, char **argv) {
         [&](int x, int y, int w, int h, SDL_Color c, bool fill) { DrawRect(renderer, x, y, w, h, c, fill); },
         [&](SDL_Texture *tex, int &w, int &h) { get_texture_size(tex, w, h); },
         [&](const BookItem &item) { return get_cover_texture(item); },
+        [&](const BookItem &item) { return get_cached_cover_texture(item); },
+        [&](int page) { ensure_shelf_page_cover_textures(page); },
         get_text_texture,
         [&](const std::string &raw_name, int text_area_w, const std::function<int(const std::string &)> &measure) {
           return get_title_ellipsized(raw_name, text_area_w, measure);
@@ -2042,6 +2224,7 @@ int main(int, char **argv) {
           kBootCountBatchEntries,
           kBootScanBatchEntries,
           kBootCoverGenerateBatchEntries,
+          kBootCoverPreloadBatchEntries,
           GetLowerExt,
           [&](const std::string &doc_path) {
             const std::string ext = GetLowerExt(doc_path);
@@ -2057,6 +2240,10 @@ int main(int, char **argv) {
             forget_texture_size(generated);
             SDL_DestroyTexture(generated);
           },
+          [&]() {
+            return build_shelf_cover_preload_items(boot_preload_item_limit);
+          },
+          preload_shelf_cover_texture,
           [&]() { return boot_scene.InstallPendingUpdateFromEnvironment(); },
           [&]() { boot_scene.RestartAfterInstalledUpdate(); },
           [&](size_t total_books, size_t cover_generate_count) {
@@ -2069,6 +2256,7 @@ int main(int, char **argv) {
                         kTitleMarqueePauseSec,
                     },
                     rebuild_shelf_items,
+                    reset_shelf_cover_stream_preload,
                     [&]() { app_shell.Scenes().EnterShelf(); },
                     verbose_log,
                 });
@@ -2090,6 +2278,8 @@ int main(int, char **argv) {
           make_shelf_scene_input_services(),
       };
       shelf_scene.HandleInput(shelf_input_context);
+      ensure_shelf_page_cover_textures(shelf_state.shelf_page);
+      queue_visible_shelf_cover_lookahead();
     } else if (state == AppScene::Settings) {
       const NativeConfig &ui_cfg = config.Get();
       if (menu_scene.IsSelected(menu_state, SettingId::SystemControls)) {
@@ -2296,6 +2486,7 @@ int main(int, char **argv) {
     app_shell.DrawSceneFlash();
 
     app_shell.Present();
+    process_shelf_cover_stream_preload();
 
     app_shell.ThrottleFrame(frame_begin_ticks, contributor_marquee_active, has_active_animation, needs_periodic_tick);
   }

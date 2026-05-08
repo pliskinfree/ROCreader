@@ -9,6 +9,9 @@
 #ifdef HAVE_WEBP
 #include <webp/decode.h>
 #endif
+#if defined(__linux__)
+#include <dlfcn.h>
+#endif
 #ifdef HAVE_JPEG
 extern "C" {
 #include <jpeglib.h>
@@ -24,6 +27,11 @@ extern "C" {
 
 namespace {
 
+bool LooksLikeWebp(const uint8_t *p, size_t size) {
+  return p && size >= 16 && p[0] == 'R' && p[1] == 'I' && p[2] == 'F' && p[3] == 'F' &&
+         p[8] == 'W' && p[9] == 'E' && p[10] == 'B' && p[11] == 'P';
+}
+
 #ifdef HAVE_WEBP
 SDL_Surface *DecodeWebpSurface(const uint8_t *data, size_t size) {
   int webp_w = 0;
@@ -33,6 +41,77 @@ SDL_Surface *DecodeWebpSurface(const uint8_t *data, size_t size) {
   if (!surface) return nullptr;
   uint8_t *decoded = WebPDecodeRGBAInto(data, size, static_cast<uint8_t *>(surface->pixels),
                                         surface->pitch * surface->h, surface->pitch);
+  if (!decoded) {
+    SDL_FreeSurface(surface);
+    return nullptr;
+  }
+  return surface;
+}
+#endif
+
+#if defined(__linux__) && !defined(HAVE_WEBP)
+struct RuntimeWebp {
+  using GetInfoFn = int (*)(const uint8_t *, size_t, int *, int *);
+  using DecodeRGBAIntoFn = uint8_t *(*)(const uint8_t *, size_t, uint8_t *, size_t, int);
+
+  void *handle = nullptr;
+  GetInfoFn get_info = nullptr;
+  DecodeRGBAIntoFn decode_rgba_into = nullptr;
+  bool tried = false;
+  bool logged_missing = false;
+  bool logged_loaded = false;
+
+  bool Load() {
+    if (tried) return handle && get_info && decode_rgba_into;
+    tried = true;
+    const char *names[] = {"libwebp.so.7", "libwebp.so", "libwebp.so.6"};
+    for (const char *name : names) {
+      handle = dlopen(name, RTLD_LAZY | RTLD_LOCAL);
+      if (handle) break;
+    }
+    if (!handle) {
+      if (!logged_missing) {
+        runtime_log::Line("[image_decode] runtime libwebp unavailable");
+        logged_missing = true;
+      }
+      return false;
+    }
+    get_info = reinterpret_cast<GetInfoFn>(dlsym(handle, "WebPGetInfo"));
+    decode_rgba_into = reinterpret_cast<DecodeRGBAIntoFn>(dlsym(handle, "WebPDecodeRGBAInto"));
+    if (!get_info || !decode_rgba_into) {
+      runtime_log::Line("[image_decode] runtime libwebp missing required symbols");
+      dlclose(handle);
+      handle = nullptr;
+      return false;
+    }
+    if (!logged_loaded) {
+      runtime_log::Line("[image_decode] runtime libwebp decoder loaded");
+      logged_loaded = true;
+    }
+    return true;
+  }
+};
+
+RuntimeWebp &GetRuntimeWebp() {
+  static RuntimeWebp decoder;
+  return decoder;
+}
+
+bool RuntimeWebpGetInfo(const uint8_t *data, size_t size, int &w, int &h) {
+  RuntimeWebp &decoder = GetRuntimeWebp();
+  return decoder.Load() && decoder.get_info(data, size, &w, &h) && w > 0 && h > 0;
+}
+
+SDL_Surface *DecodeRuntimeWebpSurface(const uint8_t *data, size_t size) {
+  RuntimeWebp &decoder = GetRuntimeWebp();
+  if (!decoder.Load()) return nullptr;
+  int webp_w = 0;
+  int webp_h = 0;
+  if (!decoder.get_info(data, size, &webp_w, &webp_h) || webp_w <= 0 || webp_h <= 0) return nullptr;
+  SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0, webp_w, webp_h, 32, SDL_PIXELFORMAT_RGBA32);
+  if (!surface) return nullptr;
+  uint8_t *decoded = decoder.decode_rgba_into(data, size, static_cast<uint8_t *>(surface->pixels),
+                                              surface->pitch * surface->h, surface->pitch);
   if (!decoded) {
     SDL_FreeSurface(surface);
     return nullptr;
@@ -161,12 +240,13 @@ bool ProbeImageSizeFromMemory(const void *data, size_t size, int &w, int &h) {
     return w > 0 && h > 0;
   }
 
+  if (LooksLikeWebp(p, size)) {
 #ifdef HAVE_WEBP
-  if (size >= 16 && p[0] == 'R' && p[1] == 'I' && p[2] == 'F' && p[3] == 'F' &&
-      p[8] == 'W' && p[9] == 'E' && p[10] == 'B' && p[11] == 'P') {
     return WebPGetInfo(p, size, &w, &h) && w > 0 && h > 0;
-  }
+#elif defined(__linux__)
+    return RuntimeWebpGetInfo(p, size, w, h);
 #endif
+  }
 
   if (size >= 4 && p[0] == 0xFF && p[1] == 0xD8) {
     size_t pos = 2;
@@ -211,6 +291,10 @@ SDL_Surface *DecodeSurfaceFromMemory(const void *data, size_t size) {
   }
 #ifdef HAVE_WEBP
   if (SDL_Surface *surface = DecodeWebpSurface(bytes, size)) return surface;
+#elif defined(__linux__)
+  if (LooksLikeWebp(bytes, size)) {
+    if (SDL_Surface *surface = DecodeRuntimeWebpSurface(bytes, size)) return surface;
+  }
 #endif
 #ifdef HAVE_JPEG
   if (SDL_Surface *surface = DecodeJpegSurface(bytes, size)) return surface;
@@ -221,8 +305,8 @@ SDL_Surface *DecodeSurfaceFromMemory(const void *data, size_t size) {
 
 SDL_Surface *DecodeSurfaceFromMemoryFit(const void *data, size_t size, int max_w, int max_h) {
   if (!data || size == 0) return nullptr;
-  const auto *bytes = static_cast<const uint8_t *>(data);
 #ifdef HAVE_JPEG
+  const auto *bytes = static_cast<const uint8_t *>(data);
   if (size >= 4 && bytes[0] == 0xFF && bytes[1] == 0xD8) {
     if (SDL_Surface *surface = DecodeJpegSurface(bytes, size, max_w, max_h)) return surface;
   }

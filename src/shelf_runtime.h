@@ -39,6 +39,11 @@ struct ShelfRenderCache {
   int shelf_page = -1;
   int nav_selected_index = -1;
   uint64_t content_version = 0;
+  std::unordered_map<std::string, SDL_Texture *> static_page_textures;
+  int static_nav_selected_index = -1;
+  uint64_t static_content_version = 0;
+  int static_screen_w = 0;
+  int static_screen_h = 0;
 };
 
 struct GridItemAnim {
@@ -218,6 +223,8 @@ struct ShelfRuntimeRenderDeps {
   std::function<void(int, int, int, int, SDL_Color, bool)> draw_rect;
   std::function<void(SDL_Texture *, int &, int &)> get_texture_size;
   std::function<SDL_Texture *(const BookItem &)> get_cover_texture;
+  std::function<SDL_Texture *(const BookItem &)> get_cached_cover_texture;
+  std::function<void(int)> ensure_page_cover_textures;
   std::function<void(const std::string &, SDL_Color, int &, int &, SDL_Texture *&)> get_text_texture;
   std::function<std::string(const std::string &, int, const std::function<int(const std::string &)> &)>
       get_title_ellipsized;

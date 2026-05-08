@@ -10,6 +10,7 @@ struct BookItem {
   std::string real_path;
   std::filesystem::path native_fs_path;
   bool is_dir = false;
+  int preload_category = -1;
 };
 
 class BookScanner {

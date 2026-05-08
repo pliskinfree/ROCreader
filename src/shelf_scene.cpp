@@ -82,6 +82,8 @@ ShelfSceneRenderServices MakeShelfSceneRenderServices(ShelfSceneRenderServiceCal
       std::move(callbacks.draw_rect),
       std::move(callbacks.get_texture_size),
       std::move(callbacks.get_cover_texture),
+      std::move(callbacks.get_cached_cover_texture),
+      std::move(callbacks.ensure_page_cover_textures),
       [get_text_texture = std::move(callbacks.get_text_texture)](
           const std::string &text, SDL_Color color, int &w, int &h, SDL_Texture *&tex) {
         TextCacheEntry *entry = get_text_texture ? get_text_texture(text, color) : nullptr;
@@ -135,6 +137,8 @@ void ShelfScene::Draw(const ShelfSceneRenderContext &context) const {
       context.services.draw_rect,
       context.services.get_texture_size,
       context.services.get_cover_texture,
+      context.services.get_cached_cover_texture,
+      context.services.ensure_page_cover_textures,
       context.services.get_text_texture,
       context.services.get_title_ellipsized,
       context.services.shelf_title_text,

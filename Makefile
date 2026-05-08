@@ -198,6 +198,9 @@ ifneq ($(strip $(WEBP_LIBS)),)
 CXXFLAGS += -DHAVE_WEBP $(WEBP_CFLAGS)
 LDFLAGS += $(WEBP_LIBS)
 endif
+ifeq ($(shell uname -s 2>/dev/null),Linux)
+LDFLAGS += -ldl
+endif
 
 JPEG_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags libjpeg 2>/dev/null)
 JPEG_LIBS ?= $(shell $(PKG_CONFIG) --libs libjpeg 2>/dev/null)
