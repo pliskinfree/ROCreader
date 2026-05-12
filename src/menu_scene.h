@@ -56,6 +56,7 @@ struct MenuSceneInputContext {
   ContributorAvatarState &contributor_avatar_state;
   size_t contributor_avatar_count = 0;
   VersionUpdateState &version_update_state;
+  OnlineSourceState &online_source_state;
   MenuSceneInputServices services;
 };
 
@@ -72,6 +73,7 @@ struct MenuSceneRenderContext {
   const std::vector<ContributorAvatarEntry> &contributor_avatar_entries;
   const ContributorAvatarState &contributor_avatar_state;
   const VersionUpdateState &version_update_state;
+  const OnlineSourceState &online_source_state;
   MenuSceneLayoutMetrics layout;
   SettingsRuntimeRenderServices services;
 };

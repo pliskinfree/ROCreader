@@ -44,6 +44,9 @@ struct ShelfRenderCache {
   uint64_t static_content_version = 0;
   int static_screen_w = 0;
   int static_screen_h = 0;
+  SDL_Texture *online_nav_pill_texture = nullptr;
+  int online_nav_pill_w = 0;
+  int online_nav_pill_h = 0;
 };
 
 struct GridItemAnim {
@@ -154,6 +157,9 @@ struct ShelfRuntimeInputDeps {
   std::function<void(const std::string &)> remove_favorite;
   std::function<ShelfCategory()> current_category;
   std::function<bool(const BookItem &)> on_open_book;
+  std::function<bool(const BookItem &)> mark_remote_for_local;
+  std::function<bool(const BookItem &)> unmark_remote_for_local;
+  std::function<int()> nav_item_count;
 };
 
 struct ShelfLayoutMetrics {
@@ -229,6 +235,12 @@ struct ShelfRuntimeRenderDeps {
   std::function<std::string(const std::string &, int, const std::function<int(const std::string &)> &)>
       get_title_ellipsized;
   std::function<std::string(const BookItem &)> shelf_title_text;
+  std::function<std::string(int)> nav_label_text;
+  std::function<int()> nav_item_count;
+  std::function<bool()> online_shelf_active;
+  std::function<bool(const BookItem &)> remote_cover_loading;
+  std::function<std::string(const BookItem &)> remote_book_status_text;
+  std::function<float(const BookItem &)> remote_book_status_progress;
   std::function<void(SDL_Texture *)> forget_texture_size;
 };
 

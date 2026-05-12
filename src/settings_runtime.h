@@ -4,6 +4,7 @@
 #include "animation.h"
 #include "contributor_avatar_runtime.h"
 #include "input_manager.h"
+#include "online_source_runtime.h"
 #include "reader_session_state.h"
 #include "system_settings_runtime.h"
 #include "txt_settings_runtime.h"
@@ -17,7 +18,18 @@
 #include <string>
 #include <vector>
 
-enum class SettingId { SystemControls, KeyGuide, ClearHistory, CleanCache, TxtToUtf8, ContributorAvatars, ContactMe, VersionUpdate, ExitApp };
+enum class SettingId {
+  SystemControls,
+  KeyGuide,
+  ClearHistory,
+  CleanCache,
+  TxtToUtf8,
+  ContributorAvatars,
+  ContactMe,
+  VersionUpdate,
+  UrlEntry,
+  ExitApp
+};
 
 struct SettingsRuntimeMenuState {
   bool &closing;
@@ -50,6 +62,7 @@ struct SettingsRuntimeInputDeps {
   ContributorAvatarState &contributor_avatar_state;
   size_t contributor_avatar_count = 0;
   VersionUpdateState &version_update_state;
+  OnlineSourceState &online_source_state;
   VersionUpdateCallbacks version_update_callbacks;
   SettingsRuntimeInputActions actions;
 };
@@ -92,6 +105,7 @@ struct SettingsRuntimeRenderDeps {
   const std::vector<ContributorAvatarEntry> &contributor_avatar_entries;
   const ContributorAvatarState &contributor_avatar_state;
   const VersionUpdateState &version_update_state;
+  const OnlineSourceState &online_source_state;
   SettingsRuntimeLayout layout;
   SettingsRuntimeRenderServices services;
 };

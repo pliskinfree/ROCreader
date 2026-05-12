@@ -44,6 +44,12 @@ make REQUIRE_MUPDF="$REQUIRE_MUPDF" TARGET=Windows/build/rocreader_sdl
   if [ -f "$SELF_DIR/native_config.ini" ]; then
     cp "$SELF_DIR/native_config.ini" "$OUT_DIR/"
   fi
+  if [ -f "$SELF_DIR/online_sources.release.ini" ]; then
+    cp "$SELF_DIR/online_sources.release.ini" "$OUT_DIR/online_sources.ini"
+  elif [ -f "$SELF_DIR/online_sources.ini" ]; then
+    cp "$SELF_DIR/online_sources.ini" "$OUT_DIR/online_sources.ini"
+  fi
+  mkdir -p "$OUT_DIR/Downloads"
 
   cp "$SELF_DIR/ROCreader.sh" "$LAUNCHER"
 

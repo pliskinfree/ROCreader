@@ -7,6 +7,7 @@
 #include "exit_panel.h"
 #include "history_panel.h"
 #include "key_guide_panel.h"
+#include "online_source_panel.h"
 #include "system_controls_panel.h"
 #include "txt_settings_panel.h"
 #include "update_panel.h"
@@ -18,6 +19,7 @@ bool HandleSelectedSettingsPanelInput(SettingId id, SettingsRuntimeInputDeps &de
   if (id == SettingId::TxtToUtf8 && HandleTxtSettingsPanelInput(deps)) return true;
   if (id == SettingId::ContributorAvatars && HandleAvatarPanelInput(deps)) return true;
   if (id == SettingId::VersionUpdate && HandleUpdatePanelInput(deps)) return true;
+  if (id == SettingId::UrlEntry && HandleOnlineSourcePanelInput(deps)) return true;
   return false;
 }
 
@@ -50,6 +52,10 @@ void DrawSelectedSettingsPanel(SettingId selected, SettingsRuntimeRenderDeps &de
   }
   if (selected == SettingId::VersionUpdate) {
     DrawUpdatePanel(deps, preview_rect, language_index, scale);
+  }
+  if (selected == SettingId::UrlEntry) {
+    DrawOnlineSourcePanel(deps, preview_rect, language_index, first_menu_item_y,
+                          sidebar_item_pitch, sidebar_item_h, scale);
   }
   if (selected == SettingId::ExitApp) {
     DrawExitPanel(deps, preview_rect, language_index);

@@ -57,6 +57,7 @@
 #include "input_manager.h"
 #include "lid_power_control.h"
 #include "menu_scene.h"
+#include "online_shelf_controller.h"
 #include "pdf_reader.h"
 #include "pdf_reader_module.h"
 #include "pdf_runtime.h"
@@ -111,8 +112,8 @@ constexpr float kCoverAspect = 2.0f / 3.0f;
 constexpr Uint8 kUnfocusedAlpha = 255;
 constexpr float kTitleMarqueePauseSec = 0.75f;
 constexpr float kTitleMarqueeSpeedPx = 48.0f;
-constexpr size_t kCoverCacheMaxEntries = 320;
-constexpr size_t kCoverCacheMaxBytes = 96u * 1024u * 1024u;
+constexpr size_t kCoverCacheMaxEntries = 96;
+constexpr size_t kCoverCacheMaxBytes = 32u * 1024u * 1024u;
 constexpr Uint8 kSidebarMaskMaxAlpha = 84;
 constexpr int kIdleWaitMs = 100;
 constexpr float kCardLerpSpeed = 18.0f;
@@ -1113,10 +1114,19 @@ int main(int, char **argv) {
       SettingId::ContributorAvatars,
       SettingId::ContactMe,
       SettingId::VersionUpdate,
+      SettingId::UrlEntry,
       SettingId::ExitApp};
   VersionUpdateState version_update_state{};
   version_update_state.current_version = DetectVersionLabel({});
   InitializeVersionUpdateState(version_update_state);
+  OnlineShelfController online_shelf_controller;
+  {
+    std::error_code ec;
+    const std::filesystem::path cwd = std::filesystem::current_path(ec);
+    const std::filesystem::path runtime_root = ec ? std::filesystem::path(".") : cwd;
+    online_shelf_controller.Initialize(runtime_root / "online_sources.ini", runtime_root / "Downloads");
+  }
+  OnlineSourceState &online_source_state = online_shelf_controller.State();
   bool lid_close_screen_off_enabled = config.Get().lid_close_screen_off;
   lid_power_controller.SetEnabled(lid_close_screen_off_enabled);
   system_settings_state.lid_close_screen_off_enabled = lid_close_screen_off_enabled;
@@ -1132,6 +1142,9 @@ int main(int, char **argv) {
   float &hold_cooldown = reader_ui.hold_cooldown;
   auto current_category = [&]() -> ShelfCategory {
     return ClampShelfCategory(shelf_state.nav_selected_index);
+  };
+  auto online_shelf_active = [&]() {
+    return online_shelf_controller.IsActive();
   };
   auto file_exists_fs = [&](const std::filesystem::path &path) -> bool {
     std::error_code ec;
@@ -1163,6 +1176,7 @@ int main(int, char **argv) {
   };
 
   auto rebuild_shelf_items = [&]() {
+    if (online_shelf_controller.RebuildShelfIfActive(shelf_runtime, shelf_state.nav_selected_index)) return;
     RebuildShelfItems(shelf_runtime, current_category(), shelf_state.current_folder, books_roots, make_shelf_runtime_deps());
   };
   std::string transient_message;
@@ -1214,10 +1228,12 @@ int main(int, char **argv) {
   };
 
   auto cover_texture_w = [&]() {
-    return std::max(FocusedCoverW(), Layout().cover_w * 2);
+    const int scale = online_shelf_active() ? 1 : 2;
+    return std::max(FocusedCoverW(), Layout().cover_w * scale);
   };
   auto cover_texture_h = [&]() {
-    return std::max(FocusedCoverH(), Layout().cover_h * 2);
+    const int scale = online_shelf_active() ? 1 : 2;
+    return std::max(FocusedCoverH(), Layout().cover_h * scale);
   };
   auto make_cover_service_deps = [&]() {
     return CoverServiceDeps{
@@ -1238,6 +1254,24 @@ int main(int, char **argv) {
         CreateNormalizedCoverTexture,
         CreateTextureFromSurface,
         remember_texture_size,
+    };
+  };
+  auto make_online_shelf_controller_deps = [&]() {
+    return OnlineShelfControllerDeps{
+        renderer,
+        &cover_cache,
+        cover_texture_w,
+        cover_texture_h,
+        kCoverAspect,
+        file_exists_fs,
+        LoadSurfaceFromFile,
+        CreateNormalizedCoverTexture,
+        CreateTextureFromSurface,
+        remember_texture_size,
+        get_texture_size,
+        forget_texture_size,
+        {},
+        {},
     };
   };
 
@@ -1263,6 +1297,10 @@ int main(int, char **argv) {
   };
 
   auto get_cover_texture = [&](const BookItem &item) -> SDL_Texture * {
+    if (item.is_remote) {
+      OnlineShelfControllerDeps deps = make_online_shelf_controller_deps();
+      return online_shelf_controller.GetCoverTexture(item, deps);
+    }
     const std::string &real_path = item_real_path(item);
     const std::string cover_cache_key = std::to_string(static_cast<int>(current_category())) + "|" +
                                         real_path + "|cover|" + std::to_string(cover_texture_w()) + "x" +
@@ -1286,6 +1324,10 @@ int main(int, char **argv) {
   };
 
   auto get_cached_cover_texture = [&](const BookItem &item) -> SDL_Texture * {
+    if (item.is_remote) {
+      OnlineShelfControllerDeps deps = make_online_shelf_controller_deps();
+      return online_shelf_controller.GetCachedCoverTexture(item, deps);
+    }
     const std::string &real_path = item_real_path(item);
     const std::string cover_cache_key = std::to_string(static_cast<int>(current_category())) + "|" +
                                         real_path + "|cover|" + std::to_string(cover_texture_w()) + "x" +
@@ -1294,6 +1336,11 @@ int main(int, char **argv) {
   };
 
   auto preload_cover_texture_for_category = [&](ShelfCategory category, const BookItem &item) {
+    if (item.is_remote) {
+      OnlineShelfControllerDeps deps = make_online_shelf_controller_deps();
+      (void)online_shelf_controller.PreloadCoverTexture(item, deps);
+      return;
+    }
     const std::string &real_path = item_real_path(item);
     const std::string cover_cache_key = std::to_string(static_cast<int>(category)) + "|" + real_path + "|cover|" +
                                         std::to_string(cover_texture_w()) + "x" +
@@ -1330,6 +1377,7 @@ int main(int, char **argv) {
 
   auto build_shelf_cover_preload_items = [&](const std::function<size_t(ShelfCategory)> &max_for_category)
       -> std::vector<BookItem> {
+    if (online_shelf_active()) return {};
     struct PreloadEntry {
       ShelfCategory category = ShelfCategory::AllComics;
       BookItem item;
@@ -1417,6 +1465,7 @@ int main(int, char **argv) {
 
   auto queue_visible_shelf_cover_lookahead = [&]() {
     if (state != AppScene::Shelf) return;
+    if (online_shelf_active()) return;
     const uint64_t signature = (shelf_runtime.content_version << 32) ^
                                (static_cast<uint64_t>(shelf_state.nav_selected_index & 0xff) << 24) ^
                                static_cast<uint64_t>(shelf_state.shelf_page & 0xffffff);
@@ -1523,6 +1572,7 @@ int main(int, char **argv) {
   };
 
   auto shelf_title_text = [&](const BookItem &item) -> std::string {
+    if (item.is_remote) return item.name;
     if (item.is_dir) return item.name;
     try {
       const std::string stem = std::filesystem::path(item.path).stem().string();
@@ -1933,6 +1983,34 @@ int main(int, char **argv) {
         [&](VersionUpdateState &update_state) { BeginVersionUpdateDownload(update_state); },
     };
   };
+  auto open_shelf_local_item = [&](const BookItem &item) {
+    auto open_local_item = MakeShelfReaderLaunchHandler(ShelfReaderLaunchHandlerDeps{
+      renderer,
+      [&]() { return Layout().screen_w; },
+      [&]() { return Layout().screen_h; },
+      reader_ui,
+      &reader_manager,
+      &pdf_runtime,
+      &epub_runtime,
+      &zip_image_runtime,
+      [&]() { return current_reader_font_pt; },
+      [&]() { return GetTxtBackgroundColor(config.Get().txt_background_color); },
+      [&]() { return GetTxtFontColor(config.Get().txt_font_color); },
+      open_text_book,
+      close_text_reader,
+      file_exists,
+      item_real_path,
+      get_compatible_progress,
+      GetLowerExt,
+      open_epub_text_book,
+      [&](const std::string &path) { history_store.Add(path); },
+      [&]() { app_shell.Scenes().EnterReader(); },
+      [&]() { app_shell.Scenes().EnterShelf(); },
+      [&]() { app_shell.StartSceneFlash(); },
+      [&](const std::string &message) { show_transient_message(message); },
+    });
+    return open_local_item(item);
+  };
   auto make_shelf_scene_input_services = [&]() {
     return ShelfSceneInputServices{
         focused_title_needs_marquee,
@@ -1941,31 +2019,23 @@ int main(int, char **argv) {
         [&](const std::string &path) { favorites_store.Add(path); },
         [&](const std::string &path) { favorites_store.Remove(path); },
         current_category,
-        MakeShelfReaderLaunchHandler(ShelfReaderLaunchHandlerDeps{
-            renderer,
-            [&]() { return Layout().screen_w; },
-            [&]() { return Layout().screen_h; },
-            reader_ui,
-            &reader_manager,
-            &pdf_runtime,
-            &epub_runtime,
-            &zip_image_runtime,
-            [&]() { return current_reader_font_pt; },
-            [&]() { return GetTxtBackgroundColor(config.Get().txt_background_color); },
-            [&]() { return GetTxtFontColor(config.Get().txt_font_color); },
-            open_text_book,
-            close_text_reader,
-            file_exists,
-            item_real_path,
-            get_compatible_progress,
-            GetLowerExt,
-            open_epub_text_book,
-            [&](const std::string &path) { history_store.Add(path); },
-            [&]() { app_shell.Scenes().EnterReader(); },
-            [&]() { app_shell.Scenes().EnterShelf(); },
-            [&]() { app_shell.StartSceneFlash(); },
-            [&](const std::string &message) { show_transient_message(message); },
-        }),
+        [&](const BookItem &item) {
+          OnlineShelfControllerDeps deps = make_online_shelf_controller_deps();
+          deps.open_local_item = open_shelf_local_item;
+          deps.show_message = [&](const std::string &message) { show_transient_message(message); };
+          return online_shelf_controller.OpenOrDownloadBook(item, deps);
+        },
+        [&](const BookItem &item) {
+          OnlineShelfControllerDeps deps = make_online_shelf_controller_deps();
+          deps.show_message = [&](const std::string &message) { show_transient_message(message); };
+          return online_shelf_controller.MarkForLocal(item, deps);
+        },
+        [&](const BookItem &item) {
+          OnlineShelfControllerDeps deps = make_online_shelf_controller_deps();
+          deps.show_message = [&](const std::string &message) { show_transient_message(message); };
+          return online_shelf_controller.UnmarkForLocal(item, deps);
+        },
+        [&]() -> int { return online_shelf_controller.NavItemCount(); },
     };
   };
   auto make_shelf_scene_render_services = [&]() {
@@ -1980,6 +2050,21 @@ int main(int, char **argv) {
           return get_title_ellipsized(raw_name, text_area_w, measure);
         },
         [&](const BookItem &item) { return shelf_title_text(item); },
+        [&](int index) -> std::string { return online_shelf_controller.NavLabelText(index); },
+        [&]() -> int { return online_shelf_controller.NavItemCount(); },
+        [&]() { return online_shelf_controller.IsActive(); },
+        [&](const BookItem &item) {
+          OnlineShelfControllerDeps deps = make_online_shelf_controller_deps();
+          return online_shelf_controller.RemoteCoverLoading(item, deps);
+        },
+        [&](const BookItem &item) -> std::string {
+          OnlineShelfControllerDeps deps = make_online_shelf_controller_deps();
+          return online_shelf_controller.RemoteBookStatusText(item, deps);
+        },
+        [&](const BookItem &item) -> float {
+          OnlineShelfControllerDeps deps = make_online_shelf_controller_deps();
+          return online_shelf_controller.RemoteBookStatusProgress(item, deps);
+        },
         forget_texture_size,
     });
   };
@@ -2013,9 +2098,11 @@ int main(int, char **argv) {
         state == AppScene::Settings &&
         menu_scene.IsSelected(menu_state, SettingId::VersionUpdate) &&
         version_update_state.download_in_progress;
+    const bool online_book_download_active = online_shelf_controller.IsDownloadActive();
     const bool has_active_animation =
         state == AppScene::Boot || input.AnyPressed() ||
         txt_transcode_job.active ||
+        online_book_download_active ||
         (reader_mode == ReaderMode::Txt && reader_ui.Txt().open && reader_ui.Txt().loading) ||
         version_update_download_active ||
         contributor_marquee_active ||
@@ -2125,6 +2212,12 @@ int main(int, char **argv) {
     }
 
     system_status.Poll(now);
+
+    const OnlineShelfControllerTickResult online_tick = online_shelf_controller.TickAfterInput(shelf_runtime);
+    if (online_tick.download_finished) {
+      show_transient_message(online_tick.download_success ? u8"\u4e0b\u8f7d\u6210\u529f"
+                                                          : u8"\u4e0b\u8f7d\u5931\u8d25");
+    }
 
     if (reader_mode == ReaderMode::Txt && reader_ui.Txt().open && reader_ui.Txt().loading) {
       const bool txt_scroll_input_active =
@@ -2296,9 +2389,35 @@ int main(int, char **argv) {
           contributor_avatar_state,
           contributor_avatar_entries.size(),
           version_update_state,
+          online_source_state,
           make_menu_scene_input_services(),
       };
       menu_scene.HandleInput(menu_input_context);
+      const OnlineShelfControllerTickResult online_after_input = online_shelf_controller.TickAfterInput(shelf_runtime);
+      if (online_after_input.refresh_roots_after_disconnect) {
+        online_shelf_controller.HandleDeferredDisconnect(books_roots, cover_roots);
+        books_roots = storage_paths::DetectBooksRoots();
+        cover_roots = storage_paths::DetectCoverRoots();
+        shelf_state.nav_selected_index = 0;
+        shelf_scene.ResetToCategoryRoot(shelf_state);
+        clear_cover_cache();
+        rebuild_shelf_items();
+        reset_shelf_cover_stream_preload();
+        app_shell.Scenes().EnterShelf();
+      }
+      if (online_after_input.online_shelf_needs_reset) {
+        shelf_scene.ResetToCategoryRoot(shelf_state);
+      }
+      if (online_after_input.cover_cache_changed) {
+        clear_cover_cache();
+      }
+      if (online_after_input.shelf_items_changed) {
+        rebuild_shelf_items();
+      }
+      if (online_after_input.online_shelf_needs_reset || online_after_input.shelf_items_changed) {
+        reset_shelf_cover_stream_preload();
+        app_shell.Scenes().EnterShelf();
+      }
     } else if (state == AppScene::Reader) {
       ReaderSceneInputDeps reader_input_deps{
           input,
@@ -2455,11 +2574,33 @@ int main(int, char **argv) {
             contributor_avatar_entries,
             contributor_avatar_state,
             version_update_state,
+            online_source_state,
             make_menu_scene_layout_metrics(),
             make_settings_render_services(draw_volume_overlay),
         };
-        menu_scene.Draw(menu_render_context);
-        draw_system_status_overlay();
+      menu_scene.Draw(menu_render_context);
+      draw_system_status_overlay();
+      if (online_shelf_controller.HasDeferredConnect()) {
+        app_shell.Present();
+        if (online_shelf_controller.HandleDeferredConnect()) {
+          const OnlineShelfControllerTickResult online_after_connect =
+              online_shelf_controller.TickAfterInput(shelf_runtime);
+          if (online_after_connect.online_shelf_needs_reset) {
+          shelf_scene.ResetToCategoryRoot(shelf_state);
+          }
+          if (online_after_connect.cover_cache_changed) {
+          clear_cover_cache();
+          }
+          if (online_after_connect.shelf_items_changed) {
+          rebuild_shelf_items();
+          }
+          if (online_after_connect.online_shelf_needs_reset || online_after_connect.shelf_items_changed) {
+          reset_shelf_cover_stream_preload();
+          app_shell.Scenes().EnterShelf();
+          }
+        }
+        continue;
+      }
       }
 
 #ifdef HAVE_SDL2_TTF
@@ -2486,6 +2627,20 @@ int main(int, char **argv) {
     app_shell.DrawSceneFlash();
 
     app_shell.Present();
+    if (state == AppScene::Shelf) {
+      const OnlineShelfControllerTickResult online_after_present =
+          online_shelf_controller.TickAfterPresent(shelf_state.nav_selected_index, shelf_state.focus_index,
+                                                   shelf_state.shelf_page, ShelfGridCols());
+      if (online_after_present.cover_cache_changed) {
+        clear_cover_cache();
+      }
+      if (online_after_present.shelf_items_changed) {
+        rebuild_shelf_items();
+      }
+      if (online_after_present.online_shelf_needs_reset) {
+        reset_shelf_cover_stream_preload();
+      }
+    }
     process_shelf_cover_stream_preload();
 
     app_shell.ThrottleFrame(frame_begin_ticks, contributor_marquee_active, has_active_animation, needs_periodic_tick);

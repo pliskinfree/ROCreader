@@ -52,6 +52,14 @@ const char *RolePrefix(UiTextRole role) {
   if (role == UiTextRole::Reader) return "r|";
   return "";
 }
+
+bool FontHasRequiredChineseGlyphs(TTF_Font *font) {
+  if (!font) return false;
+  return TTF_GlyphIsProvided(font, 0x4E2D) != 0 &&
+         TTF_GlyphIsProvided(font, 0x6587) != 0 &&
+         TTF_GlyphIsProvided(font, 0x660E) != 0 &&
+         TTF_GlyphIsProvided(font, 0x671D) != 0;
+}
 #endif
 }
 
@@ -98,11 +106,6 @@ void OpenUiFonts(UiTextCacheState &state, const std::filesystem::path &exe_path,
       (ui_path / "fonts" / "ui_font_02.ttf").string(),
       (ui_path / "fonts" / "ui_font.ttf").string(),
       (ui_path / "fonts" / "ui_font.otf").string(),
-      "C:/Windows/Fonts/msyh.ttc",
-      "C:/Windows/Fonts/msyh.ttf",
-      "C:/Windows/Fonts/simhei.ttf",
-      "C:/Windows/Fonts/simsun.ttc",
-      "C:/Windows/Fonts/arial.ttf",
       "/Roms/APPS/ROCreader/fonts/ui_font_02.ttf",
       "/Roms/APPS/ROCreader/fonts/ui_font.ttf",
       "/mnt/mmc/ROCreader/fonts/ui_font_02.ttf",
@@ -113,11 +116,10 @@ void OpenUiFonts(UiTextCacheState &state, const std::filesystem::path &exe_path,
       "/mnt/mmc2/ROCreader/fonts/ui_font.ttf",
       "/mnt/mmc2/Roms/ROCreader/fonts/ui_font_02.ttf",
       "/mnt/mmc2/Roms/ROCreader/fonts/ui_font.ttf",
-      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-      "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
   };
   for (const auto &path : candidates) {
-    if (!std::filesystem::exists(path)) continue;
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || ec) continue;
     if (VerboseLogEnabled()) {
       std::cout << "[native_h700] ui font try: " << path << "\n";
     }
@@ -127,10 +129,23 @@ void OpenUiFonts(UiTextCacheState &state, const std::filesystem::path &exe_path,
                 << " err=" << TTF_GetError() << "\n";
       continue;
     }
+    if (!FontHasRequiredChineseGlyphs(font)) {
+      std::cerr << "[native_h700] ui font rejected: missing required Chinese glyphs path="
+                << path << "\n";
+      TTF_CloseFont(font);
+      continue;
+    }
     TTF_Font *title_font = TTF_OpenFont(path.c_str(), title_font_pt);
     if (!title_font) {
       std::cerr << "[native_h700] ui font open failed: title path=" << path
                 << " err=" << TTF_GetError() << "\n";
+      TTF_CloseFont(font);
+      continue;
+    }
+    if (!FontHasRequiredChineseGlyphs(title_font)) {
+      std::cerr << "[native_h700] ui font rejected: title missing required Chinese glyphs path="
+                << path << "\n";
+      TTF_CloseFont(title_font);
       TTF_CloseFont(font);
       continue;
     }
@@ -139,6 +154,14 @@ void OpenUiFonts(UiTextCacheState &state, const std::filesystem::path &exe_path,
       std::cerr << "[native_h700] ui font open failed: reader path=" << path
                 << " pt=" << reader_font_pt
                 << " err=" << TTF_GetError() << "\n";
+      TTF_CloseFont(title_font);
+      TTF_CloseFont(font);
+      continue;
+    }
+    if (!FontHasRequiredChineseGlyphs(reader_font)) {
+      std::cerr << "[native_h700] ui font rejected: reader missing required Chinese glyphs path="
+                << path << "\n";
+      TTF_CloseFont(reader_font);
       TTF_CloseFont(title_font);
       TTF_CloseFont(font);
       continue;
@@ -171,7 +194,7 @@ void OpenUiFonts(UiTextCacheState &state, const std::filesystem::path &exe_path,
       TTF_CloseFont(state.font);
       state.font = nullptr;
     }
-    std::cerr << "[native_h700] warning: ui fonts not fully available; body/title/reader text disabled\n";
+    std::cerr << "[native_h700] warning: bundled Chinese UI font not available; body/title/reader text disabled\n";
   }
 #endif
 }

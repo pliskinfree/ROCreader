@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <sstream>
 
 ShelfCategory ClampShelfCategory(int nav_selected_index) {
   if (nav_selected_index <= 0) return ShelfCategory::AllComics;
@@ -77,8 +78,10 @@ void HandleShelfInput(ShelfRuntimeInputDeps &deps) {
     deps.grid_item_anims.clear();
   };
 
+  const int nav_count = std::max(1, deps.nav_item_count ? deps.nav_item_count() : 4);
+
   if (deps.input.IsJustPressed(Button::L1)) {
-    deps.nav_selected_index = (deps.nav_selected_index + 3) % 4;
+    deps.nav_selected_index = (deps.nav_selected_index + nav_count - 1) % nav_count;
     deps.current_folder.clear();
     if (deps.rebuild_shelf_items) deps.rebuild_shelf_items();
     deps.focus_index = 0;
@@ -86,7 +89,7 @@ void HandleShelfInput(ShelfRuntimeInputDeps &deps) {
     reset_grid_page_state();
     sync_focus_with_page();
   } else if (deps.input.IsJustPressed(Button::R1)) {
-    deps.nav_selected_index = (deps.nav_selected_index + 1) % 4;
+    deps.nav_selected_index = (deps.nav_selected_index + 1) % nav_count;
     deps.current_folder.clear();
     if (deps.rebuild_shelf_items) deps.rebuild_shelf_items();
     deps.focus_index = 0;
@@ -152,8 +155,16 @@ void HandleShelfInput(ShelfRuntimeInputDeps &deps) {
   } else if (deps.input.IsJustPressed(Button::X) && !deps.shelf_runtime.items.empty()) {
     const BookItem &item = deps.shelf_runtime.items[deps.focus_index];
     if (!item.is_dir) {
-      if (deps.add_favorite) deps.add_favorite(item.real_path.empty() ? item.path : item.real_path);
-      if (deps.current_category && deps.current_category() == ShelfCategory::Collections) {
+      if (item.is_remote) {
+        if (deps.mark_remote_for_local && deps.mark_remote_for_local(item)) {
+          if (deps.rebuild_shelf_items) deps.rebuild_shelf_items();
+          reset_grid_page_state();
+          sync_focus_with_page();
+        }
+      } else {
+        if (deps.add_favorite) deps.add_favorite(item.real_path.empty() ? item.path : item.real_path);
+      }
+      if (!item.is_remote && deps.current_category && deps.current_category() == ShelfCategory::Collections) {
         if (deps.rebuild_shelf_items) deps.rebuild_shelf_items();
         reset_grid_page_state();
         sync_focus_with_page();
@@ -162,8 +173,16 @@ void HandleShelfInput(ShelfRuntimeInputDeps &deps) {
   } else if (deps.input.IsJustPressed(Button::Y) && !deps.shelf_runtime.items.empty()) {
     const BookItem &item = deps.shelf_runtime.items[deps.focus_index];
     if (!item.is_dir) {
-      if (deps.remove_favorite) deps.remove_favorite(item.real_path.empty() ? item.path : item.real_path);
-      if (deps.current_category && deps.current_category() == ShelfCategory::Collections) {
+      if (item.is_remote) {
+        if (deps.unmark_remote_for_local && deps.unmark_remote_for_local(item)) {
+          if (deps.rebuild_shelf_items) deps.rebuild_shelf_items();
+          reset_grid_page_state();
+          sync_focus_with_page();
+        }
+      } else {
+        if (deps.remove_favorite) deps.remove_favorite(item.real_path.empty() ? item.path : item.real_path);
+      }
+      if (!item.is_remote && deps.current_category && deps.current_category() == ShelfCategory::Collections) {
         if (deps.rebuild_shelf_items) deps.rebuild_shelf_items();
         reset_grid_page_state();
         sync_focus_with_page();
@@ -211,6 +230,10 @@ void DestroyShelfRenderCache(ShelfRenderCache &cache,
       SDL_DestroyTexture(kv.second);
     }
   }
+  if (cache.online_nav_pill_texture) {
+    if (forget_texture_size) forget_texture_size(cache.online_nav_pill_texture);
+    SDL_DestroyTexture(cache.online_nav_pill_texture);
+  }
   cache = ShelfRenderCache{};
 }
 
@@ -228,6 +251,83 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
     if (tw <= 0 || th <= 0) return;
     SDL_Rect dst{x, y, tw, th};
     SDL_RenderCopy(deps.renderer, tex, nullptr, &dst);
+  };
+
+  auto draw_filled_round_rect = [&](SDL_Rect rect, int radius, SDL_Color color) {
+    radius = std::max(0, std::min(radius, std::min(rect.w, rect.h) / 2));
+    if (radius <= 0) {
+      deps.draw_rect(rect.x, rect.y, rect.w, rect.h, color, true);
+      return;
+    }
+    for (int y = 0; y < rect.h; ++y) {
+      int inset = 0;
+      if (y < radius) {
+        const int dy = radius - y - 1;
+        inset = radius - static_cast<int>(std::sqrt(static_cast<double>(radius * radius - dy * dy)));
+      } else if (y >= rect.h - radius) {
+        const int dy = y - (rect.h - radius);
+        inset = radius - static_cast<int>(std::sqrt(static_cast<double>(radius * radius - dy * dy)));
+      }
+      const int line_w = std::max(0, rect.w - inset * 2);
+      if (line_w > 0) deps.draw_rect(rect.x + inset, rect.y + y, line_w, 1, color, true);
+    }
+  };
+
+  auto get_online_nav_pill_texture = [&](int w, int h) -> SDL_Texture * {
+    w = std::max(1, w);
+    h = std::max(1, h);
+    if (deps.render_cache.online_nav_pill_texture &&
+        deps.render_cache.online_nav_pill_h == h &&
+        deps.render_cache.online_nav_pill_w == w) {
+      return deps.render_cache.online_nav_pill_texture;
+    }
+    if (deps.render_cache.online_nav_pill_texture) {
+      if (deps.forget_texture_size) deps.forget_texture_size(deps.render_cache.online_nav_pill_texture);
+      SDL_DestroyTexture(deps.render_cache.online_nav_pill_texture);
+      deps.render_cache.online_nav_pill_texture = nullptr;
+    }
+    SDL_Texture *texture = SDL_CreateTexture(deps.renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, w, h);
+    if (!texture) return nullptr;
+    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    SDL_Texture *old_target = SDL_GetRenderTarget(deps.renderer);
+    if (SDL_SetRenderTarget(deps.renderer, texture) != 0) {
+      SDL_DestroyTexture(texture);
+      return nullptr;
+    }
+    SDL_SetRenderDrawColor(deps.renderer, 0, 0, 0, 0);
+    SDL_RenderClear(deps.renderer);
+    for (int y = 0; y < h; ++y) {
+      const float cy = static_cast<float>(h - 1) * 0.5f;
+      const float radius = static_cast<float>(h) * 0.5f;
+      float inset = 0.0f;
+      if (y < h / 2) {
+        const float dy = cy - static_cast<float>(y);
+        inset = radius - std::sqrt(std::max(0.0f, radius * radius - dy * dy));
+      } else {
+        const float dy = static_cast<float>(y) - cy;
+        inset = radius - std::sqrt(std::max(0.0f, radius * radius - dy * dy));
+      }
+      const int x = std::max(0, static_cast<int>(std::floor(inset)));
+      const int line_w = std::max(0, w - x * 2);
+      const Uint8 edge_alpha = static_cast<Uint8>(std::clamp(255.0f * (1.0f - (inset - std::floor(inset))), 160.0f, 255.0f));
+      SDL_SetRenderDrawColor(deps.renderer, 105, 113, 130, 255);
+      SDL_RenderDrawLine(deps.renderer, x, y, x + line_w - 1, y);
+      if (x > 0) {
+        SDL_SetRenderDrawColor(deps.renderer, 105, 113, 130, edge_alpha);
+        SDL_RenderDrawPoint(deps.renderer, x - 1, y);
+        SDL_RenderDrawPoint(deps.renderer, w - x, y);
+      }
+    }
+    SDL_SetRenderTarget(deps.renderer, old_target);
+    deps.render_cache.online_nav_pill_texture = texture;
+    deps.render_cache.online_nav_pill_w = w;
+    deps.render_cache.online_nav_pill_h = h;
+    if (deps.get_texture_size) {
+      int tw = 0;
+      int th = 0;
+      deps.get_texture_size(texture, tw, th);
+    }
+    return texture;
   };
 
   struct RenderEntry {
@@ -312,6 +412,7 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
   clear_static_page_cache_if_needed();
 
   auto draw_cover = [&](const BookItem &item, SDL_Rect dst, Uint8 alpha) {
+    bool drew_cover = false;
     SDL_Texture *cover_tex = deps.get_cover_texture(item);
     if (cover_tex) {
       int tw = 0;
@@ -330,11 +431,63 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
         SDL_SetTextureAlphaMod(cover_tex, alpha);
         SDL_RenderCopy(deps.renderer, cover_tex, &src, &dst);
         SDL_SetTextureAlphaMod(cover_tex, 255);
-        return;
+        drew_cover = true;
       }
     }
-    SDL_Color c = item.is_dir ? SDL_Color{86, 121, 157, alpha} : SDL_Color{66, 81, 102, alpha};
-    deps.draw_rect(dst.x, dst.y, dst.w, dst.h, c, true);
+    if (!drew_cover && item.is_remote && deps.ui_assets.book_cover_pdf) {
+      SDL_SetTextureAlphaMod(deps.ui_assets.book_cover_pdf, alpha);
+      SDL_RenderCopy(deps.renderer, deps.ui_assets.book_cover_pdf, nullptr, &dst);
+      SDL_SetTextureAlphaMod(deps.ui_assets.book_cover_pdf, 255);
+      drew_cover = true;
+    } else if (!drew_cover) {
+      SDL_Color c = item.is_dir ? SDL_Color{86, 121, 157, alpha} : SDL_Color{66, 81, 102, alpha};
+      deps.draw_rect(dst.x, dst.y, dst.w, dst.h, c, true);
+    }
+
+    std::string status_text;
+    if (item.is_remote && deps.remote_book_status_text) status_text = deps.remote_book_status_text(item);
+    if (status_text.empty() && item.is_remote && deps.remote_cover_loading && deps.remote_cover_loading(item)) {
+      status_text = u8"\u52a0\u8f7d\u4e2d";
+    }
+    if (!status_text.empty()) {
+      const int bar_h = std::max(20, std::min(28, dst.h / 6));
+      deps.draw_rect(dst.x, dst.y, dst.w, bar_h,
+                     SDL_Color{0, 0, 0, static_cast<Uint8>(std::min<int>(170, alpha))}, true);
+      if (status_text == u8"\u52a0\u8f7d\u4e2d" || status_text == u8"\u4e0b\u8f7d\u4e2d") {
+        const int progress_h = std::max(2, std::min(4, bar_h / 6));
+        const int progress_y = dst.y + bar_h - progress_h;
+        deps.draw_rect(dst.x, progress_y, dst.w, progress_h,
+                       SDL_Color{36, 58, 76, static_cast<Uint8>(std::min<int>(150, alpha))}, true);
+        float progress = -1.0f;
+        if (deps.remote_book_status_progress) progress = deps.remote_book_status_progress(item);
+        if (progress >= 0.0f) {
+          const int fill_w = std::clamp(static_cast<int>(std::round(static_cast<float>(dst.w) * progress)), 0, dst.w);
+          if (fill_w > 0) {
+            deps.draw_rect(dst.x, progress_y, fill_w, progress_h,
+                           SDL_Color{139, 214, 255, static_cast<Uint8>(std::min<int>(230, alpha))}, true);
+          }
+        } else {
+          const int fill_w = std::max(10, dst.w / 3);
+          const uint32_t ticks = SDL_GetTicks();
+          const int travel = std::max(1, dst.w + fill_w);
+          const int x = dst.x - fill_w + static_cast<int>((ticks / 8) % static_cast<uint32_t>(travel));
+          const int clipped_x = std::max(dst.x, x);
+          const int clipped_w = std::min(dst.x + dst.w, x + fill_w) - clipped_x;
+          if (clipped_w > 0) {
+            deps.draw_rect(clipped_x, progress_y, clipped_w, progress_h,
+                           SDL_Color{139, 214, 255, static_cast<Uint8>(std::min<int>(230, alpha))}, true);
+          }
+        }
+      }
+      int tw = 0;
+      int th = 0;
+      SDL_Texture *text_tex = nullptr;
+      deps.get_text_texture(status_text, SDL_Color{246, 248, 252, alpha}, tw, th, text_tex);
+      if (text_tex) {
+        SDL_Rect td{dst.x + std::max(0, (dst.w - tw) / 2), dst.y + std::max(0, (bar_h - th) / 2), tw, th};
+        SDL_RenderCopy(deps.renderer, text_tex, nullptr, &td);
+      }
+    }
   };
 
   auto draw_cached_cover = [&](const BookItem &item, SDL_Rect dst, Uint8 alpha) {
@@ -427,6 +580,64 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
     SDL_RenderSetClipRect(deps.renderer, nullptr);
   };
 
+  auto draw_nav_chrome = [&]() {
+    if (deps.ui_assets.nav_l1_icon) draw_native(deps.ui_assets.nav_l1_icon, deps.layout.nav_l1_x, deps.layout.nav_l1_y);
+    if (deps.ui_assets.nav_r1_icon) draw_native(deps.ui_assets.nav_r1_icon, deps.layout.nav_r1_x, deps.layout.nav_r1_y);
+    const std::array<std::string, 4> default_nav_labels = {"ALL COMICS", "ALL BOOKS", "COLLECTIONS", "HISTORY"};
+    const int nav_count = std::max(1, deps.nav_item_count ? deps.nav_item_count() : 4);
+    const int base_total_w = deps.layout.nav_slot_w * 4;
+    const int nav_slot_w = std::max(1, base_total_w / nav_count);
+    const bool online = deps.online_shelf_active && deps.online_shelf_active();
+    const int nav_pill_h = 32;
+    SDL_Color nav_text{238, 242, 250, 255};
+    std::vector<int> text_widths(static_cast<size_t>(nav_count), 0);
+    std::vector<int> text_heights(static_cast<size_t>(nav_count), 0);
+    std::vector<SDL_Texture *> text_textures(static_cast<size_t>(nav_count), nullptr);
+    for (int i = 0; i < nav_count; ++i) {
+      std::string label = deps.nav_label_text ? deps.nav_label_text(i) : default_nav_labels[i];
+      const int max_label_w = std::max(8, nav_slot_w - 6);
+      auto measure_nav_label = [&](const std::string &text) -> int {
+        int tw = 0;
+        int th = 0;
+        SDL_Texture *tex = nullptr;
+        deps.get_text_texture(text, nav_text, tw, th, tex);
+        return tex ? tw : static_cast<int>(text.size()) * 8;
+      };
+      if (deps.get_title_ellipsized && measure_nav_label(label) > max_label_w) {
+        label = deps.get_title_ellipsized(label, max_label_w, measure_nav_label);
+      }
+      deps.get_text_texture(label, nav_text, text_widths[static_cast<size_t>(i)],
+                            text_heights[static_cast<size_t>(i)], text_textures[static_cast<size_t>(i)]);
+    }
+    if (online) {
+      const int selected = std::clamp(deps.nav_selected_index, 0, nav_count - 1);
+      const int selected_center = deps.layout.nav_start_x + selected * nav_slot_w + nav_slot_w / 2;
+      const int pill_w = std::max(1, nav_slot_w - 6);
+      SDL_Rect pill{selected_center - pill_w / 2, deps.layout.nav_y, pill_w, nav_pill_h};
+      if (SDL_Texture *pill_texture = get_online_nav_pill_texture(pill_w, nav_pill_h)) {
+        SDL_RenderCopy(deps.renderer, pill_texture, nullptr, &pill);
+      } else {
+        draw_filled_round_rect(pill, nav_pill_h / 2, SDL_Color{105, 113, 130, 255});
+      }
+    } else if (deps.ui_assets.nav_selected_pill) {
+      int pw = 0;
+      int ph = 0;
+      deps.get_texture_size(deps.ui_assets.nav_selected_pill, pw, ph);
+      const int slot_center_x =
+          deps.layout.nav_start_x + deps.nav_selected_index * deps.layout.nav_slot_w + deps.layout.nav_slot_w / 2;
+      draw_native(deps.ui_assets.nav_selected_pill, slot_center_x - pw / 2, deps.layout.nav_y);
+    }
+    for (int i = 0; i < nav_count; ++i) {
+      SDL_Texture *tex = text_textures[static_cast<size_t>(i)];
+      if (!tex) continue;
+      const int slot_x = deps.layout.nav_start_x + i * nav_slot_w;
+      const int tx = slot_x + std::max(0, (nav_slot_w - text_widths[static_cast<size_t>(i)]) / 2);
+      const int ty = deps.layout.nav_y + std::max(0, (nav_pill_h - text_heights[static_cast<size_t>(i)]) / 2);
+      SDL_Rect td{tx, ty, text_widths[static_cast<size_t>(i)], text_heights[static_cast<size_t>(i)]};
+      SDL_RenderCopy(deps.renderer, tex, nullptr, &td);
+    }
+  };
+
   auto render_shelf_static_layer = [&]() {
     if (deps.ui_assets.background_main) {
       SDL_Rect bg_dst{0, 0, deps.layout.screen_w, deps.layout.screen_h};
@@ -457,32 +668,7 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
       deps.get_texture_size(deps.ui_assets.bottom_hint_bar, bw, bh);
       draw_native(deps.ui_assets.bottom_hint_bar, 0, deps.layout.screen_h - bh);
     }
-    if (deps.ui_assets.nav_l1_icon) draw_native(deps.ui_assets.nav_l1_icon, deps.layout.nav_l1_x, deps.layout.nav_l1_y);
-    if (deps.ui_assets.nav_r1_icon) draw_native(deps.ui_assets.nav_r1_icon, deps.layout.nav_r1_x, deps.layout.nav_r1_y);
-    int nav_pill_h = 32;
-    if (deps.ui_assets.nav_selected_pill) {
-      int pw = 0;
-      int ph = 0;
-      deps.get_texture_size(deps.ui_assets.nav_selected_pill, pw, ph);
-      if (ph > 0) nav_pill_h = ph;
-      const int slot_center_x =
-          deps.layout.nav_start_x + deps.nav_selected_index * deps.layout.nav_slot_w + deps.layout.nav_slot_w / 2;
-      draw_native(deps.ui_assets.nav_selected_pill, slot_center_x - pw / 2, deps.layout.nav_y);
-    }
-    const std::array<std::string, 4> nav_labels = {"ALL COMICS", "ALL BOOKS", "COLLECTIONS", "HISTORY"};
-    SDL_Color nav_text{238, 242, 250, 255};
-    for (int i = 0; i < static_cast<int>(nav_labels.size()); ++i) {
-      int tw = 0;
-      int th = 0;
-      SDL_Texture *tex = nullptr;
-      deps.get_text_texture(nav_labels[i], nav_text, tw, th, tex);
-      if (!tex) continue;
-      const int slot_x = deps.layout.nav_start_x + i * deps.layout.nav_slot_w;
-      const int tx = slot_x + std::max(0, (deps.layout.nav_slot_w - tw) / 2);
-      const int ty = deps.layout.nav_y + std::max(0, (nav_pill_h - th) / 2);
-      SDL_Rect td{tx, ty, tw, th};
-      SDL_RenderCopy(deps.renderer, tex, nullptr, &td);
-    }
+    draw_nav_chrome();
   };
 
   auto page_covers_are_cached = [&](int page) {
@@ -565,35 +751,11 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
       deps.get_texture_size(deps.ui_assets.bottom_hint_bar, bw, bh);
       draw_native(deps.ui_assets.bottom_hint_bar, 0, deps.layout.screen_h - bh);
     }
-    if (deps.ui_assets.nav_l1_icon) draw_native(deps.ui_assets.nav_l1_icon, deps.layout.nav_l1_x, deps.layout.nav_l1_y);
-    if (deps.ui_assets.nav_r1_icon) draw_native(deps.ui_assets.nav_r1_icon, deps.layout.nav_r1_x, deps.layout.nav_r1_y);
-    int nav_pill_h = 32;
-    if (deps.ui_assets.nav_selected_pill) {
-      int pw = 0;
-      int ph = 0;
-      deps.get_texture_size(deps.ui_assets.nav_selected_pill, pw, ph);
-      if (ph > 0) nav_pill_h = ph;
-      const int slot_center_x =
-          deps.layout.nav_start_x + deps.nav_selected_index * deps.layout.nav_slot_w + deps.layout.nav_slot_w / 2;
-      draw_native(deps.ui_assets.nav_selected_pill, slot_center_x - pw / 2, deps.layout.nav_y);
-    }
-    const std::array<std::string, 4> nav_labels = {"ALL COMICS", "ALL BOOKS", "COLLECTIONS", "HISTORY"};
-    SDL_Color nav_text{238, 242, 250, 255};
-    for (int i = 0; i < static_cast<int>(nav_labels.size()); ++i) {
-      int tw = 0;
-      int th = 0;
-      SDL_Texture *tex = nullptr;
-      deps.get_text_texture(nav_labels[i], nav_text, tw, th, tex);
-      if (!tex) continue;
-      const int slot_x = deps.layout.nav_start_x + i * deps.layout.nav_slot_w;
-      const int tx = slot_x + std::max(0, (deps.layout.nav_slot_w - tw) / 2);
-      const int ty = deps.layout.nav_y + std::max(0, (nav_pill_h - th) / 2);
-      SDL_Rect td{tx, ty, tw, th};
-      SDL_RenderCopy(deps.renderer, tex, nullptr, &td);
-    }
+    draw_nav_chrome();
   };
 
-  const bool can_use_static_page_cache = deps.renderer_supports_target_textures && !deps.page_animating &&
+  const bool can_use_static_page_cache = !(deps.online_shelf_active && deps.online_shelf_active()) &&
+                                         deps.renderer_supports_target_textures && !deps.page_animating &&
                                          !deps.any_grid_animating;
   const bool can_use_shelf_render_cache = false && deps.renderer_supports_target_textures &&
                                           !deps.page_animating && !deps.any_grid_animating;

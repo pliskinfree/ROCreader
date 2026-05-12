@@ -272,6 +272,7 @@ find_so_in_libdir() {
   "$PKG_CMD" --exists alsa && echo "[low_glibc] pkg OK: alsa" || echo "[low_glibc] pkg MISS: alsa"
   "$PKG_CMD" --exists poppler-cpp && echo "[low_glibc] pkg OK: poppler-cpp" || echo "[low_glibc] pkg MISS: poppler-cpp"
   "$PKG_CMD" --exists libzip && echo "[low_glibc] pkg OK: libzip" || echo "[low_glibc] pkg MISS: libzip"
+  "$PKG_CMD" --exists libcurl && echo "[low_glibc] pkg OK: libcurl" || echo "[low_glibc] pkg MISS: libcurl"
   "$PKG_CMD" --exists mupdf && echo "[low_glibc] pkg OK: mupdf" || echo "[low_glibc] pkg MISS: mupdf"
   "$PKG_CMD" --exists fitz && echo "[low_glibc] pkg OK: fitz" || echo "[low_glibc] pkg MISS: fitz"
   if [ -f "$SYSROOT/usr/include/zip.h" ]; then
@@ -300,6 +301,8 @@ find_so_in_libdir() {
   FALLBACK_POPPLER_LIBS=""
   FALLBACK_LIBZIP_CFLAGS=""
   FALLBACK_LIBZIP_LIBS=""
+  FALLBACK_CURL_CFLAGS=""
+  FALLBACK_CURL_LIBS=""
   FALLBACK_MUPDF_CFLAGS=""
   FALLBACK_MUPDF_LIBS=""
 
@@ -352,6 +355,33 @@ find_so_in_libdir() {
     FALLBACK_LIBZIP_CFLAGS="-I$SYSROOT/usr/include"
     FALLBACK_LIBZIP_LIBS="-L$LIBDIR -lzip"
     echo "[low_glibc] fallback enable: libzip"
+  fi
+
+  TARGET_CURL_SO="$(find_so_in_libdir curl || true)"
+  CURL_HEADER_DIR=""
+  for d in \
+    "$SYSROOT/usr/include" \
+    "$SYSROOT/usr/include/aarch64-linux-gnu" \
+    "$SYSROOT/usr/include/arm-linux-gnueabihf"; do
+    if [ -f "$d/curl/curl.h" ]; then
+      CURL_HEADER_DIR="$d"
+      break
+    fi
+  done
+  if [ -n "$CURL_HEADER_DIR" ] && [ -n "$TARGET_CURL_SO" ]; then
+    FALLBACK_CURL_CFLAGS="-I$CURL_HEADER_DIR"
+    FALLBACK_CURL_LIBS="-L$LIBDIR -lcurl"
+    for dep in ssl crypto z nghttp2 idn2 psl brotlidec zstd mbedtls mbedx509 mbedcrypto; do
+      if has_so_in_sysroot "$dep"; then
+        dep_so="$(find_so_in_sysroot "$dep" || true)"
+        if [ -n "$dep_so" ]; then
+          FALLBACK_CURL_LIBS="$FALLBACK_CURL_LIBS $dep_so"
+        else
+          FALLBACK_CURL_LIBS="$FALLBACK_CURL_LIBS -l$dep"
+        fi
+      fi
+    done
+    echo "[low_glibc] fallback enable: libcurl"
   fi
 
   MUPDF_STATIC_ABS="$(find_a_in_sysroot mupdf || true)"
@@ -452,6 +482,20 @@ find_so_in_libdir() {
   echo "[low_glibc] LIBZIP_CFLAGS=$LIBZIP_CFLAGS_FINAL"
   echo "[low_glibc] LIBZIP_LIBS=$LIBZIP_LIBS_FINAL"
 
+  CURL_CFLAGS_FINAL="$FALLBACK_CURL_CFLAGS"
+  CURL_LIBS_FINAL="$FALLBACK_CURL_LIBS"
+  if [ -z "$CURL_CFLAGS_FINAL" ]; then
+    CURL_CFLAGS_FINAL="$("$PKG_CMD" --cflags libcurl 2>/dev/null || true)"
+  fi
+  if [ -z "$CURL_LIBS_FINAL" ]; then
+    CURL_LIBS_FINAL="$("$PKG_CMD" --libs libcurl 2>/dev/null || true)"
+  fi
+  if [ -z "$CURL_CFLAGS_FINAL" ] || [ -z "$CURL_LIBS_FINAL" ]; then
+    echo "[low_glibc] libcurl not enabled for target build; online transport will fall back to curl/wget commands"
+  fi
+  echo "[low_glibc] CURL_CFLAGS=$CURL_CFLAGS_FINAL"
+  echo "[low_glibc] CURL_LIBS=$CURL_LIBS_FINAL"
+
   ALSA_CFLAGS_FINAL="$FALLBACK_ALSA_CFLAGS"
   ALSA_LIBS_FINAL="$FALLBACK_ALSA_LIBS"
   if [ -z "$ALSA_CFLAGS_FINAL" ]; then
@@ -529,6 +573,8 @@ find_so_in_libdir() {
     POPPLER_LIBS="$FALLBACK_POPPLER_LIBS" \
     LIBZIP_CFLAGS="$LIBZIP_CFLAGS_FINAL" \
     LIBZIP_LIBS="$LIBZIP_LIBS_FINAL" \
+    CURL_CFLAGS="$CURL_CFLAGS_FINAL" \
+    CURL_LIBS="$CURL_LIBS_FINAL" \
     WEBP_CFLAGS="$WEBP_CFLAGS_FINAL" \
     WEBP_LIBS="$WEBP_LIBS_FINAL" \
     JPEG_CFLAGS="$JPEG_CFLAGS_FINAL" \
@@ -582,11 +628,17 @@ find_so_in_libdir() {
   fi
   if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
     FONT_CHECK="$RUNTIME_DIR/resources/fonts/ui_font.ttf"
+    CJK_FONT_CHECK="$RUNTIME_DIR/resources/fonts/ui_font_02.ttf"
   else
     FONT_CHECK="$RUNTIME_DIR/fonts/ui_font.ttf"
+    CJK_FONT_CHECK="$RUNTIME_DIR/fonts/ui_font_02.ttf"
   fi
   if [ ! -f "$FONT_CHECK" ]; then
     echo "[low_glibc] ERROR: packaged font missing in runtime dir: ui_font.ttf"
+    exit 1
+  fi
+  if [ ! -f "$CJK_FONT_CHECK" ]; then
+    echo "[low_glibc] ERROR: packaged Chinese font missing in runtime dir: ui_font_02.ttf"
     exit 1
   fi
   if [ -d "$SELF_DIR/sounds" ]; then
@@ -606,6 +658,12 @@ find_so_in_libdir() {
     cp "$SELF_DIR/native_config.ini" "$RUNTIME_DIR/native_config.ini"
     [ "$TRIMUI_BRICK_LAYOUT" = "1" ] && cp "$SELF_DIR/native_config.ini" "$RUNTIME_DIR/reader.cfg"
   fi
+  if [ -f "$SELF_DIR/online_sources.release.ini" ]; then
+    cp "$SELF_DIR/online_sources.release.ini" "$RUNTIME_DIR/online_sources.ini"
+  elif [ -f "$SELF_DIR/online_sources.ini" ]; then
+    cp "$SELF_DIR/online_sources.ini" "$RUNTIME_DIR/online_sources.ini"
+  fi
+  mkdir -p "$RUNTIME_DIR/Downloads"
 
   collect_needed() {
     src="$1"
@@ -680,6 +738,10 @@ find_so_in_libdir() {
   LIBZIP_SO_ABS="${TARGET_LIBZIP_SO:-}"
   if [ -n "$LIBZIP_SO_ABS" ] && [ ! -f "$RUNTIME_DIR/lib/$(basename "$LIBZIP_SO_ABS")" ]; then
     cp -L "$LIBZIP_SO_ABS" "$RUNTIME_DIR/lib/" || true
+  fi
+  LIBCURL_SO_ABS="${TARGET_CURL_SO:-}"
+  if [ -n "$LIBCURL_SO_ABS" ] && [ ! -f "$RUNTIME_DIR/lib/$(basename "$LIBCURL_SO_ABS")" ]; then
+    cp -L "$LIBCURL_SO_ABS" "$RUNTIME_DIR/lib/" || true
   fi
 
   TOOLCHAIN_LIB_DIR="$(dirname "$(dirname "$(command -v "$CXX_CMD")")")/aarch64-linux-gnu/lib64"
@@ -1229,18 +1291,24 @@ EOF
   [ "$TRIMUI_BRICK_LAYOUT" != "1" ] && mkdir -p "$ZIP_STAGE_IMGS"
   cp -a "$RUNTIME_DIR/." "$ZIP_STAGE_RUNTIME/"
   if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
-    mkdir -p "$ZIP_STAGE_RUNTIME/books" "$ZIP_STAGE_RUNTIME/book_covers" "$ZIP_STAGE_RUNTIME/cache"
+    mkdir -p "$ZIP_STAGE_RUNTIME/books" "$ZIP_STAGE_RUNTIME/book_covers" "$ZIP_STAGE_RUNTIME/cache" "$ZIP_STAGE_RUNTIME/Downloads"
     find "$ZIP_STAGE_RUNTIME/books" -mindepth 1 -delete 2>/dev/null || true
     FONT_STAGE_CHECK="$ZIP_STAGE_RUNTIME/resources/fonts/ui_font.ttf"
+    CJK_FONT_STAGE_CHECK="$ZIP_STAGE_RUNTIME/resources/fonts/ui_font_02.ttf"
   else
-    mkdir -p "$ZIP_STAGE_RUNTIME/books" "$ZIP_STAGE_RUNTIME/book_covers" "$ZIP_STAGE_RUNTIME/cache"
+    mkdir -p "$ZIP_STAGE_RUNTIME/books" "$ZIP_STAGE_RUNTIME/book_covers" "$ZIP_STAGE_RUNTIME/cache" "$ZIP_STAGE_RUNTIME/Downloads"
     find "$ZIP_STAGE_RUNTIME/books" -mindepth 1 -delete 2>/dev/null || true
     FONT_STAGE_CHECK="$ZIP_STAGE_RUNTIME/fonts/ui_font.ttf"
+    CJK_FONT_STAGE_CHECK="$ZIP_STAGE_RUNTIME/fonts/ui_font_02.ttf"
   fi
   find "$ZIP_STAGE_RUNTIME/book_covers" -mindepth 1 -delete 2>/dev/null || true
   find "$ZIP_STAGE_RUNTIME/cache" -mindepth 1 -delete 2>/dev/null || true
   if [ ! -f "$FONT_STAGE_CHECK" ]; then
     echo "[low_glibc] ERROR: packaged font missing in release stage: ui_font.ttf"
+    exit 1
+  fi
+  if [ ! -f "$CJK_FONT_STAGE_CHECK" ]; then
+    echo "[low_glibc] ERROR: packaged Chinese font missing in release stage: ui_font_02.ttf"
     exit 1
   fi
   if [ "$TRIMUI_BRICK_LAYOUT" != "1" ]; then

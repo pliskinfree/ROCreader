@@ -1,0 +1,181 @@
+[runtime] log path: D:\Works\ROCreader\log.txt
+[2026-05-12 00:33:22] main: start
+[2026-05-12 00:33:22] main: SDL_Init begin
+[2026-05-12 00:33:22] main: SDL_Init ok
+[2026-05-12 00:33:22] main: TTF_Init begin
+[2026-05-12 00:33:22] main: TTF_Init ok
+[2026-05-12 00:33:22] main: IMG_Init begin
+[2026-05-12 00:33:22] main: IMG_Init ok
+[2026-05-12 00:33:22] main: DetectScreenProfile begin
+[native_h700] screen detect: source=env-profile detected=720x480 profile=720x480 layout=720x480
+[2026-05-12 00:33:22] main: screen source=env-profile detected=720x480 profile=720x480
+[2026-05-12 00:33:22] main: SDL_CreateWindow begin
+[2026-05-12 00:33:22] main: SDL_CreateWindow ok
+[2026-05-12 00:33:22] main: SDL_CreateRenderer begin
+[native_h700] renderer: direct3d flags=0xe accelerated=yes vsync=yes
+[2026-05-12 00:33:22] main: SDL_CreateRenderer ok
+[native_h700] joysticks: 0
+[native_h700] ui asset not found: settings_preview_theme.png
+[native_h700] ui asset not found: settings_preview_animations.png
+[native_h700] ui asset not found: settings_preview_audio.png
+[native_h700] ui asset not found: Menu_Button Instructions.png
+[native_h700] ui asset not found: Menu_CleanHistory.png
+[native_h700] ui asset not found: Menu_CleanCache.png
+[native_h700] ui asset not found: Menu_TXTtoUTF8.png
+[native_h700] ui asset not found: Menu_Exit.png
+[native_h700] ui root: D:\Works\ROCreader\ui
+[2026-05-12 00:33:22] main: contributor avatars preload begin
+[2026-05-12 00:33:23] main: contributor avatars preload done count=21
+[2026-05-12 00:33:23] main: DetectBooksRoots count=1
+[2026-05-12 00:33:23] main: books root: D:\Works\ROCreader\books
+[2026-05-12 00:33:23] main: DetectCoverRoots begin
+[2026-05-12 00:33:23] main: DetectCoverRoots count=1
+[2026-05-12 00:33:23] main: cover root: D:\Works\ROCreader\book_covers
+[native_h700] books roots: D:\Works\ROCreader\books
+[native_h700] cover roots: D:\Works\ROCreader\book_covers
+[native_h700] cover thumb cache dir: \mnt\mmc\cache\cover_thumbs
+[native_h700] removable cover thumb cache dir: \mnt\sdcard\cache\cover_thumbs
+[native_h700] txt layout cache dir: \mnt\mmc\cache\txt_layouts
+[native_h700] removable txt layout cache dir: \mnt\sdcard\cache\txt_layouts
+[native_h700] keymap path: D:\Works\ROCreader\native_keymap.ini
+[native_h700] config path: D:\Works\ROCreader\native_config.ini
+[native_h700] power script path: \mnt\mod\ctrl\pwr_new.sh
+[native_h700] device model token: unknown
+[native_h700] input profile: desktop-default
+[2026-05-12 00:33:23] main: keymap path: D:\Works\ROCreader\native_keymap.ini
+[2026-05-12 00:33:23] main: config path: D:\Works\ROCreader\native_config.ini
+[2026-05-12 00:33:23] main: input profile: desktop-default
+[2026-05-12 00:33:23] main: joy map: joy.0=A joy.1=B joy.2=Y joy.3=X joy.4=L1 joy.5=R1 joy.6=Select joy.7=Start joy.8=Menu joy.9=L2 joy.10=R2 joy.11=Menu joy.12=Select joy.13=Start joy.15=VolDown joy.16=VolUp
+[native_h700] joy map: joy.0=A joy.1=B joy.2=Y joy.3=X joy.4=L1 joy.5=R1 joy.6=Select joy.7=Start joy.8=Menu joy.9=L2 joy.10=R2 joy.11=Menu joy.12=Select joy.13=Start joy.15=VolDown joy.16=VolUp
+[2026-05-12 00:33:23] main: pad map: pad.0=A pad.1=B pad.2=X pad.3=Y pad.4=Select pad.6=Start pad.7=L2 pad.8=R2 pad.9=L1 pad.10=R1 pad.11=Up pad.12=Down pad.13=Left pad.14=Right
+[native_h700] pad map: pad.0=A pad.1=B pad.2=X pad.3=Y pad.4=Select pad.6=Start pad.7=L2 pad.8=R2 pad.9=L1 pad.10=R1 pad.11=Up pad.12=Down pad.13=Left pad.14=Right
+[native_h700][system_controls] discover brightness paths failed: root missing path=/sys/class/backlight
+[native_h700][system_controls] init prefer_system_volume=0 brightness_path= brightness_max_path= disp_device_path=/dev/disp
+[native_h700] battery discover: power_supply root unavailable
+[native_h700][system_controls] discover brightness paths failed: root missing path=/sys/class/backlight
+[native_h700][system_controls] init prefer_system_volume=0 brightness_path= brightness_max_path= disp_device_path=/dev/disp
+[native_h700][system_controls] refresh volume skipped: prefer_system_volume=0
+[native_h700][system_controls] discover brightness paths failed: root missing path=/sys/class/backlight
+[native_h700][system_controls] refresh brightness failed: brightness_path= brightness_max_path= raw_brightness=0 max_brightness=0
+[native_h700] sound: config_audio=1 backend=none ready=deferred volume=96
+[native_h700] epub comic backend: libzip (real_renderer=yes)
+[native_h700] zip image backend: zip-image (real_renderer=yes)
+[native_h700] ui font try: D:\Works\ROCreader\fonts\ui_font_02.ttf
+[native_h700] ui font selected: D:\Works\ROCreader\fonts\ui_font_02.ttf (project font) body_pt=16 title_pt=24 reader_pt=24
+[2026-05-12 00:33:24] boot: scan complete books=797 cover_generate=0
+[native_h700] boot scan complete: books=797 cover_generate=0
+[native_h700] sound root: D:\Works\ROCreader\sounds
+[native_h700] sound init: backend=mixer ready=1 volume=96
+[native_h700][system_controls] refresh volume skipped: prefer_system_volume=0
+[native_h700][system_controls] discover brightness paths failed: root missing path=/sys/class/backlight
+[native_h700][system_controls] refresh brightness failed: brightness_path= brightness_max_path= raw_brightness=0 max_brightness=0
+[native_h700][system_controls] refresh volume skipped: prefer_system_volume=0
+[native_h700][system_controls] discover brightness paths failed: root missing path=/sys/class/backlight
+[native_h700][system_controls] refresh brightness failed: brightness_path= brightness_max_path= raw_brightness=0 max_brightness=0
+[native_h700][system_controls] refresh volume skipped: prefer_system_volume=0
+[native_h700][system_controls] discover brightness paths failed: root missing path=/sys/class/backlight
+[native_h700][system_controls] refresh brightness failed: brightness_path= brightness_max_path= raw_brightness=0 max_brightness=0
+[native_h700][system_controls] refresh volume skipped: prefer_system_volume=0
+[native_h700][system_controls] discover brightness paths failed: root missing path=/sys/class/backlight
+[native_h700][system_controls] refresh brightness failed: brightness_path= brightness_max_path= raw_brightness=0 max_brightness=0
+[2026-05-12 00:47:43] online: connect requested
+[2026-05-12 00:47:43] online: selected source id=wn04 type=manual_web url=https://www.wn04.cfd/ enabled=1
+[2026-05-12 00:47:43] online: load catalog category=0 url=https://www.wn04.cfd/albums-index-tag-%E5%85%A8%E5%BD%A9.html
+[2026-05-12 00:47:46] online: catalog response bytes=34210 parsed_items=20
+[2026-05-12 00:47:46] online: connected item_count=20
+[2026-05-12 00:47:46] online: rebuild shelf nav=0 items=20
+[2026-05-12 00:47:49] online: load catalog next page url=https://www.wn04.cfd/albums-index-page-2-tag-%E5%85%A8%E5%BD%A9.html
+[2026-05-12 00:47:52] online: next catalog response bytes=34263 added_items=20 total_items=40 next=https://www.wn04.cfd/albums-index-page-3-tag-%E5%85%A8%E5%BD%A9.html
+[2026-05-12 00:47:52] online: rebuild shelf nav=0 items=40
+[2026-05-12 00:48:01] online: rebuild shelf nav=1 items=0
+[2026-05-12 00:48:01] online: load catalog category=1 url=https://www.wn04.cfd/albums-index-cate-1.html
+[2026-05-12 00:48:04] online: catalog response bytes=35827 parsed_items=20
+[2026-05-12 00:48:04] online: rebuild shelf nav=1 items=20
+[2026-05-12 00:48:05] online: rebuild shelf nav=2 items=0
+[2026-05-12 00:48:05] online: load catalog category=2 url=https://www.wn04.cfd/albums-index-cate-9.html
+[2026-05-12 00:48:08] online: catalog response bytes=33032 parsed_items=20
+[2026-05-12 00:48:08] online: rebuild shelf nav=2 items=20
+[2026-05-12 00:48:10] online: rebuild shelf nav=3 items=0
+[2026-05-12 00:48:10] online: load catalog category=3 url=https://www.wn04.cfd/albums-index-cate-20.html
+[2026-05-12 00:48:13] online: catalog response bytes=29110 parsed_items=20
+[2026-05-12 00:48:13] online: rebuild shelf nav=3 items=20
+[2026-05-12 00:48:14] online: rebuild shelf nav=4 items=0
+[2026-05-12 00:48:14] online: load catalog category=4 url=https://www.wn04.cfd/albums-index-cate-3.html
+[2026-05-12 00:48:18] online: catalog response bytes=29707 parsed_items=20
+[2026-05-12 00:48:18] online: rebuild shelf nav=4 items=20
+[2026-05-12 00:48:21] online: load catalog next page url=https://www.wn04.cfd/albums-index-page-2-cate-3.html
+[2026-05-12 00:48:25] online: next catalog response bytes=31223 added_items=20 total_items=40 next=https://www.wn04.cfd/albums-index-page-3-cate-3.html
+[2026-05-12 00:48:25] online: rebuild shelf nav=4 items=40
+[2026-05-12 00:48:35] online: rebuild shelf nav=5 items=0
+[2026-05-12 00:48:35] online: load catalog category=5 url=https://www.wn04.cfd/albums-index-cate-37.html
+[2026-05-12 00:48:38] online: catalog response bytes=31150 parsed_items=20
+[2026-05-12 00:48:38] online: rebuild shelf nav=5 items=20
+[2026-05-12 01:14:39] online: book download requested title=海贼淫传 3
+[2026-05-12 01:14:39] online: manual web helper resolve invoke helper=D:\Works\ROCreader\Windows\manual_web_fetch.py detail_url=https://www.wn04.cfd/photos-index-aid-359893.html title=海贼淫传 3 source_url=https://www.wn04.cfd/
+[2026-05-12 01:14:55] online: download curl failed exit=77 url=https://d1.wcdn.date/download?key=down%2F3599%2F0cfa99efafd6c63af809e6115958bcbb.zip&name=%E5%A8%B4%E7%96%AF%E9%86%87%E5%A8%A3%EE%82%A1%E7%B4%B6+3.zip&expiry=1778523284&sign=dbe8b06085c7bc3f64055de6e67cab3209c55b54ab68fb0e7bfe199c6daead9a output=D:\Works\ROCreader\Downloads\books\wn04\book_bebca8e386f9.zip.part
+[2026-05-12 01:14:58] online: download powershell failed exit=1 url=https://d1.wcdn.date/download?key=down%2F3599%2F0cfa99efafd6c63af809e6115958bcbb.zip&name=%E5%A8%B4%E7%96%AF%E9%86%87%E5%A8%A3%EE%82%A1%E7%B4%B6+3.zip&expiry=1778523284&sign=dbe8b06085c7bc3f64055de6e67cab3209c55b54ab68fb0e7bfe199c6daead9a output=D:\Works\ROCreader\Downloads\books\wn04\book_bebca8e386f9.zip.part
+[2026-05-12 01:15:07] online: book downloaded title=海贼淫传 3 path=D:\Works\ROCreader\Downloads\books\wn04\book_bebca8e386f9.zip
+[2026-05-12 01:15:16] [zip_image_runtime] open path=D:\Works\ROCreader\Downloads\books\wn04\book_bebca8e386f9.zip screen=720x480 max_texture=16384x16384
+[2026-05-12 01:15:17] [zip_image] image pages path=D:\Works\ROCreader\Downloads\books\wn04\book_bebca8e386f9.zip pages=451 first=00000001.webp
+[2026-05-12 01:15:17] [zip_image_runtime] reader open ok pages=451
+[2026-05-12 01:15:18] [zip_image] image pages path=D:\Works\ROCreader\Downloads\books\wn04\book_bebca8e386f9.zip pages=451 first=00000001.webp
+[2026-05-12 01:15:18] [zip_image] image pages path=D:\Works\ROCreader\Downloads\books\wn04\book_bebca8e386f9.zip pages=451 first=00000001.webp
+[2026-05-12 01:15:20] [zip_image] image pages path=D:\Works\ROCreader\Downloads\books\wn04\book_bebca8e386f9.zip pages=451 first=00000001.webp
+[2026-05-12 01:15:20] [zip_image] render resample failed page=2 src=1280x1739 dst=720x978
+[2026-05-12 01:15:20] [zip_image_runtime] async render failed page=2
+[2026-05-12 01:15:20] [zip_image] image pages path=D:\Works\ROCreader\Downloads\books\wn04\book_bebca8e386f9.zip pages=451 first=00000001.webp
+[2026-05-12 01:15:20] [zip_image] image pages path=D:\Works\ROCreader\Downloads\books\wn04\book_bebca8e386f9.zip pages=451 first=00000001.webp
+[2026-05-12 01:15:21] [zip_image] image pages path=D:\Works\ROCreader\Downloads\books\wn04\book_bebca8e386f9.zip pages=451 first=00000001.webp
+[2026-05-12 01:15:22] [zip_image] image pages path=D:\Works\ROCreader\Downloads\books\wn04\book_bebca8e386f9.zip pages=451 first=00000001.webp
+[2026-05-12 01:15:24] online: rebuild shelf nav=5 items=20
+[2026-05-12 01:15:26] online: rebuild shelf nav=5 items=20
+[2026-05-12 01:15:28] online: rebuild shelf nav=5 items=20
+[2026-05-12 01:15:28] online: rebuild shelf nav=6 items=0
+[2026-05-12 01:15:28] online: load catalog category=6 url=https://www.wn04.cfd/albums-favorite_ranking.html
+[2026-05-12 01:15:32] online: catalog response bytes=71333 parsed_items=20
+[2026-05-12 01:15:32] online: rebuild shelf nav=6 items=20
+[2026-05-12 01:15:32] online: rebuild shelf nav=7 items=0
+[2026-05-12 01:15:34] online: rebuild shelf nav=6 items=20
+[2026-05-12 01:15:44] online: load catalog next page url=https://www.wn04.cfd/albums-favorite_ranking-page-2-type-week.html
+[2026-05-12 01:15:47] online: next catalog response bytes=69499 added_items=18 total_items=38 next=https://www.wn04.cfd/albums-favorite_ranking-page-3-type-week.html
+[2026-05-12 01:15:47] online: rebuild shelf nav=6 items=38
+[2026-05-12 01:19:41] online: rebuild shelf nav=5 items=0
+[2026-05-12 01:19:41] online: load catalog category=5 url=https://www.wn04.cfd/albums-index-cate-37.html
+[2026-05-12 01:19:44] online: catalog response bytes=31150 parsed_items=20
+[2026-05-12 01:19:44] online: rebuild shelf nav=5 items=20
+[2026-05-12 01:19:44] online: rebuild shelf nav=4 items=0
+[2026-05-12 01:19:44] online: load catalog category=4 url=https://www.wn04.cfd/albums-index-cate-3.html
+[2026-05-12 01:19:47] online: catalog response bytes=29707 parsed_items=20
+[2026-05-12 01:19:47] online: rebuild shelf nav=4 items=20
+[2026-05-12 01:19:47] online: rebuild shelf nav=3 items=0
+[2026-05-12 01:19:47] online: load catalog category=3 url=https://www.wn04.cfd/albums-index-cate-20.html
+[2026-05-12 01:19:50] online: catalog response bytes=29110 parsed_items=20
+[2026-05-12 01:19:50] online: rebuild shelf nav=3 items=20
+[2026-05-12 01:19:52] online: rebuild shelf nav=3 items=20
+[2026-05-12 01:19:54] online: rebuild shelf nav=4 items=0
+[2026-05-12 01:19:54] online: load catalog category=4 url=https://www.wn04.cfd/albums-index-cate-3.html
+[2026-05-12 01:19:57] online: catalog response bytes=29707 parsed_items=20
+[2026-05-12 01:19:57] online: rebuild shelf nav=4 items=20
+[2026-05-12 01:19:57] online: rebuild shelf nav=5 items=0
+[2026-05-12 01:19:57] online: load catalog category=5 url=https://www.wn04.cfd/albums-index-cate-37.html
+[2026-05-12 01:20:00] online: catalog response bytes=31150 parsed_items=20
+[2026-05-12 01:20:00] online: rebuild shelf nav=5 items=20
+[2026-05-12 01:20:00] online: rebuild shelf nav=6 items=0
+[2026-05-12 01:20:00] online: load catalog category=6 url=https://www.wn04.cfd/albums-favorite_ranking.html
+[2026-05-12 01:20:04] online: catalog response bytes=71333 parsed_items=20
+[2026-05-12 01:20:04] online: rebuild shelf nav=6 items=20
+[2026-05-12 01:20:04] online: rebuild shelf nav=7 items=0
+[2026-05-12 01:20:11] online: rebuild shelf nav=0 items=0
+[2026-05-12 01:20:11] online: load catalog category=0 url=https://www.wn04.cfd/albums-index-tag-%E5%85%A8%E5%BD%A9.html
+[2026-05-12 01:20:14] online: catalog response bytes=34210 parsed_items=20
+[2026-05-12 01:20:14] online: rebuild shelf nav=0 items=20
+[2026-05-12 01:20:14] online: rebuild shelf nav=7 items=0
+[2026-05-12 01:20:17] online: rebuild shelf nav=0 items=20
+[2026-05-12 01:20:21] online: rebuild shelf nav=0 items=20
+[2026-05-12 01:20:22] online: rebuild shelf nav=7 items=1
+[2026-05-12 01:20:40] online: download curl failed exit=77 url=https://t4.wnacgimg.date/data/t/3599/53/1778478011206.jpg output=D:\Works\ROCreader\Downloads\book_covers\wn04\cover_df28c8372928.jpg.part
+[2026-05-12 01:20:42] online: download powershell failed exit=1 url=https://t4.wnacgimg.date/data/t/3599/53/1778478011206.jpg output=D:\Works\ROCreader\Downloads\book_covers\wn04\cover_df28c8372928.jpg.part
+[2026-05-12 01:20:42] online: cover download failed title=[全彩][坂井] 性行為実習っ3 [天希个人汉化] url=https://t4.wnacgimg.date/data/t/3599/53/1778478011206.jpg
+[2026-05-12 01:20:44] online: download curl failed exit=77 url=https://t4.wnacgimg.date/data/t/3599/53/1778478011206.jpg output=D:\Works\ROCreader\Downloads\book_covers\wn04\cover_df28c8372928.jpg.part
+[2026-05-12 01:20:46] online: download powershell failed exit=1 url=https://t4.wnacgimg.date/data/t/3599/53/1778478011206.jpg output=D:\Works\ROCreader\Downloads\book_covers\wn04\cover_df28c8372928.jpg.part
+[2026-05-12 01:20:46] online: cover download failed title=[全彩][坂井] 性行為実習っ3 [天希个人汉化] url=https://t4.wnacgimg.date/data/t/3599/53/1778478011206.jpg

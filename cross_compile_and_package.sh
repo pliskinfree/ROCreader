@@ -66,6 +66,12 @@ make REQUIRE_MUPDF="$REQUIRE_MUPDF" CXX="$CXX_CMD" PKG_CONFIG="$PKG_CMD"
   if [ -f "$SELF_DIR/native_config.ini" ]; then
     cp "$SELF_DIR/native_config.ini" "$RUNTIME_DIR/"
   fi
+  if [ -f "$SELF_DIR/online_sources.release.ini" ]; then
+    cp "$SELF_DIR/online_sources.release.ini" "$RUNTIME_DIR/online_sources.ini"
+  elif [ -f "$SELF_DIR/online_sources.ini" ]; then
+    cp "$SELF_DIR/online_sources.ini" "$RUNTIME_DIR/online_sources.ini"
+  fi
+  mkdir -p "$RUNTIME_DIR/Downloads"
   mkdir -p "$RUNTIME_DIR/lib"
   mkdir -p "$RUNTIME_DIR/lib/pulseaudio"
 
@@ -92,6 +98,18 @@ make REQUIRE_MUPDF="$REQUIRE_MUPDF" CXX="$CXX_CMD" PKG_CONFIG="$PKG_CMD"
     libpoppler-cpp.so.0 \
     libpoppler.so.134 \
     libpoppler.so.126 \
+    libcurl.so.4 \
+    libssl.so.3 \
+    libssl.so.1.1 \
+    libcrypto.so.3 \
+    libcrypto.so.1.1 \
+    libmbedtls.so.14 \
+    libmbedtls.so.12 \
+    libmbedx509.so.1 \
+    libmbedcrypto.so.7 \
+    libnghttp2.so.14 \
+    libidn2.so.0 \
+    libpsl.so.5 \
     libtiff.so.6 \
     libtiff.so.5 \
     libjbig.so.0 \

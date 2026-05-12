@@ -73,6 +73,9 @@ void ShelfScene::HandleInput(const ShelfSceneInputContext &context) const {
       context.services.remove_favorite,
       context.services.current_category,
       context.services.on_open_book,
+      context.services.mark_remote_for_local,
+      context.services.unmark_remote_for_local,
+      context.services.nav_item_count,
   };
   HandleShelfInput(deps);
 }
@@ -93,6 +96,12 @@ ShelfSceneRenderServices MakeShelfSceneRenderServices(ShelfSceneRenderServiceCal
       },
       std::move(callbacks.get_title_ellipsized),
       std::move(callbacks.shelf_title_text),
+      std::move(callbacks.nav_label_text),
+      std::move(callbacks.nav_item_count),
+      std::move(callbacks.online_shelf_active),
+      std::move(callbacks.remote_cover_loading),
+      std::move(callbacks.remote_book_status_text),
+      std::move(callbacks.remote_book_status_progress),
       std::move(callbacks.forget_texture_size),
   };
 }
@@ -142,6 +151,12 @@ void ShelfScene::Draw(const ShelfSceneRenderContext &context) const {
       context.services.get_text_texture,
       context.services.get_title_ellipsized,
       context.services.shelf_title_text,
+      context.services.nav_label_text,
+      context.services.nav_item_count,
+      context.services.online_shelf_active,
+      context.services.remote_cover_loading,
+      context.services.remote_book_status_text,
+      context.services.remote_book_status_progress,
       context.services.forget_texture_size,
   };
   DrawShelfRuntime(deps);

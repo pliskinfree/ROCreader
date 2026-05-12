@@ -101,6 +101,7 @@ void MenuScene::HandleInput(const MenuSceneInputContext &context) const {
       context.contributor_avatar_state,
       context.contributor_avatar_count,
       context.version_update_state,
+      context.online_source_state,
       context.services.version_update_callbacks,
       context.services.actions,
   };
@@ -123,6 +124,7 @@ void MenuScene::Draw(const MenuSceneRenderContext &context) const {
       context.contributor_avatar_entries,
       context.contributor_avatar_state,
       context.version_update_state,
+      context.online_source_state,
       MakeLayout(context.layout),
       context.services,
   };

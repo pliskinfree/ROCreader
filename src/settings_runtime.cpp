@@ -21,6 +21,7 @@ std::string SettingLabel(SettingId id, int language_index) {
   case SettingId::ContributorAvatars: return LocalizedAppText(language_index, AppTextId::SettingContributorAvatars);
   case SettingId::ContactMe: return LocalizedAppText(language_index, AppTextId::SettingContactMe);
   case SettingId::VersionUpdate: return LocalizedAppText(language_index, AppTextId::SettingVersionUpdate);
+  case SettingId::UrlEntry: return u8"URL\u5165\u53e3";
   case SettingId::ExitApp: return LocalizedAppText(language_index, AppTextId::SettingExitApp);
   }
   return {};
@@ -36,6 +37,7 @@ SDL_Texture *SelectedPreviewTexture(const UiAssets &ui_assets, SettingId id) {
   case SettingId::ContributorAvatars: return ui_assets.settings_preview_default;
   case SettingId::ContactMe: return ui_assets.settings_preview_contact;
   case SettingId::VersionUpdate: return ui_assets.settings_preview_default;
+  case SettingId::UrlEntry: return ui_assets.settings_preview_default;
   case SettingId::ExitApp: return ui_assets.settings_preview_default;
   }
   return ui_assets.settings_preview_default;
@@ -76,8 +78,11 @@ void HandleSettingsInput(SettingsRuntimeInputDeps &deps) {
       current_id == SettingId::ContributorAvatars && deps.contributor_avatar_state.grid_active;
   const bool version_update_active =
       current_id == SettingId::VersionUpdate && deps.version_update_state.panel_active;
+  const bool online_source_active =
+      current_id == SettingId::UrlEntry && deps.online_source_state.panel_active;
 
   if (!system_settings_active && !txt_settings_active && !avatar_grid_active && !version_update_active &&
+      !online_source_active &&
       menu.close_armed && menu.toggle_guard <= 0.0f &&
       !menu.closing &&
       (deps.input.IsJustPressed(Button::B) || deps.actions.menu_toggle_request)) {

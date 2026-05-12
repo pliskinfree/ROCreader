@@ -89,6 +89,14 @@ MENU_SRCS := \
   src/avatar_panel.cpp \
   src/history_panel.cpp \
   src/cache_panel.cpp \
+  src/online_source_transport.cpp \
+  src/online_opds_provider.cpp \
+  src/online_manual_web_provider.cpp \
+  src/online_source_runtime.cpp \
+  src/online_session_service.cpp \
+  src/online_shelf_bridge.cpp \
+  src/online_shelf_controller.cpp \
+  src/online_source_panel.cpp \
   src/update_panel.cpp \
   src/contact_panel.cpp \
   src/exit_panel.cpp \
@@ -192,6 +200,13 @@ CXXFLAGS += -DHAVE_LIBZIP $(LIBZIP_CFLAGS)
 LDFLAGS += $(LIBZIP_LIBS)
 endif
 
+CURL_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags libcurl 2>/dev/null)
+CURL_LIBS ?= $(shell $(PKG_CONFIG) --libs libcurl 2>/dev/null)
+ifneq ($(strip $(CURL_LIBS)),)
+CXXFLAGS += -DHAVE_LIBCURL $(CURL_CFLAGS)
+LDFLAGS += $(CURL_LIBS)
+endif
+
 WEBP_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags libwebp 2>/dev/null)
 WEBP_LIBS ?= $(shell $(PKG_CONFIG) --libs libwebp 2>/dev/null)
 ifneq ($(strip $(WEBP_LIBS)),)
@@ -245,6 +260,8 @@ print-config:
 	@echo "POPPLER_LIBS=$(POPPLER_LIBS)"
 	@echo "LIBZIP_CFLAGS=$(LIBZIP_CFLAGS)"
 	@echo "LIBZIP_LIBS=$(LIBZIP_LIBS)"
+	@echo "CURL_CFLAGS=$(CURL_CFLAGS)"
+	@echo "CURL_LIBS=$(CURL_LIBS)"
 	@echo "WEBP_CFLAGS=$(WEBP_CFLAGS)"
 	@echo "WEBP_LIBS=$(WEBP_LIBS)"
 	@echo "TTF_CFLAGS=$(TTF_CFLAGS)"

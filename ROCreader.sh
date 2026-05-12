@@ -19,6 +19,7 @@ export ROCREADER_CARD1_ROOT="/mnt/mmc"
 export ROCREADER_CARD2_ROOT="/mnt/sdcard"
 export ROCREADER_SCAN_CARD2="${ROCREADER_SCAN_CARD2:-1}"
 export ROCREADER_FULL_INPUT_LOG="${ROCREADER_FULL_INPUT_LOG:-0}"
+export ROCREADER_RUNTIME_LOG="${ROCREADER_RUNTIME_LOG:-1}"
 export ROCREADER_LOG_MAX_BYTES="${ROCREADER_LOG_MAX_BYTES:-524288}"
 export ROCREADER_UPDATE_CONTENTS_URL="${ROCREADER_UPDATE_CONTENTS_URL:-https://github.com/LPF970915/ROCreader/tree/main/H700/Downloads}"
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
@@ -383,14 +384,22 @@ run_with_driver() {
   mode="$2"
   lib_dir="$3"
   set_runtime_libs "$lib_dir"
+  log_line "[launcher] run driver=$drv mode=$mode lib_dir=$lib_dir"
   SDL_VIDEODRIVER="$drv" "$BIN" >>"$LOG_FILE" 2>&1
+  rc=$?
+  log_line "[launcher] exit rc=$rc driver=$drv mode=$mode"
+  return "$rc"
 }
 
 run_default() {
   mode="$1"
   lib_dir="$2"
   set_runtime_libs "$lib_dir"
+  log_line "[launcher] run default mode=$mode lib_dir=$lib_dir"
   "$BIN" >>"$LOG_FILE" 2>&1
+  rc=$?
+  log_line "[launcher] exit rc=$rc default mode=$mode"
+  return "$rc"
 }
 
 LD_LIBRARY_PATH_BASE="${LD_LIBRARY_PATH:-}"
@@ -407,11 +416,21 @@ if [ "${ROCREADER_VERBOSE_LOG:-0}" = "1" ] || [ "${ROCREADER_DEBUG_LOG:-0}" = "1
 fi
 perform_pending_update_if_any
 ensure_screen_override_if_needed
+if [ ! -f "$APP_DIR/online_sources.ini" ]; then
+  log_line "[launcher] online_sources missing"
+fi
 
 if [ -n "${SDL_VIDEODRIVER:-}" ]; then
   run_with_driver "$SDL_VIDEODRIVER" "forced" "$LIB_FULL_DIR"
   exit $?
 fi
+
+should_stop_retry() {
+  rc="$1"
+  [ "$rc" -eq 0 ] && return 0
+  [ "$rc" -ge 128 ] 2>/dev/null && return 0
+  return 1
+}
 
 try_mode() {
   mode="$1"
@@ -420,10 +439,20 @@ try_mode() {
   if run_default "$mode" "$lib_dir"; then
     exit 0
   fi
+  rc=$?
+  if should_stop_retry "$rc"; then
+    log_line "[launcher] stop retry after default rc=$rc mode=$mode"
+    exit "$rc"
+  fi
 
   for drv in KMSDRM kmsdrm wayland x11; do
     if run_with_driver "$drv" "$mode" "$lib_dir"; then
       exit 0
+    fi
+    rc=$?
+    if should_stop_retry "$rc"; then
+      log_line "[launcher] stop retry after driver rc=$rc driver=$drv mode=$mode"
+      exit "$rc"
     fi
   done
 }

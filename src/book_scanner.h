@@ -11,6 +11,12 @@ struct BookItem {
   std::filesystem::path native_fs_path;
   bool is_dir = false;
   int preload_category = -1;
+  bool is_remote = false;
+  std::string remote_id;
+  std::string remote_source_id;
+  std::string remote_cover_url;
+  std::string remote_download_url;
+  std::string remote_local_path;
 };
 
 class BookScanner {

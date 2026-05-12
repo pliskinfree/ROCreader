@@ -986,10 +986,6 @@ struct EpubFlowReader::Impl {
         "/mnt/mmc2/ROCreader/fonts/ui_font.ttf",
         "/mnt/mmc2/Roms/ROCreader/fonts/ui_font_02.ttf",
         "/mnt/mmc2/Roms/ROCreader/fonts/ui_font.ttf",
-        "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/msyh.ttf",
-        "C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/simsun.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     };
     std::string fallback;
     for (const auto &candidate : candidates) {
