@@ -57,7 +57,7 @@ SDL_Texture *GetOnlineShelfCoverTexture(const BookItem &item, OnlineShelfCoverDe
     const bool manual_web = active_source_index >= 0 &&
                             active_source_index < static_cast<int>(deps.online_source_state.sources.size()) &&
                             deps.online_source_state.sources[active_source_index].type == "manual_web";
-    if (!manual_web) {
+    if (!manual_web && !deps.online_source_state.covers_loading) {
       const uint32_t now = SDL_GetTicks();
       auto &retry_after = CoverRetryAfterTicks();
       auto retry_it = retry_after.find(cache_key);

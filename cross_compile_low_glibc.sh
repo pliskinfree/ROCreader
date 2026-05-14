@@ -1290,6 +1290,12 @@ EOF
   mkdir -p "$ZIP_STAGE_RUNTIME"
   [ "$TRIMUI_BRICK_LAYOUT" != "1" ] && mkdir -p "$ZIP_STAGE_IMGS"
   cp -a "$RUNTIME_DIR/." "$ZIP_STAGE_RUNTIME/"
+  if [ -f "$SELF_DIR/online_sources.release.ini" ]; then
+    cp "$SELF_DIR/online_sources.release.ini" "$ZIP_STAGE_RUNTIME/online_sources.ini"
+  fi
+  if [ -f "$SELF_DIR/URL/online_sources.ini" ]; then
+    cp "$SELF_DIR/URL/online_sources.ini" "$DOWNLOADS_ROOT/online_sources.wn04.local.ini"
+  fi
   if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
     mkdir -p "$ZIP_STAGE_RUNTIME/books" "$ZIP_STAGE_RUNTIME/book_covers" "$ZIP_STAGE_RUNTIME/cache" "$ZIP_STAGE_RUNTIME/Downloads"
     find "$ZIP_STAGE_RUNTIME/books" -mindepth 1 -delete 2>/dev/null || true

@@ -5,6 +5,7 @@ build/
 Windows/build/
 Windows/logs/
 cache/
+cache_*.html
 logs/
 log.txt
 src/*.o
@@ -25,6 +26,8 @@ TrimuiBrick/dist_lowglibc/
 TrimuiBrick/logs/
 TrimuiBrick/sysroot_overlay/
 TrimuiBrick/workspace/
+experimental/*.zip
+URL/
 
 !Downloads/
 !Downloads/**

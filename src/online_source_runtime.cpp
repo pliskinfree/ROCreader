@@ -72,9 +72,12 @@ std::string HashText(const std::string &text) {
 std::string DefaultOnlineSourceConfigText() {
   return
       "# ROCreader online source configuration\n"
-      "# One source uses one [source.*] section. Keep the file in Roms/APPS/ROCreader.\n"
-      "# Downloads are stored under Roms/APPS/ROCreader/Downloads.\n"
-      "# Copy [source.template] to add real sources. Set visible=1 to show a source in the URL menu.\n"
+      "# Path: Roms/APPS/ROCreader/online_sources.ini\n"
+      "# One connection source uses one [source.*] section.\n"
+      "# To add a new source: copy the [source.template] block below, rename the section\n"
+      "# such as [source.my_site], then fill name/type/url/category.*. Set visible=1 and\n"
+      "# enabled=1 when you want it to appear in the URL menu.\n"
+      "# type supports opds, kavita, and manual_web. Downloads are saved under Downloads.\n"
       "\n"
       "[source.template]\n"
       "name=Template - copy me\n"

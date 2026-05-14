@@ -467,6 +467,116 @@ std::filesystem::path ManualWebHelperPath() {
   return helper;
 }
 
+bool ManualWebExternalTransportEnabled() {
+  const char *value = std::getenv("ROCREADER_MANUAL_WEB_TRANSPORT");
+  if (!value || !*value) value = std::getenv("ROCREADER_EXPERIMENTAL_WN04_TRANSPORT");
+  return value && *value && std::string(value) != "0";
+}
+
+bool ManualWebCatalogOnlyEnabled() {
+  const char *value = std::getenv("ROCREADER_MANUAL_WEB_CATALOG_ONLY");
+  if (!value || !*value) value = std::getenv("ROCREADER_WN04_CATALOG_ONLY");
+  return value && *value && std::string(value) != "0";
+}
+
+bool IsWn04Url(const std::string &url) {
+  return url.find("wn04.cfd") != std::string::npos || url.find("wnacg") != std::string::npos ||
+         url.find("wcdn.date") != std::string::npos;
+}
+
+std::filesystem::path ManualWebExternalHelperPath() {
+  if (!ManualWebExternalTransportEnabled()) return {};
+  if (const char *value = std::getenv("ROCREADER_MANUAL_WEB_FETCH"); value && *value) {
+    std::filesystem::path helper = value;
+    std::error_code ec;
+    if (std::filesystem::exists(helper, ec) && !ec) return helper;
+    runtime_log::Line("online: manual web helper missing env path=" + helper.string());
+    return {};
+  }
+  if (const char *value = std::getenv("ROCREADER_WN04_FETCH"); value && *value) {
+    std::filesystem::path helper = value;
+    std::error_code ec;
+    if (std::filesystem::exists(helper, ec) && !ec) return helper;
+    runtime_log::Line("online: manual web helper missing legacy env path=" + helper.string());
+    return {};
+  }
+  const std::vector<std::filesystem::path> candidates = {
+      std::filesystem::current_path() / "bin" / "wn04_fetch",
+      std::filesystem::current_path() / "wn04_fetch",
+  };
+  std::error_code ec;
+  for (const auto &candidate : candidates) {
+    if (std::filesystem::exists(candidate, ec) && !ec) return candidate;
+  }
+  return {};
+}
+
+std::string ManualWebFetchViaExternalHelper(const std::string &url, const std::string &referer) {
+#if !defined(_WIN32)
+  const std::filesystem::path helper = ManualWebExternalHelperPath();
+  if (helper.empty()) return {};
+  runtime_log::Line("online: manual web helper fetch path=" + helper.string() + " url=" + url);
+  CommandCaptureResult result = RunCommandCaptureWithStatus(EscapeForPosix(helper.string()) + " fetch " +
+                                                            EscapeForPosix(url) +
+                                                            (referer.empty() ? "" : " " + EscapeForPosix(referer)) +
+                                                            " 2>&1");
+  if (result.exit_code == 0 && !result.output.empty()) return result.output;
+  runtime_log::Line("online: manual web helper fetch failed exit=" + std::to_string(result.exit_code) +
+                    " url=" + url + " output=" + CompactLogSnippet(result.output));
+#else
+  (void)url;
+  (void)referer;
+#endif
+  return {};
+}
+
+std::string ManualWebResolveViaExternalHelper(const std::string &detail_url, const std::string &title,
+                                              const std::string &source_url) {
+#if !defined(_WIN32)
+  const std::filesystem::path helper = ManualWebExternalHelperPath();
+  if (helper.empty()) return {};
+  runtime_log::Line("online: manual web helper resolve path=" + helper.string() +
+                    " detail_url=" + detail_url + " title=" + title);
+  CommandCaptureResult result = RunCommandCaptureWithStatus(EscapeForPosix(helper.string()) + " resolve " +
+                                                            EscapeForPosix(detail_url) + " " +
+                                                            EscapeForPosix(title) + " " +
+                                                            EscapeForPosix(source_url) + " 2>&1");
+  const std::string url = ExtractJsonStringValue(result.output, "url");
+  if (result.exit_code == 0 && !url.empty()) return url;
+  runtime_log::Line("online: manual web helper resolve failed exit=" + std::to_string(result.exit_code) +
+                    " detail_url=" + detail_url + " output=" + CompactLogSnippet(result.output));
+#else
+  (void)detail_url;
+  (void)title;
+  (void)source_url;
+#endif
+  return {};
+}
+
+bool ManualWebDownloadViaExternalHelper(const std::string &url, const std::filesystem::path &output_path,
+                                        const std::string &referer) {
+#if !defined(_WIN32)
+  const std::filesystem::path helper = ManualWebExternalHelperPath();
+  if (helper.empty()) return false;
+  std::error_code ec;
+  std::filesystem::create_directories(output_path.parent_path(), ec);
+  runtime_log::Line("online: manual web helper download path=" + helper.string() +
+                    " url=" + url + " output=" + output_path.string());
+  const int exit_code = RunCommand(EscapeForPosix(helper.string()) + " download " + EscapeForPosix(url) + " " +
+                                   EscapeForPosix(output_path.string()) +
+                                   (referer.empty() ? "" : " " + EscapeForPosix(referer)));
+  if (exit_code == 0 && std::filesystem::exists(output_path, ec) && !ec) return true;
+  runtime_log::Line("online: manual web helper download failed exit=" + std::to_string(exit_code) +
+                    " url=" + url + " output=" + output_path.string());
+  std::filesystem::remove(output_path, ec);
+#else
+  (void)url;
+  (void)output_path;
+  (void)referer;
+#endif
+  return false;
+}
+
 std::string ManualWebFetchViaPython(const std::string &url, const std::string &referer) {
 #if defined(_WIN32)
   const std::filesystem::path helper = ManualWebHelperPath();
@@ -588,12 +698,23 @@ std::string HttpGetText(const std::string &url, const std::string &referer) {
 }
 
 std::string ManualWebFetch(const std::string &url, const std::string &referer) {
+  if (std::string body = ManualWebFetchViaExternalHelper(url, referer); !body.empty()) return body;
   if (std::string body = ManualWebFetchViaPython(url, referer); !body.empty()) return body;
   return HttpGetText(url, referer);
 }
 
 std::string ManualWebResolveDownload(const std::string &detail_url, const std::string &title,
                                      const std::string &source_url) {
+  if (ManualWebExternalTransportEnabled() && ManualWebCatalogOnlyEnabled() &&
+      (IsWn04Url(detail_url) || IsWn04Url(source_url))) {
+    runtime_log::Line("online: manual web catalog-only skip download resolve title=" + title +
+                      " detail_url=" + detail_url);
+    return {};
+  }
+  if (std::string real_url = ManualWebResolveViaExternalHelper(detail_url, title, source_url);
+      !real_url.empty()) {
+    return real_url;
+  }
   if (std::string real_url = ManualWebResolveViaPython(detail_url, title, source_url); !real_url.empty()) {
     return real_url;
   }
@@ -641,6 +762,7 @@ std::string ManualWebResolveDownload(const std::string &detail_url, const std::s
 
 bool ManualWebDownload(const std::string &url, const std::filesystem::path &output_path,
                        const std::string &referer) {
+  if (ManualWebDownloadViaExternalHelper(url, output_path, referer)) return true;
   if (ManualWebDownloadViaPython(url, output_path, referer)) return true;
   return DownloadFile(url, output_path, referer);
 }

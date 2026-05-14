@@ -98,7 +98,7 @@ private:
     bool active = false;
     bool finished = false;
     bool success = false;
-    OnlineCatalogItem item;
+    std::vector<OnlineCatalogItem> items;
   };
 
   std::string BookKey(const BookItem &item) const;
@@ -121,4 +121,6 @@ private:
   size_t last_cover_window_begin_ = 0;
   size_t last_cover_window_end_ = 0;
   size_t cover_window_cursor_ = 0;
+  int cover_window_category_index_ = -1;
+  size_t cover_window_catalog_size_ = 0;
 };

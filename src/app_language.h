@@ -12,6 +12,7 @@ enum class AppTextId {
   SettingContributorAvatars,
   SettingContactMe,
   SettingVersionUpdate,
+  SettingUrlEntry,
   SettingExitApp,
   ExitHint,
   SystemKeySound,

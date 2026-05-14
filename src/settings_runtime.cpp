@@ -21,7 +21,7 @@ std::string SettingLabel(SettingId id, int language_index) {
   case SettingId::ContributorAvatars: return LocalizedAppText(language_index, AppTextId::SettingContributorAvatars);
   case SettingId::ContactMe: return LocalizedAppText(language_index, AppTextId::SettingContactMe);
   case SettingId::VersionUpdate: return LocalizedAppText(language_index, AppTextId::SettingVersionUpdate);
-  case SettingId::UrlEntry: return u8"URL\u5165\u53e3";
+  case SettingId::UrlEntry: return LocalizedAppText(language_index, AppTextId::SettingUrlEntry);
   case SettingId::ExitApp: return LocalizedAppText(language_index, AppTextId::SettingExitApp);
   }
   return {};

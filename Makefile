@@ -4,6 +4,7 @@ REQUIRE_MUPDF ?= 0
 H700_OPTIMIZE ?= 0
 
 TARGET ?= build/rocreader_sdl
+WN04_FETCH_TARGET ?= bin/wn04_fetch
 APP_SRCS := \
   src/main.cpp \
   src/app_runtime.cpp \
@@ -230,13 +231,19 @@ $(error REQUIRE_MUPDF=1 but no real PDF backend found. Install MuPDF/Fitz or pop
 endif
 endif
 
-.PHONY: all clean run print-config smoke-windows
+.PHONY: all clean run print-config smoke-windows wn04-fetch
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(OBJS) -o $@ $(LDFLAGS)
+
+wn04-fetch: $(WN04_FETCH_TARGET)
+
+$(WN04_FETCH_TARGET): tools/wn04_fetch.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) -O2 -std=c++17 -Wall -Wextra -I./src $< -o $@ $(FS_LIBS)
 
 src/%.o: src/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -272,4 +279,4 @@ print-config:
 	@echo "REQUIRE_MUPDF=$(REQUIRE_MUPDF)"
 
 clean:
-	rm -f src/*.o $(TARGET)
+	rm -f src/*.o $(TARGET) $(WN04_FETCH_TARGET)
