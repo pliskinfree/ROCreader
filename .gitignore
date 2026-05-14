@@ -27,6 +27,7 @@ TrimuiBrick/dist_lowglibc/
 TrimuiBrick/logs/
 TrimuiBrick/sysroot_overlay/
 TrimuiBrick/workspace/
+experimental/
 experimental/*.zip
 URL/
 
