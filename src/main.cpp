@@ -1124,7 +1124,11 @@ int main(int, char **argv) {
     std::error_code ec;
     const std::filesystem::path cwd = std::filesystem::current_path(ec);
     const std::filesystem::path runtime_root = ec ? std::filesystem::path(".") : cwd;
-    online_shelf_controller.Initialize(runtime_root / "online_sources.ini", runtime_root / "Downloads");
+    std::filesystem::path online_sources_path = runtime_root / "online_sources.ini";
+    if (const char *override_path = std::getenv("ROCREADER_ONLINE_SOURCES"); override_path && *override_path) {
+      online_sources_path = std::filesystem::path(override_path);
+    }
+    online_shelf_controller.Initialize(online_sources_path, runtime_root / "Downloads");
   }
   OnlineSourceState &online_source_state = online_shelf_controller.State();
   bool lid_close_screen_off_enabled = config.Get().lid_close_screen_off;
