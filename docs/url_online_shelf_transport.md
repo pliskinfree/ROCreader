@@ -17,7 +17,6 @@ variables so the UI and source parser stay generic:
 export ROCREADER_MANUAL_WEB_TRANSPORT=1
 export ROCREADER_MANUAL_WEB_FETCH=/path/to/wn04_fetch
 export ROCREADER_MANUAL_WEB_CURL=/path/to/curl-impersonate
-export ROCREADER_MANUAL_WEB_CATALOG_ONLY=1
 ```
 
 The legacy WN04 names are still accepted for compatibility:
@@ -25,7 +24,6 @@ The legacy WN04 names are still accepted for compatibility:
 ```sh
 export ROCREADER_EXPERIMENTAL_WN04_TRANSPORT=1
 export ROCREADER_WN04_FETCH=/path/to/wn04_fetch
-export ROCREADER_WN04_CATALOG_ONLY=1
 ```
 
 The helper command contract is:
@@ -36,11 +34,9 @@ wn04_fetch download URL OUTPUT [REFERER]
 wn04_fetch resolve DETAIL_URL TITLE SOURCE_URL
 ```
 
-The URL shelf currently uses the helper successfully for catalog pages and
-remote covers. Real book download remains behind the same `resolve` and
-`download` interfaces, but can be disabled with
-`ROCREADER_MANUAL_WEB_CATALOG_ONLY=1` while the download transport is still
-being researched.
+The URL shelf uses the helper for catalog pages, remote covers, resolve, and
+book downloads. If the helper or network cannot complete the real download, the
+normal online shelf download failure path is shown.
 
 ## WN04 status
 

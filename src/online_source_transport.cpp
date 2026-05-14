@@ -467,6 +467,42 @@ std::filesystem::path ManualWebHelperPath() {
   return helper;
 }
 
+#if defined(_WIN32)
+std::vector<std::vector<std::string>> PythonHelperCommands(const std::filesystem::path &helper,
+                                                           const std::vector<std::string> &args) {
+  std::vector<std::vector<std::string>> commands;
+  auto append_args = [&](std::vector<std::string> command) {
+    command.push_back(helper.string());
+    command.insert(command.end(), args.begin(), args.end());
+    commands.push_back(std::move(command));
+  };
+  if (const char *python = std::getenv("ROCREADER_PYTHON"); python && *python) {
+    append_args({python});
+  }
+  append_args({"py", "-3"});
+  append_args({"python"});
+  append_args({"python3"});
+  return commands;
+}
+
+std::string RunPythonHelperCapture(const std::filesystem::path &helper,
+                                   const std::vector<std::string> &args,
+                                   const std::string &log_context) {
+  for (const auto &command : PythonHelperCommands(helper, args)) {
+    if (command.empty()) continue;
+    const std::string output = RunProcessCapture(command);
+    if (!output.empty()) {
+      runtime_log::Line("online: manual web python helper ok command=" + command.front() +
+                        " context=" + log_context + " bytes=" + std::to_string(output.size()));
+      return output;
+    }
+    runtime_log::Line("online: manual web python helper empty command=" + command.front() +
+                      " context=" + log_context);
+  }
+  return {};
+}
+#endif
+
 bool ManualWebExternalTransportEnabled() {
   const char *value = std::getenv("ROCREADER_MANUAL_WEB_TRANSPORT");
   if (!value || !*value) value = std::getenv("ROCREADER_EXPERIMENTAL_WN04_TRANSPORT");
@@ -581,7 +617,7 @@ std::string ManualWebFetchViaPython(const std::string &url, const std::string &r
 #if defined(_WIN32)
   const std::filesystem::path helper = ManualWebHelperPath();
   if (helper.empty()) return {};
-  return RunProcessCapture({"py", "-3", helper.string(), "fetch", url, referer});
+  return RunPythonHelperCapture(helper, {"fetch", url, referer}, "fetch");
 #else
   (void)url;
   (void)referer;
@@ -596,7 +632,7 @@ std::string ManualWebResolveViaPython(const std::string &detail_url, const std::
   if (helper.empty()) return {};
   runtime_log::Line("online: manual web helper resolve invoke helper=" + helper.string() +
                     " detail_url=" + detail_url + " title=" + title + " source_url=" + source_url);
-  const std::string json = RunProcessCapture({"py", "-3", helper.string(), "resolve", detail_url, title, source_url});
+  const std::string json = RunPythonHelperCapture(helper, {"resolve", detail_url, title, source_url}, "resolve");
   const std::string url = ExtractJsonStringValue(json, "url");
   if (url.empty()) {
     const std::string error = ExtractJsonStringValue(json, "error");
@@ -624,7 +660,7 @@ bool ManualWebDownloadViaPython(const std::string &url, const std::filesystem::p
   std::error_code ec;
   std::filesystem::create_directories(output_path.parent_path(), ec);
   const std::string output =
-      RunProcessCapture({"py", "-3", helper.string(), "download", url, output_path.string(), referer});
+      RunPythonHelperCapture(helper, {"download", url, output_path.string(), referer}, "download");
   std::error_code exists_ec;
   if (std::filesystem::exists(output_path, exists_ec) && !exists_ec) return true;
   runtime_log::Line("online: manual web helper download failed url=" + url +

@@ -2,6 +2,7 @@
 sysroot_device/
 H700/sysroot_device/
 build/
+Windows/
 Windows/build/
 Windows/logs/
 cache/
