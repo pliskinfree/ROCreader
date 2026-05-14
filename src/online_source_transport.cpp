@@ -520,6 +520,10 @@ bool IsWn04Url(const std::string &url) {
          url.find("wcdn.date") != std::string::npos;
 }
 
+bool IsWn04DownloadUrl(const std::string &url) {
+  return url.find("wcdn.date") != std::string::npos;
+}
+
 std::filesystem::path ManualWebExternalHelperPath() {
   if (!ManualWebExternalTransportEnabled()) return {};
   if (const char *value = std::getenv("ROCREADER_MANUAL_WEB_FETCH"); value && *value) {
@@ -751,6 +755,11 @@ std::string ManualWebResolveDownload(const std::string &detail_url, const std::s
       !real_url.empty()) {
     return real_url;
   }
+  if (ManualWebExternalTransportEnabled() && (IsWn04Url(detail_url) || IsWn04Url(source_url))) {
+    runtime_log::Line("online: manual web helper resolve terminal failure title=" + title +
+                      " detail_url=" + detail_url);
+    return {};
+  }
   if (std::string real_url = ManualWebResolveViaPython(detail_url, title, source_url); !real_url.empty()) {
     return real_url;
   }
@@ -799,6 +808,11 @@ std::string ManualWebResolveDownload(const std::string &detail_url, const std::s
 bool ManualWebDownload(const std::string &url, const std::filesystem::path &output_path,
                        const std::string &referer) {
   if (ManualWebDownloadViaExternalHelper(url, output_path, referer)) return true;
+  if (ManualWebExternalTransportEnabled() && IsWn04DownloadUrl(url)) {
+    runtime_log::Line("online: manual web helper download terminal failure url=" + url +
+                      " output=" + output_path.string());
+    return false;
+  }
   if (ManualWebDownloadViaPython(url, output_path, referer)) return true;
   return DownloadFile(url, output_path, referer);
 }

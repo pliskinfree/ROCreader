@@ -351,13 +351,12 @@ void OnlineShelfController::JoinCoverJob() {
 
 bool OnlineShelfController::ProcessFocusedCoverWindow(int focus_index, int grid_cols) {
   if (!state_.connected || state_.catalog_items.empty() || grid_cols <= 0) return false;
+  (void)focus_index;
   {
     std::lock_guard<std::mutex> lock(cover_job_.mutex);
     if (cover_job_.active) return false;
   }
-  const int clamped_focus = std::clamp(focus_index, 0, static_cast<int>(state_.catalog_items.size()) - 1);
-  const int focus_row = clamped_focus / grid_cols;
-  const size_t begin = static_cast<size_t>(std::max(0, focus_row * grid_cols));
+  const size_t begin = 0;
   const size_t end = state_.catalog_items.size();
   if (begin != last_cover_window_begin_ || end != last_cover_window_end_ ||
       cover_window_cursor_ < begin || cover_window_cursor_ >= end ||
@@ -372,12 +371,10 @@ bool OnlineShelfController::ProcessFocusedCoverWindow(int focus_index, int grid_
   if (begin >= end) return false;
   std::vector<OnlineCatalogItem> batch;
   batch.reserve(4);
-  for (size_t n = 0; n < end - begin; ++n) {
-    const size_t index = begin + ((cover_window_cursor_ - begin + n) % (end - begin));
+  for (size_t index = begin; index < end; ++index) {
     const OnlineCatalogItem &item = state_.catalog_items[index];
     if (!OnlineCatalogCoverExists(state_, item)) {
       cover_window_cursor_ = index + 1;
-      if (cover_window_cursor_ >= end) cover_window_cursor_ = begin;
       batch.push_back(item);
       if (batch.size() >= 4) break;
     }
@@ -395,18 +392,9 @@ bool OnlineShelfController::ProcessFocusedCoverWindow(int focus_index, int grid_
     JoinCoverJob();
     cover_job_.worker = std::thread([this, state_snapshot, batch]() mutable {
       bool any_ok = false;
-      std::vector<std::thread> workers;
-      std::vector<unsigned char> results(batch.size(), 0);
-      workers.reserve(batch.size());
-      for (size_t i = 0; i < batch.size(); ++i) {
-        workers.emplace_back([state_snapshot, &batch, &results, i]() mutable {
-          results[i] = DownloadOnlineCoverForCatalogItem(state_snapshot, batch[i]) ? 1 : 0;
-        });
+      for (const OnlineCatalogItem &item : batch) {
+        any_ok = DownloadOnlineCoverForCatalogItem(state_snapshot, item) || any_ok;
       }
-      for (std::thread &worker : workers) {
-        if (worker.joinable()) worker.join();
-      }
-      for (unsigned char ok : results) any_ok = any_ok || ok != 0;
       std::lock_guard<std::mutex> lock(cover_job_.mutex);
       cover_job_.success = any_ok;
       cover_job_.finished = true;
