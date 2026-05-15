@@ -131,6 +131,19 @@ std::string ExtractJsonString(const std::string &json, const std::string &key) {
   return out;
 }
 
+std::string ExtractBackupDownloadUrl(const std::string &html, const std::string &base_url) {
+  std::smatch match;
+  const std::regex href_pattern(
+      R"(<a[^>]+href\s*=\s*(['"])([^'"]*wn01\.download/[^'"]+\.zip(?:\?[^'"]*)?)\1)",
+      std::regex::icase);
+  if (std::regex_search(html, match, href_pattern)) return ResolveUrl(base_url, match[2].str());
+  const std::regex any_pattern(
+      R"(['"]((?://|https?://)?[^'"]*wn01\.download/[^'"]+\.zip(?:\?[^'"]*)?)['"])",
+      std::regex::icase);
+  if (std::regex_search(html, match, any_pattern)) return ResolveUrl(base_url, match[1].str());
+  return {};
+}
+
 std::string SafeFilename(std::string name) {
   name = Trim(name);
   if (name.empty()) return "online_book";
@@ -228,6 +241,34 @@ std::vector<std::string> CurlApiArgs(const std::string &curl, const std::string 
   return args;
 }
 
+std::vector<std::string> CurlDownloadArgs(const std::string &curl, const std::string &referer) {
+  const std::string max_time = EnvValue("WN04_DOWNLOAD_MAX_TIME").empty() ? "1800" : EnvValue("WN04_DOWNLOAD_MAX_TIME");
+  std::vector<std::string> args = {curl, "-LfsS", "--connect-timeout", "30", "--max-time", max_time,
+                                  "--retry", "2", "--retry-delay", "2"};
+  const std::string mode = EnvValue("WN04_DOWNLOAD_HEADER_MODE");
+  if (mode.empty() || mode == "chrome120-h2" || mode == "success") {
+    args.push_back("--impersonate");
+    args.push_back("chrome120");
+    args.push_back("--http2");
+    args.push_back("--compressed");
+  } else if (mode == "chrome120-h3" || mode == "h3") {
+    args.push_back("--impersonate");
+    args.push_back("chrome120");
+    args.push_back("--http3-only");
+    args.push_back("--compressed");
+  } else if (mode == "minimal") {
+    args.push_back("--compressed");
+    args.push_back("--http2");
+  }
+  if (!referer.empty()) {
+    args.push_back("-H");
+    args.push_back("Referer: " + referer);
+  }
+  args.push_back("-w");
+  args.push_back("WN04_DOWNLOAD_RESULT http=%{http_code} remote=%{remote_ip} local=%{local_ip} size=%{size_download} time=%{time_total} speed=%{speed_download}\\n");
+  return args;
+}
+
 CommandResult Fetch(const std::string &curl, const std::string &url, const std::string &referer,
                     const std::string &cookie_jar = "") {
   std::vector<std::string> args = CurlBaseArgs(curl, referer);
@@ -237,11 +278,21 @@ CommandResult Fetch(const std::string &curl, const std::string &url, const std::
 }
 
 int Download(const std::string &curl, const std::string &url, const std::string &output, const std::string &referer) {
-  std::vector<std::string> args = CurlBaseArgs(curl, referer);
+  std::vector<std::string> args = CurlDownloadArgs(curl, referer);
   args.push_back("-o");
   args.push_back(output);
   args.push_back(url);
-  return RunStatus(args);
+  CommandResult result = RunCapture(args);
+  if (result.exit_code == 0) {
+    std::error_code ec;
+    if (std::filesystem::exists(output, ec) && !ec && std::filesystem::file_size(output, ec) > 0 && !ec) {
+      return 0;
+    }
+    std::cerr << "{\"error\":\"download_output_missing\",\"detail\":\"" << JsonEscape(result.output) << "\"}\n";
+    return 8;
+  }
+  std::cerr << "{\"error\":\"download_failed\",\"detail\":\"" << JsonEscape(result.output) << "\"}\n";
+  return result.exit_code;
 }
 
 int Resolve(const std::string &curl, const std::string &detail_url, const std::string &title,
@@ -275,6 +326,12 @@ int Resolve(const std::string &curl, const std::string &detail_url, const std::s
     std::filesystem::remove(cookie_path, ec);
     std::cerr << "{\"error\":\"landing_fetch_failed\",\"detail\":\"" << JsonEscape(landing.output) << "\"}\n";
     return 4;
+  }
+  if (const std::string backup_url = ExtractBackupDownloadUrl(landing.output, landing_url); !backup_url.empty()) {
+    std::error_code ec;
+    std::filesystem::remove(cookie_path, ec);
+    std::cout << "{\"url\":\"" << JsonEscape(backup_url) << "\"}\n";
+    return 0;
   }
   if (!std::regex_search(landing.output, match, std::regex(R"(['"]((?:down/)[^'"]+\.zip)['"])", std::regex::icase))) {
     std::error_code ec;

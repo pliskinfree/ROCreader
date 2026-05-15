@@ -438,6 +438,19 @@ std::string JsonEscape(const std::string &text) {
   return out;
 }
 
+std::string ExtractManualWebBackupDownloadUrl(const std::string &html, const std::string &base_url) {
+  std::smatch match;
+  const std::regex href_pattern(
+      R"(<a[^>]+href\s*=\s*(['"])([^'"]*wn01\.download/[^'"]+\.zip(?:\?[^'"]*)?)\1)",
+      std::regex::icase);
+  if (std::regex_search(html, match, href_pattern)) return ResolveUrl(base_url, match[2].str());
+  const std::regex any_pattern(
+      R"(['"]((?://|https?://)?[^'"]*wn01\.download/[^'"]+\.zip(?:\?[^'"]*)?)['"])",
+      std::regex::icase);
+  if (std::regex_search(html, match, any_pattern)) return ResolveUrl(base_url, match[1].str());
+  return {};
+}
+
 std::string SafeFilename(std::string name) {
   name = Trim(name);
   if (name.empty()) name = "online_book";
@@ -602,12 +615,18 @@ bool ManualWebDownloadViaExternalHelper(const std::string &url, const std::files
   std::filesystem::create_directories(output_path.parent_path(), ec);
   runtime_log::Line("online: manual web helper download path=" + helper.string() +
                     " url=" + url + " output=" + output_path.string());
-  const int exit_code = RunCommand(EscapeForPosix(helper.string()) + " download " + EscapeForPosix(url) + " " +
-                                   EscapeForPosix(output_path.string()) +
-                                   (referer.empty() ? "" : " " + EscapeForPosix(referer)));
-  if (exit_code == 0 && std::filesystem::exists(output_path, ec) && !ec) return true;
-  runtime_log::Line("online: manual web helper download failed exit=" + std::to_string(exit_code) +
-                    " url=" + url + " output=" + output_path.string());
+  CommandCaptureResult result = RunCommandCaptureWithStatus(EscapeForPosix(helper.string()) + " download " +
+                                                            EscapeForPosix(url) + " " +
+                                                            EscapeForPosix(output_path.string()) +
+                                                            (referer.empty() ? "" : " " + EscapeForPosix(referer)) +
+                                                            " 2>&1");
+  if (result.exit_code == 0 && std::filesystem::exists(output_path, ec) && !ec &&
+      std::filesystem::file_size(output_path, ec) > 0 && !ec) {
+    return true;
+  }
+  runtime_log::Line("online: manual web helper download failed exit=" + std::to_string(result.exit_code) +
+                    " url=" + url + " output=" + output_path.string() +
+                    " detail=" + CompactLogSnippet(result.output));
   std::filesystem::remove(output_path, ec);
 #else
   (void)url;
@@ -784,6 +803,11 @@ std::string ManualWebResolveDownload(const std::string &detail_url, const std::s
     runtime_log::Line("online: manual web resolve landing fetch failed title=" + title +
                       " landing_url=" + landing_url + " detail_url=" + detail_url);
     return {};
+  }
+  if (const std::string backup_url = ExtractManualWebBackupDownloadUrl(landing_html, landing_url);
+      !backup_url.empty()) {
+    runtime_log::Line("online: manual web resolve backup download url title=" + title + " url=" + backup_url);
+    return backup_url;
   }
   if (!std::regex_search(landing_html, match, std::regex(R"(['"]((?:down/)[^'"]+\.zip)['"])", std::regex::icase))) {
     runtime_log::Line("online: manual web resolve download key missing title=" + title +
