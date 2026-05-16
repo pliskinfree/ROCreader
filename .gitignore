@@ -33,13 +33,10 @@ URL/
 
 !Downloads/
 !Downloads/**
-Downloads/*.zip
 !H700/
 !H700/Downloads/
 !H700/Downloads/**
-H700/Downloads/*.zip
 !H700/toolchain/
 !H700/toolchain/**
 !TrimuiBrick/Downloads/
 !TrimuiBrick/Downloads/**
-TrimuiBrick/Downloads/*.zip
