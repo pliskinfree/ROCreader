@@ -30,8 +30,7 @@ void OnlineShelfController::Initialize(const std::filesystem::path &config_path,
 }
 
 void OnlineShelfController::Shutdown() {
-  JoinDownloadJob();
-  JoinCoverJob();
+  StopOnlineBackgroundJobs();
 }
 
 bool OnlineShelfController::IsActive() const {
@@ -202,6 +201,7 @@ void OnlineShelfController::StopOnlineBackgroundJobs() {
   last_cover_window_begin_ = 0;
   last_cover_window_end_ = 0;
   cover_window_cursor_ = 0;
+  cover_window_focus_row_ = -1;
   cover_window_category_index_ = -1;
   cover_window_catalog_size_ = 0;
 }
@@ -254,6 +254,11 @@ OnlineShelfControllerTickResult OnlineShelfController::TickAfterInput(ShelfRunti
     if (cover_job_.active && cover_job_.finished) {
       cover_job_.active = false;
       cover_finished_success = cover_job_.success;
+      const uint32_t now = SDL_GetTicks();
+      for (const std::string &failed_id : cover_job_.failed_ids) {
+        cover_retry_after_ticks_[failed_id] = now + 30000;
+      }
+      cover_job_.failed_ids.clear();
       result.cover_cache_changed = true;
     }
   }
@@ -270,6 +275,7 @@ OnlineShelfControllerTickResult OnlineShelfController::TickAfterInput(ShelfRunti
     last_cover_window_begin_ = 0;
     last_cover_window_end_ = 0;
     cover_window_cursor_ = 0;
+    cover_window_focus_row_ = -1;
     cover_window_category_index_ = state_.loaded_category_index;
     cover_window_catalog_size_ = state_.catalog_items.size();
     result.online_connection_changed = true;
@@ -296,6 +302,7 @@ OnlineShelfControllerTickResult OnlineShelfController::TickAfterPresent(int &nav
       last_cover_window_begin_ = 0;
       last_cover_window_end_ = 0;
       cover_window_cursor_ = 0;
+      cover_window_focus_row_ = -1;
       cover_window_category_index_ = state_.loaded_category_index;
       cover_window_catalog_size_ = state_.catalog_items.size();
       result.cover_cache_changed = true;
@@ -391,11 +398,29 @@ bool OnlineShelfController::BookDownloading(const BookItem &item) const {
 float OnlineShelfController::BookDownloadProgress(const BookItem &item, const OnlineShelfControllerDeps &deps) const {
   if (!item.is_remote || item.remote_local_path.empty()) return -1.0f;
   const std::filesystem::path part_path = std::filesystem::path(item.remote_local_path).string() + ".part";
+  const std::filesystem::path progress_path = part_path.string() + ".progress";
   const std::filesystem::path size_path = std::filesystem::path(item.remote_local_path).string() + ".size";
   std::error_code ec;
+  uintmax_t downloaded = 0;
+  uintmax_t total_size = 0;
+  if (std::filesystem::exists(progress_path, ec) && !ec) {
+    std::ifstream in(progress_path);
+    if (in) {
+      in >> downloaded >> total_size;
+      if (total_size > 0) {
+        const double progress = static_cast<double>(downloaded) / static_cast<double>(total_size);
+        return std::clamp(static_cast<float>(progress), 0.0f, 0.995f);
+      }
+      if (downloaded > 0) {
+        constexpr double kSoftFullBytes = 256.0 * 1024.0 * 1024.0;
+        const double progress = static_cast<double>(downloaded) / (static_cast<double>(downloaded) + kSoftFullBytes);
+        return std::clamp(static_cast<float>(progress), 0.02f, 0.92f);
+      }
+    }
+  }
   const uintmax_t part_size = std::filesystem::exists(part_path, ec) && !ec ? std::filesystem::file_size(part_path, ec) : 0;
   if (part_size == 0 || ec) return -1.0f;
-  uintmax_t total_size = 0;
+  total_size = 0;
   if (std::filesystem::exists(size_path, ec) && !ec) {
     std::ifstream in(size_path);
     if (in) in >> total_size;
@@ -428,36 +453,40 @@ void OnlineShelfController::JoinCoverJob() {
 
 bool OnlineShelfController::ProcessFocusedCoverWindow(int focus_index, int grid_cols) {
   if (!state_.connected || state_.catalog_items.empty() || grid_cols <= 0) return false;
-  (void)focus_index;
   {
     std::lock_guard<std::mutex> lock(cover_job_.mutex);
     if (cover_job_.active) return false;
   }
-  const size_t begin = 0;
   const size_t end = state_.catalog_items.size();
-  if (begin != last_cover_window_begin_ || end != last_cover_window_end_ ||
-      cover_window_cursor_ < begin || cover_window_cursor_ >= end ||
+  const int clamped_focus = std::clamp(focus_index, 0, static_cast<int>(end) - 1);
+  const int focus_row = clamped_focus / grid_cols;
+  const size_t begin = static_cast<size_t>(focus_row * grid_cols);
+  const size_t window_end = std::min(end, begin + static_cast<size_t>(grid_cols) * 2);
+  if (begin != last_cover_window_begin_ || window_end != last_cover_window_end_ ||
+      cover_window_cursor_ < begin || cover_window_cursor_ >= window_end ||
+      cover_window_focus_row_ != focus_row ||
       cover_window_category_index_ != state_.loaded_category_index ||
       cover_window_catalog_size_ != state_.catalog_items.size()) {
     last_cover_window_begin_ = begin;
-    last_cover_window_end_ = end;
+    last_cover_window_end_ = window_end;
     cover_window_cursor_ = begin;
+    cover_window_focus_row_ = focus_row;
     cover_window_category_index_ = state_.loaded_category_index;
     cover_window_catalog_size_ = state_.catalog_items.size();
   }
-  if (begin >= end) return false;
+  if (begin >= end || begin >= window_end) return false;
   std::vector<OnlineCatalogItem> batch;
-  batch.reserve(4);
-  const size_t span = end - begin;
-  for (size_t n = 0; n < span; ++n) {
-    const size_t index = begin + ((cover_window_cursor_ - begin + n) % span);
-    const OnlineCatalogItem &item = state_.catalog_items[index];
-    if (!OnlineCatalogCoverExists(state_, item)) {
-      cover_window_cursor_ = index + 1;
-      if (cover_window_cursor_ >= end) cover_window_cursor_ = begin;
-      batch.push_back(item);
-      if (batch.size() >= 4) break;
-    }
+  batch.reserve(8);
+  size_t cursor = cover_window_cursor_;
+  if (cursor < begin || cursor >= window_end) cursor = begin;
+  while (cursor < window_end && batch.size() < 8) {
+    const OnlineCatalogItem &item = state_.catalog_items[cursor];
+    const std::string retry_key = item.id.empty() ? item.cover_url : item.id;
+    const auto retry_it = cover_retry_after_ticks_.find(retry_key);
+    const bool in_cooldown = retry_it != cover_retry_after_ticks_.end() &&
+                             static_cast<int32_t>(SDL_GetTicks() - retry_it->second) < 0;
+    if (!in_cooldown && !OnlineCatalogCoverExists(state_, item)) batch.push_back(item);
+    ++cursor;
   }
   if (!batch.empty()) {
     state_.covers_loading = true;
@@ -467,18 +496,36 @@ bool OnlineShelfController::ProcessFocusedCoverWindow(int focus_index, int grid_
       cover_job_.finished = false;
       cover_job_.success = false;
       cover_job_.items = batch;
+      cover_job_.failed_ids.clear();
     }
     OnlineSourceState state_snapshot = state_;
     JoinCoverJob();
     cover_job_.worker = std::thread([this, state_snapshot, batch]() mutable {
       bool any_ok = false;
-      for (const OnlineCatalogItem &item : batch) {
-        any_ok = DownloadOnlineCoverForCatalogItem(state_snapshot, item) || any_ok;
+      std::vector<std::thread> workers;
+      std::vector<unsigned char> results(batch.size(), 0);
+      workers.reserve(batch.size());
+      for (size_t i = 0; i < batch.size(); ++i) {
+        workers.emplace_back([state_snapshot, batch, &results, i]() mutable {
+          results[i] = DownloadOnlineCoverForCatalogItem(state_snapshot, batch[i]) ? 1 : 0;
+        });
+      }
+      for (std::thread &worker : workers) {
+        if (worker.joinable()) worker.join();
+      }
+      std::vector<std::string> failed_ids;
+      for (unsigned char ok : results) {
+        any_ok = ok != 0 || any_ok;
+      }
+      for (size_t i = 0; i < batch.size(); ++i) {
+        if (results[i] == 0) failed_ids.push_back(batch[i].id.empty() ? batch[i].cover_url : batch[i].id);
       }
       std::lock_guard<std::mutex> lock(cover_job_.mutex);
       cover_job_.success = any_ok;
+      cover_job_.failed_ids = std::move(failed_ids);
       cover_job_.finished = true;
     });
+    cover_window_cursor_ = cursor >= window_end ? begin : cursor;
     return false;
   }
   cover_window_cursor_ = begin;

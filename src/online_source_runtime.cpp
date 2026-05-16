@@ -592,6 +592,10 @@ bool DownloadOnlineBookForItem(OnlineSourceState &state, const BookItem &item, B
   if (!expected_size.empty()) {
     std::ofstream size_out(size_path, std::ios::trunc);
     if (size_out) size_out << expected_size;
+    runtime_log::Line("online: book download expected size title=" + item.name +
+                      " bytes=" + expected_size);
+  } else {
+    runtime_log::Line("online: book download expected size unavailable title=" + item.name);
   }
   const bool downloaded = manual_web_source ? DownloadManualWebFile(download_url, temp_path, referer)
                                             : DownloadFile(download_url, temp_path, referer);

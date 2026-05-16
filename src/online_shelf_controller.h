@@ -100,6 +100,7 @@ private:
     bool finished = false;
     bool success = false;
     std::vector<OnlineCatalogItem> items;
+    std::vector<std::string> failed_ids;
   };
 
   std::string BookKey(const BookItem &item) const;
@@ -120,9 +121,11 @@ private:
   DownloadJob download_job_;
   CoverJob cover_job_;
   std::unordered_map<std::string, std::string> book_status_text_;
+  std::unordered_map<std::string, uint32_t> cover_retry_after_ticks_;
   size_t last_cover_window_begin_ = 0;
   size_t last_cover_window_end_ = 0;
   size_t cover_window_cursor_ = 0;
+  int cover_window_focus_row_ = -1;
   int cover_window_category_index_ = -1;
   size_t cover_window_catalog_size_ = 0;
 };

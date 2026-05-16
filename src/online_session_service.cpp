@@ -133,12 +133,47 @@ const OnlineCatalogItem *FindCatalogItem(const OnlineSourceState &state, const B
   return nullptr;
 }
 
-std::filesystem::path FirstRootOrSibling(const std::vector<std::string> &roots,
-                                         const std::filesystem::path &fallback) {
-  for (const std::string &root : roots) {
-    if (!root.empty()) return std::filesystem::path(root);
+bool PathContainsDownloadsDir(const std::filesystem::path &path) {
+  for (const auto &part : path) {
+    if (part == "Downloads") return true;
   }
-  return fallback;
+  return false;
+}
+
+std::filesystem::path SelectMigrationBooksRoot(const OnlineSourceState &state,
+                                               const std::vector<std::string> &books_roots) {
+  const std::filesystem::path preferred = state.download_root.parent_path() / "books";
+  if (!preferred.empty() && !PathContainsDownloadsDir(preferred)) {
+    return preferred;
+  }
+  for (const std::string &root : books_roots) {
+    if (root.empty()) continue;
+    const std::filesystem::path candidate(root);
+    if (PathContainsDownloadsDir(candidate)) {
+      runtime_log::Line("online: migration skip downloads books root=" + candidate.string());
+      continue;
+    }
+    return candidate;
+  }
+  return preferred;
+}
+
+std::filesystem::path SelectMigrationCoversRoot(const std::filesystem::path &books_root,
+                                                const std::vector<std::string> &cover_roots) {
+  const std::filesystem::path preferred = books_root.parent_path() / "book_covers";
+  if (!preferred.empty() && !PathContainsDownloadsDir(preferred)) {
+    return preferred;
+  }
+  for (const std::string &root : cover_roots) {
+    if (root.empty()) continue;
+    const std::filesystem::path candidate(root);
+    if (PathContainsDownloadsDir(candidate)) {
+      runtime_log::Line("online: migration skip downloads cover root=" + candidate.string());
+      continue;
+    }
+    return candidate;
+  }
+  return preferred;
 }
 
 bool MoveOrCopyFile(const std::filesystem::path &from, const std::filesystem::path &to) {
@@ -209,6 +244,20 @@ std::filesystem::path ResolveDownloadedBookPath(const OnlineSourceState &state,
   if (!expected.empty()) candidates.push_back(expected);
   for (const std::filesystem::path &candidate : candidates) {
     if (LooksLikeCompleteZip(candidate)) return candidate;
+  }
+  const std::filesystem::path books_dir = state.download_root / "books";
+  std::error_code ec;
+  if (std::filesystem::exists(books_dir, ec) && !ec) {
+    for (std::filesystem::recursive_directory_iterator it(books_dir, ec), end; !ec && it != end; it.increment(ec)) {
+      if (it->is_regular_file(ec) && !ec && it->path().extension() == catalog_item.file_ext &&
+          LooksLikeCompleteZip(it->path())) {
+        if (!catalog_item.local_path.empty() && it->path().filename() == std::filesystem::path(catalog_item.local_path).filename()) {
+          runtime_log::Line("online: migrate fallback matched filename title=" + catalog_item.title +
+                            " path=" + it->path().string());
+          return it->path();
+        }
+      }
+    }
   }
   return {};
 }
@@ -341,9 +390,11 @@ OnlineMigrationResult MigrateMarkedOnlineItems(
   result.total = CountMarkedOnlineItems(state);
   if (result.total == 0) return result;
 
-  const std::filesystem::path fallback_books = state.download_root.parent_path() / "books";
-  const std::filesystem::path books_root = FirstRootOrSibling(books_roots, fallback_books);
-  const std::filesystem::path covers_root = FirstRootOrSibling(cover_roots, books_root.parent_path() / "book_covers");
+  const std::filesystem::path books_root = SelectMigrationBooksRoot(state, books_roots);
+  const std::filesystem::path covers_root = SelectMigrationCoversRoot(books_root, cover_roots);
+  runtime_log::Line("online: migration roots books=" + books_root.string() +
+                    " covers=" + covers_root.string() +
+                    " download_root=" + state.download_root.string());
 
   size_t done = 0;
   const std::vector<OnlineCatalogItem> migration_items = !state.marked_local_items.empty() ? state.marked_local_items
@@ -367,6 +418,9 @@ OnlineMigrationResult MigrateMarkedOnlineItems(
     }
     catalog_item.local_path = source_book.string();
     const std::filesystem::path dest_book = MakeLocalBookDestPath(books_root, catalog_item, source_book);
+    runtime_log::Line("online: migrate marked begin title=" + catalog_item.title +
+                      " source=" + source_book.string() +
+                      " dest=" + dest_book.string());
     const bool book_moved = MoveOrCopyFile(source_book, dest_book);
 
     BookItem remote_item;

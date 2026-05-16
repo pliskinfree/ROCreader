@@ -1,6 +1,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cctype>
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #if __has_include(<filesystem>)
 #include <filesystem>
@@ -14,6 +16,7 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <sys/wait.h>
 #include <vector>
 
@@ -63,6 +66,16 @@ CommandResult RunCapture(const std::vector<std::string> &args) {
   while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) result.output += buffer;
   result.exit_code = DecodeStatus(pclose(pipe));
   return result;
+}
+
+void WriteProgressFile(const std::string &path, unsigned long long downloaded, unsigned long long total) {
+  if (path.empty()) return;
+  const std::string temp = path + ".tmp";
+  FILE *file = std::fopen(temp.c_str(), "w");
+  if (!file) return;
+  std::fprintf(file, "%llu %llu\n", downloaded, total);
+  std::fclose(file);
+  std::rename(temp.c_str(), path.c_str());
 }
 
 int RunStatus(const std::vector<std::string> &args) {
@@ -169,6 +182,48 @@ std::string NormalizeZipDownloadUrl(std::string url) {
     return url.substr(0, after_zip);
   }
   return url;
+}
+
+std::vector<std::string> CoverUrlCandidates(const std::string &url) {
+  std::vector<std::string> candidates;
+  if (url.empty()) return candidates;
+  candidates.push_back(url);
+  const std::string marker = "://t";
+  const size_t marker_pos = url.find(marker);
+  if (marker_pos == std::string::npos) return candidates;
+  const size_t digit_pos = marker_pos + marker.size();
+  if (digit_pos >= url.size() || !std::isdigit(static_cast<unsigned char>(url[digit_pos]))) return candidates;
+  const std::string suffix = ".wnacgimg.date";
+  const size_t suffix_pos = url.find(suffix, digit_pos + 1);
+  if (suffix_pos == std::string::npos || suffix_pos != digit_pos + 1) return candidates;
+  for (char host_digit : {'4', '3', '2', '1'}) {
+    if (host_digit == url[digit_pos]) continue;
+    std::string next = url;
+    next[digit_pos] = host_digit;
+    if (std::find(candidates.begin(), candidates.end(), next) == candidates.end()) {
+      candidates.push_back(std::move(next));
+    }
+  }
+  return candidates;
+}
+
+std::string ParseDownloadSize(const std::string &output) {
+  std::smatch match;
+  std::regex content_range_pattern(R"((?:^|\r?\n)content-range:\s*bytes\s+[0-9]+-[0-9]+/([0-9]+))",
+                                   std::regex::icase);
+  if (std::regex_search(output, match, content_range_pattern) && match[1].str() != "0") {
+    return match[1].str();
+  }
+  std::regex content_length_marker(R"(content_length=([0-9]+))", std::regex::icase);
+  if (std::regex_search(output, match, content_length_marker) && match[1].str() != "0") {
+    return match[1].str();
+  }
+  std::regex header_pattern(R"((?:^|\r?\n)content-length:\s*([0-9]+))", std::regex::icase);
+  std::string size;
+  for (std::sregex_iterator it(output.begin(), output.end(), header_pattern), end; it != end; ++it) {
+    size = (*it)[1].str();
+  }
+  return size != "0" ? size : std::string();
 }
 
 std::string SafeFilename(std::string name) {
@@ -366,13 +421,79 @@ int Download(const std::string &curl, const std::string &url, const std::string 
   return result.exit_code;
 }
 
+int DownloadWithProgress(const std::string &curl, const std::string &url, const std::string &output,
+                         const std::string &referer) {
+  const std::string progress_path = output + ".progress";
+  unsigned long long total = 0;
+
+  if (!IsCoverUrl(url)) {
+    std::vector<std::string> size_args = CurlDownloadArgs(curl, referer);
+    size_args.push_back("-r");
+    size_args.push_back("0-0");
+    size_args.push_back("-o");
+    size_args.push_back("/dev/null");
+    size_args.push_back("-D");
+    size_args.push_back("-");
+    size_args.push_back(url);
+    const CommandResult size_result = RunCapture(size_args);
+    const std::string size = ParseDownloadSize(size_result.output);
+    if (!size.empty()) total = std::stoull(size);
+  }
+
+  std::atomic_bool monitor_done{false};
+  std::thread monitor([&]() {
+    while (!monitor_done.load()) {
+      std::error_code ec;
+      if (fs::exists(output, ec) && !ec) {
+        const unsigned long long current = static_cast<unsigned long long>(fs::file_size(output, ec));
+        if (!ec) WriteProgressFile(progress_path, current, total);
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+  });
+
+  CommandResult result;
+  bool attempted = false;
+  const std::vector<std::string> candidates = IsCoverUrl(url) ? CoverUrlCandidates(url) : std::vector<std::string>{url};
+  for (const std::string &candidate : candidates) {
+    std::error_code remove_ec;
+    fs::remove(output, remove_ec);
+    std::vector<std::string> args = IsCoverUrl(candidate) ? CurlCoverArgs(curl, referer) : CurlDownloadArgs(curl, referer);
+    args.push_back("-o");
+    args.push_back(output);
+    args.push_back(candidate);
+    attempted = true;
+    result = RunCapture(args);
+    if (result.exit_code == 0) break;
+  }
+
+  monitor_done.store(true);
+  monitor.join();
+  std::error_code ec;
+  fs::remove(progress_path, ec);
+
+  if (attempted && result.exit_code == 0) {
+    ec.clear();
+    if (fs::exists(output, ec) && !ec && fs::file_size(output, ec) > 0 && !ec) {
+      return 0;
+    }
+    std::cerr << "{\"error\":\"download_output_missing\",\"detail\":\"" << JsonEscape(result.output) << "\"}\n";
+    return 8;
+  }
+  std::cerr << "{\"error\":\"download_failed\",\"detail\":\"" << JsonEscape(result.output) << "\"}\n";
+  return result.exit_code;
+}
+
 int Size(const std::string &curl, const std::string &url, const std::string &referer) {
-  std::vector<std::string> args = IsCoverUrl(url) ? CurlCoverArgs(curl, referer) : CurlDownloadArgs(curl, referer);
-  args.push_back("-I");
+  std::vector<std::string> args = CurlDownloadArgs(curl, referer);
+  args.push_back("-r");
+  args.push_back("0-0");
   args.push_back("-o");
   args.push_back("/dev/null");
   args.push_back("-w");
-  args.push_back("WN04_SIZE_RESULT http=%{http_code} size=%{size_download} content_length=%{content_length_download}\\n");
+  args.push_back("WN04_SIZE_RESULT http=%{http_code} size=%{size_download} content_length=%{content_length_download} header_size=%{header_size}\\n");
+  args.push_back("-D");
+  args.push_back("-");
   args.push_back(url);
   CommandResult result = RunCapture(args);
   if (result.exit_code != 0) {
@@ -382,6 +503,12 @@ int Size(const std::string &curl, const std::string &url, const std::string &ref
   std::smatch match;
   std::regex content_length_pattern(R"(content_length=([0-9]+))", std::regex::icase);
   if (std::regex_search(result.output, match, content_length_pattern) && match[1].str() != "0") {
+    std::cout << "{\"size\":\"" << match[1].str() << "\"}\n";
+    return 0;
+  }
+  std::regex content_range_pattern(R"((?:^|\r?\n)content-range:\s*bytes\s+[0-9]+-[0-9]+/([0-9]+))",
+                                   std::regex::icase);
+  if (std::regex_search(result.output, match, content_range_pattern) && match[1].str() != "0") {
     std::cout << "{\"size\":\"" << match[1].str() << "\"}\n";
     return 0;
   }
@@ -507,7 +634,7 @@ int main(int argc, char **argv) {
       Usage();
       return 64;
     }
-    return Download(curl, argv[2], argv[3], argc > 4 ? argv[4] : "");
+    return DownloadWithProgress(curl, argv[2], argv[3], argc > 4 ? argv[4] : "");
   }
   if (mode == "size") {
     return Size(curl, argv[2], argc > 3 ? argv[3] : "");

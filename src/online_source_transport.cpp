@@ -1172,10 +1172,10 @@ std::string ProbeDownloadSize(const std::string &url, const std::string &referer
     std::string sink;
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sink);
     const CURLcode code = curl_easy_perform(curl);
-    double content_length = -1.0;
+    curl_off_t content_length = -1;
     curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &content_length);
     curl_easy_cleanup(curl);
-    if (code == CURLE_OK && content_length > 0.0) return std::to_string(static_cast<uint64_t>(content_length));
+    if (code == CURLE_OK && content_length > 0) return std::to_string(static_cast<uint64_t>(content_length));
   }
 #endif
   return {};
