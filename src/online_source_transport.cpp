@@ -3,14 +3,22 @@
 #include "runtime_log.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <regex>
 #include <sstream>
 #include <system_error>
+#include <thread>
 #if !defined(_WIN32)
+#include <chrono>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/select.h>
 #include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 #ifdef HAVE_LIBCURL
@@ -29,6 +37,12 @@ struct CommandCaptureResult {
   std::string output;
   int exit_code = -1;
 };
+
+std::atomic_bool g_transfer_cancelled{false};
+#if !defined(_WIN32)
+std::mutex g_process_mutex;
+std::vector<pid_t> g_active_process_groups;
+#endif
 
 int RunCommand(const std::string &command);
 
@@ -136,14 +150,108 @@ int DecodeProcessStatus(int status) {
   return status;
 }
 
-CommandCaptureResult RunCommandCaptureWithStatus(const std::string &command) {
-  FILE *pipe = popen(command.c_str(), "r");
-  if (!pipe) return {};
+void RegisterProcessGroup(pid_t pgid) {
+  std::lock_guard<std::mutex> lock(g_process_mutex);
+  g_active_process_groups.push_back(pgid);
+}
+
+void UnregisterProcessGroup(pid_t pgid) {
+  std::lock_guard<std::mutex> lock(g_process_mutex);
+  g_active_process_groups.erase(std::remove(g_active_process_groups.begin(), g_active_process_groups.end(), pgid),
+                                g_active_process_groups.end());
+}
+
+void KillRegisteredProcessGroups() {
+  std::vector<pid_t> groups;
+  {
+    std::lock_guard<std::mutex> lock(g_process_mutex);
+    groups = g_active_process_groups;
+  }
+  for (pid_t pgid : groups) {
+    if (pgid > 0) kill(-pgid, SIGTERM);
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(80));
+  for (pid_t pgid : groups) {
+    if (pgid > 0) kill(-pgid, SIGKILL);
+  }
+}
+
+CommandCaptureResult RunCancellableShellCapture(const std::string &command) {
   CommandCaptureResult result;
+  if (g_transfer_cancelled.load()) {
+    result.exit_code = 130;
+    return result;
+  }
+
+  int pipe_fd[2] = {-1, -1};
+  if (pipe(pipe_fd) != 0) return result;
+  pid_t pid = fork();
+  if (pid == -1) {
+    close(pipe_fd[0]);
+    close(pipe_fd[1]);
+    return result;
+  }
+  if (pid == 0) {
+    setpgid(0, 0);
+    close(pipe_fd[0]);
+    dup2(pipe_fd[1], STDOUT_FILENO);
+    dup2(pipe_fd[1], STDERR_FILENO);
+    close(pipe_fd[1]);
+    execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char *>(nullptr));
+    _exit(127);
+  }
+
+  setpgid(pid, pid);
+  close(pipe_fd[1]);
+  RegisterProcessGroup(pid);
+  const int flags = fcntl(pipe_fd[0], F_GETFL, 0);
+  if (flags >= 0) fcntl(pipe_fd[0], F_SETFL, flags | O_NONBLOCK);
+
   char buffer[512] = {};
-  while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) result.output += buffer;
-  result.exit_code = DecodeProcessStatus(pclose(pipe));
+  int status = 0;
+  bool child_done = false;
+  while (!child_done) {
+    if (g_transfer_cancelled.load()) {
+      kill(-pid, SIGTERM);
+      std::this_thread::sleep_for(std::chrono::milliseconds(60));
+      kill(-pid, SIGKILL);
+    }
+
+    fd_set read_set;
+    FD_ZERO(&read_set);
+    FD_SET(pipe_fd[0], &read_set);
+    timeval timeout{};
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 100000;
+    const int select_rc = select(pipe_fd[0] + 1, &read_set, nullptr, nullptr, &timeout);
+    if (select_rc > 0 && FD_ISSET(pipe_fd[0], &read_set)) {
+      while (true) {
+        const ssize_t n = read(pipe_fd[0], buffer, sizeof(buffer));
+        if (n > 0) result.output.append(buffer, buffer + n);
+        else break;
+      }
+    }
+
+    const pid_t wait_rc = waitpid(pid, &status, WNOHANG);
+    if (wait_rc == pid) child_done = true;
+    else if (wait_rc == -1) {
+      status = -1;
+      child_done = true;
+    }
+  }
+  while (true) {
+    const ssize_t n = read(pipe_fd[0], buffer, sizeof(buffer));
+    if (n > 0) result.output.append(buffer, buffer + n);
+    else break;
+  }
+  close(pipe_fd[0]);
+  UnregisterProcessGroup(pid);
+  result.exit_code = g_transfer_cancelled.load() ? 130 : DecodeProcessStatus(status);
   return result;
+}
+
+CommandCaptureResult RunCommandCaptureWithStatus(const std::string &command) {
+  return RunCancellableShellCapture(command);
 }
 #endif
 
@@ -278,6 +386,10 @@ size_t CurlWriteFile(char *ptr, size_t size, size_t nmemb, void *userdata) {
   return std::fwrite(ptr, size, nmemb, file) * size;
 }
 
+int CurlCancelProgress(void *, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+  return g_transfer_cancelled.load() ? 1 : 0;
+}
+
 void ConfigureCurlCommon(CURL *curl, const std::string &url, const std::string &referer) {
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -288,6 +400,8 @@ void ConfigureCurlCommon(CURL *curl, const std::string &url, const std::string &
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
   curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+  curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlCancelProgress);
   if (!referer.empty()) curl_easy_setopt(curl, CURLOPT_REFERER, referer.c_str());
 }
 
@@ -396,11 +510,15 @@ bool StartsWith(const std::string &text, const std::string &prefix) {
   return text.rfind(prefix, 0) == 0;
 }
 
+std::string LowerAscii(std::string text) {
+  std::transform(text.begin(), text.end(), text.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return text;
+}
+
 std::string ResolveUrl(const std::string &base_url, const std::string &href) {
   if (href.empty()) return {};
-  std::string lower = href;
-  std::transform(lower.begin(), lower.end(), lower.begin(),
-                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  const std::string lower = LowerAscii(href);
   if (StartsWith(lower, "http://") || StartsWith(lower, "https://") || StartsWith(lower, "file://")) return href;
   if (StartsWith(href, "//")) {
     const size_t scheme = base_url.find("://");
@@ -529,29 +647,42 @@ bool ManualWebCatalogOnlyEnabled() {
 }
 
 bool IsWn04Url(const std::string &url) {
-  return url.find("wn04.cfd") != std::string::npos || url.find("wnacg") != std::string::npos ||
+  return url.find("wn04.") != std::string::npos || url.find("wn05.") != std::string::npos ||
+         url.find("wn08.") != std::string::npos || url.find("wnacg") != std::string::npos ||
          url.find("wcdn.date") != std::string::npos;
 }
 
 bool IsWn04DownloadUrl(const std::string &url) {
-  return url.find("wcdn.date") != std::string::npos;
+  return IsWn04Url(url) || url.find("wn01.download") != std::string::npos;
+}
+
+bool IsManualWebCoverAssetUrl(const std::string &url) {
+  const std::string lower = LowerAscii(url);
+  return lower.find("wnacgimg") != std::string::npos ||
+         lower.find("/data/t/") != std::string::npos ||
+         lower.find(".jpg") != std::string::npos ||
+         lower.find(".jpeg") != std::string::npos ||
+         lower.find(".png") != std::string::npos ||
+         lower.find(".webp") != std::string::npos;
+}
+
+std::filesystem::path ExistingHelperPathFromEnv(const char *name, const char *log_label) {
+  if (const char *value = std::getenv(name); value && *value) {
+    std::filesystem::path helper = value;
+    std::error_code ec;
+    if (std::filesystem::exists(helper, ec) && !ec) return helper;
+    runtime_log::Line(std::string("online: manual web helper missing ") + log_label + " path=" + helper.string());
+  }
+  return {};
 }
 
 std::filesystem::path ManualWebExternalHelperPath() {
   if (!ManualWebExternalTransportEnabled()) return {};
-  if (const char *value = std::getenv("ROCREADER_MANUAL_WEB_FETCH"); value && *value) {
-    std::filesystem::path helper = value;
-    std::error_code ec;
-    if (std::filesystem::exists(helper, ec) && !ec) return helper;
-    runtime_log::Line("online: manual web helper missing env path=" + helper.string());
-    return {};
+  if (std::filesystem::path helper = ExistingHelperPathFromEnv("ROCREADER_MANUAL_WEB_FETCH", "env"); !helper.empty()) {
+    return helper;
   }
-  if (const char *value = std::getenv("ROCREADER_WN04_FETCH"); value && *value) {
-    std::filesystem::path helper = value;
-    std::error_code ec;
-    if (std::filesystem::exists(helper, ec) && !ec) return helper;
-    runtime_log::Line("online: manual web helper missing legacy env path=" + helper.string());
-    return {};
+  if (std::filesystem::path helper = ExistingHelperPathFromEnv("ROCREADER_WN04_FETCH", "legacy env"); !helper.empty()) {
+    return helper;
   }
   const std::vector<std::filesystem::path> candidates = {
       std::filesystem::current_path() / "bin" / "wn04_fetch",
@@ -562,6 +693,27 @@ std::filesystem::path ManualWebExternalHelperPath() {
     if (std::filesystem::exists(candidate, ec) && !ec) return candidate;
   }
   return {};
+}
+
+std::filesystem::path ManualWebZipHelperPath() {
+  if (!ManualWebExternalTransportEnabled()) return {};
+  if (std::filesystem::path helper = ExistingHelperPathFromEnv("ROCREADER_MANUAL_WEB_ZIP_FETCH", "zip env");
+      !helper.empty()) {
+    return helper;
+  }
+  if (std::filesystem::path helper = ExistingHelperPathFromEnv("ROCREADER_WN04_ZIP_FETCH", "legacy zip env");
+      !helper.empty()) {
+    return helper;
+  }
+  const std::vector<std::filesystem::path> candidates = {
+      std::filesystem::current_path() / "bin" / "wn04_fetch_zip",
+      std::filesystem::current_path() / "wn04_fetch_zip",
+  };
+  std::error_code ec;
+  for (const auto &candidate : candidates) {
+    if (std::filesystem::exists(candidate, ec) && !ec) return candidate;
+  }
+  return ManualWebExternalHelperPath();
 }
 
 std::string ManualWebFetchViaExternalHelper(const std::string &url, const std::string &referer) {
@@ -586,7 +738,7 @@ std::string ManualWebFetchViaExternalHelper(const std::string &url, const std::s
 std::string ManualWebResolveViaExternalHelper(const std::string &detail_url, const std::string &title,
                                               const std::string &source_url) {
 #if !defined(_WIN32)
-  const std::filesystem::path helper = ManualWebExternalHelperPath();
+  const std::filesystem::path helper = ManualWebZipHelperPath();
   if (helper.empty()) return {};
   runtime_log::Line("online: manual web helper resolve path=" + helper.string() +
                     " detail_url=" + detail_url + " title=" + title);
@@ -609,7 +761,9 @@ std::string ManualWebResolveViaExternalHelper(const std::string &detail_url, con
 bool ManualWebDownloadViaExternalHelper(const std::string &url, const std::filesystem::path &output_path,
                                         const std::string &referer) {
 #if !defined(_WIN32)
-  const std::filesystem::path helper = ManualWebExternalHelperPath();
+  const std::filesystem::path helper = IsWn04DownloadUrl(url) && !IsManualWebCoverAssetUrl(url)
+                                           ? ManualWebZipHelperPath()
+                                           : ManualWebExternalHelperPath();
   if (helper.empty()) return false;
   std::error_code ec;
   std::filesystem::create_directories(output_path.parent_path(), ec);
@@ -697,7 +851,59 @@ bool ManualWebDownloadViaPython(const std::string &url, const std::filesystem::p
   return false;
 #endif
 }
+
+std::string ProbeDownloadSizeViaExternalHelper(const std::string &url, const std::string &referer) {
+#if !defined(_WIN32)
+  const std::filesystem::path helper = IsWn04DownloadUrl(url) && !IsManualWebCoverAssetUrl(url)
+                                           ? ManualWebZipHelperPath()
+                                           : ManualWebExternalHelperPath();
+  if (helper.empty()) return {};
+  runtime_log::Line("online: manual web helper size probe path=" + helper.string() + " url=" + url);
+  CommandCaptureResult result = RunCommandCaptureWithStatus(EscapeForPosix(helper.string()) + " size " +
+                                                            EscapeForPosix(url) +
+                                                            (referer.empty() ? "" : " " + EscapeForPosix(referer)) +
+                                                            " 2>&1");
+  const std::string size = ExtractJsonStringValue(result.output, "size");
+  if (result.exit_code == 0 && !size.empty()) return size;
+  runtime_log::Line("online: manual web helper size probe failed exit=" + std::to_string(result.exit_code) +
+                    " url=" + url + " output=" + CompactLogSnippet(result.output));
+#else
+  (void)url;
+  (void)referer;
+#endif
+  return {};
+}
+
+std::string ProbeDownloadSizeViaPython(const std::string &url, const std::string &referer) {
+#if defined(_WIN32)
+  const std::filesystem::path helper = ManualWebHelperPath();
+  if (helper.empty()) return {};
+  const std::string output = RunPythonHelperCapture(helper, {"size", url, referer}, "size");
+  const std::string size = ExtractJsonStringValue(output, "size");
+  if (!size.empty()) return size;
+#else
+  (void)url;
+  (void)referer;
+#endif
+  return {};
+}
 }  // namespace
+
+void CancelOnlineSourceTransfers() {
+  g_transfer_cancelled.store(true);
+#if !defined(_WIN32)
+  KillRegisteredProcessGroups();
+#endif
+  runtime_log::Line("online: transfer cancel requested");
+}
+
+void ResetOnlineSourceTransferCancel() {
+  g_transfer_cancelled.store(false);
+}
+
+bool OnlineSourceTransfersCancelled() {
+  return g_transfer_cancelled.load();
+}
 
 std::string CompactLogSnippet(const std::string &text, size_t max_len) {
   std::string trimmed = Trim(text);
@@ -758,6 +964,10 @@ std::string HttpGetText(const std::string &url, const std::string &referer) {
 
 std::string ManualWebFetch(const std::string &url, const std::string &referer) {
   if (std::string body = ManualWebFetchViaExternalHelper(url, referer); !body.empty()) return body;
+  if (ManualWebExternalTransportEnabled() && (IsWn04Url(url) || IsWn04Url(referer))) {
+    runtime_log::Line("online: manual web helper fetch terminal failure url=" + url);
+    return {};
+  }
   if (std::string body = ManualWebFetchViaPython(url, referer); !body.empty()) return body;
   return HttpGetText(url, referer);
 }
@@ -944,6 +1154,31 @@ bool DownloadFile(const std::string &url, const std::filesystem::path &output_pa
   }
   return wget_exit == 0;
 #endif
+}
+
+std::string ProbeDownloadSize(const std::string &url, const std::string &referer) {
+  if (std::string size = ProbeDownloadSizeViaExternalHelper(url, referer); !size.empty()) return size;
+  if (ManualWebExternalTransportEnabled() && (IsWn04Url(url) || IsWn04Url(referer))) return {};
+  if (std::string size = ProbeDownloadSizeViaPython(url, referer); !size.empty()) return size;
+#ifdef HAVE_LIBCURL
+  if (UseLibcurlTransport()) {
+    EnsureCurlGlobalInit();
+    CURL *curl = curl_easy_init();
+    if (!curl) return {};
+    ConfigureCurlCommon(curl, url, referer);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(curl, CURLOPT_HEADER, 0L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteString);
+    std::string sink;
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sink);
+    const CURLcode code = curl_easy_perform(curl);
+    double content_length = -1.0;
+    curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &content_length);
+    curl_easy_cleanup(curl);
+    if (code == CURLE_OK && content_length > 0.0) return std::to_string(static_cast<uint64_t>(content_length));
+  }
+#endif
+  return {};
 }
 
 std::string ExtractJsonStringValue(const std::string &json, const std::string &key) {

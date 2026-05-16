@@ -10,6 +10,7 @@
 bool MarkOnlineItemForLocal(OnlineSourceState &state, const BookItem &item);
 bool UnmarkOnlineItemForLocal(OnlineSourceState &state, const BookItem &item);
 bool OnlineItemMarkedForLocal(const OnlineSourceState &state, const BookItem &item);
+bool SyncDownloadedOnlineItem(OnlineSourceState &state, const BookItem &remote_item, const BookItem &local_item);
 std::vector<BookItem> BuildMarkedOnlineShelfItems(const OnlineSourceState &state);
 size_t CountMarkedOnlineItems(const OnlineSourceState &state);
 

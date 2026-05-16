@@ -4,6 +4,7 @@
 #include "filesystem_compat.h"
 
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 struct OnlineSourceCategory {
@@ -53,5 +54,7 @@ struct OnlineSourceState {
   std::string next_page_url;
   bool next_page_loading = false;
   std::vector<OnlineCatalogItem> catalog_items;
+  std::unordered_set<std::string> marked_local_keys;
+  std::vector<OnlineCatalogItem> marked_local_items;
   std::string status_message;
 };

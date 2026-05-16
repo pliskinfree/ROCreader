@@ -68,6 +68,7 @@ public:
   bool OpenOrDownloadBook(const BookItem &item, const OnlineShelfControllerDeps &deps);
   bool MarkForLocal(const BookItem &item, const OnlineShelfControllerDeps &deps);
   bool UnmarkForLocal(const BookItem &item, const OnlineShelfControllerDeps &deps);
+  void StopOnlineBackgroundJobs();
 
   int NavItemCount() const;
   std::string NavLabelText(int index) const;
@@ -103,6 +104,7 @@ private:
 
   std::string BookKey(const BookItem &item) const;
   bool FileExists(const std::filesystem::path &path, const OnlineShelfControllerDeps &deps) const;
+  bool LocalZipComplete(const std::filesystem::path &path) const;
   bool BookDownloaded(const BookItem &item, const OnlineShelfControllerDeps &deps) const;
   bool BookDownloading(const BookItem &item) const;
   float BookDownloadProgress(const BookItem &item, const OnlineShelfControllerDeps &deps) const;

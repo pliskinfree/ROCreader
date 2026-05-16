@@ -2032,12 +2032,16 @@ int main(int, char **argv) {
         [&](const BookItem &item) {
           OnlineShelfControllerDeps deps = make_online_shelf_controller_deps();
           deps.show_message = [&](const std::string &message) { show_transient_message(message); };
-          return online_shelf_controller.MarkForLocal(item, deps);
+          const bool ok = online_shelf_controller.MarkForLocal(item, deps);
+          if (ok) rebuild_shelf_items();
+          return ok;
         },
         [&](const BookItem &item) {
           OnlineShelfControllerDeps deps = make_online_shelf_controller_deps();
           deps.show_message = [&](const std::string &message) { show_transient_message(message); };
-          return online_shelf_controller.UnmarkForLocal(item, deps);
+          const bool ok = online_shelf_controller.UnmarkForLocal(item, deps);
+          if (ok) rebuild_shelf_items();
+          return ok;
         },
         [&]() -> int { return online_shelf_controller.NavItemCount(); },
     };

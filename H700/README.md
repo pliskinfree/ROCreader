@@ -11,3 +11,7 @@ This folder owns the H700 packaging workspace:
 The repository-root `Downloads/` directory is intentionally kept as a legacy
 online-update mirror for older H700 releases that still check that path.
 H700 packaging copies each newly built release zip there automatically.
+
+Packaging note:
+- Online upgrade extraction must not replace `online_sources.ini`.
+- Treat `online_sources.ini` as user/device configuration, not packaged content.

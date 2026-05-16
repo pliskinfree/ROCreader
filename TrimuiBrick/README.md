@@ -39,3 +39,9 @@ The script builds the local `TrimuiBrick/toolchain` Docker image, mirrors
 the project into `TrimuiBrick/workspace/source`, and runs the low-glibc package
 flow there. Build intermediates, logs, staged APPS output, tarballs, and final
 zip files are kept under this `TrimuiBrick` folder.
+
+Packaging/update notes:
+
+- Brick online updates must preserve the device's local `online_sources.ini`.
+  The boot-time update installer should not replace that file while extracting
+  and applying a downloaded package.

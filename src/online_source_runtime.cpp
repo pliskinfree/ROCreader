@@ -229,6 +229,7 @@ void ReloadOnlineSourceConfig(OnlineSourceState &state) {
 
 void ConnectOnlineSource(OnlineSourceState &state) {
   runtime_log::Line("online: connect requested");
+  ResetOnlineSourceTransferCancel();
   state.connect_pending = false;
   state.connecting = true;
   if (state.sources.empty()) {
@@ -333,6 +334,7 @@ void ClearOnlineSourceDownloads(OnlineSourceState &state) {
 }
 
 bool LoadOnlineCatalogForCategory(OnlineSourceState &state, int category_index) {
+  if (OnlineSourceTransfersCancelled()) return false;
   if (!state.connected || state.active_source_index < 0 ||
       state.active_source_index >= static_cast<int>(state.sources.size())) {
     return false;
@@ -382,11 +384,14 @@ bool LoadOnlineCatalogForCategory(OnlineSourceState &state, int category_index) 
     const std::filesystem::path local_path =
         state.download_root / "books" / SafeFilename(source.id) / (base + item.file_ext);
     item.local_path = local_path.string();
+    const std::string mark_key = item.id.empty() ? (item.local_path.empty() ? item.title : item.local_path) : item.id;
+    item.marked_for_local = state.marked_local_keys.find(mark_key) != state.marked_local_keys.end();
   }
   return !state.catalog_items.empty();
 }
 
 bool LoadOnlineCatalogNextPage(OnlineSourceState &state) {
+  if (OnlineSourceTransfersCancelled()) return false;
   if (!state.connected || state.next_page_loading || state.next_page_url.empty() ||
       state.active_source_index < 0 || state.active_source_index >= static_cast<int>(state.sources.size())) {
     return false;
@@ -419,6 +424,8 @@ bool LoadOnlineCatalogNextPage(OnlineSourceState &state) {
     const std::filesystem::path local_path =
         state.download_root / "books" / SafeFilename(source.id) / (base + item.file_ext);
     item.local_path = local_path.string();
+    const std::string mark_key = item.id.empty() ? (item.local_path.empty() ? item.title : item.local_path) : item.id;
+    item.marked_for_local = state.marked_local_keys.find(mark_key) != state.marked_local_keys.end();
     state.catalog_items.push_back(std::move(item));
   }
   state.next_page_url = manual_page.next_page_url;
@@ -438,7 +445,11 @@ std::vector<BookItem> BuildOnlineShelfItems(const OnlineSourceState &state, bool
   }
   const OnlineSourceEntry &source = state.sources[state.active_source_index];
   for (const OnlineCatalogItem &remote : state.catalog_items) {
-    if (marked_only && !remote.marked_for_local) continue;
+    const std::string mark_key = remote.id.empty() ? (remote.local_path.empty() ? remote.title : remote.local_path)
+                                                   : remote.id;
+    const bool marked = remote.marked_for_local ||
+                        state.marked_local_keys.find(mark_key) != state.marked_local_keys.end();
+    if (marked_only && !marked) continue;
     BookItem item;
     item.name = remote.title;
     item.path = remote.local_path.empty() ? remote.title : remote.local_path;
@@ -463,6 +474,7 @@ std::filesystem::path OnlineCoverPathForItem(const OnlineSourceState &state, con
 }
 
 bool DownloadOnlineCoverForItem(const OnlineSourceState &state, const BookItem &item) {
+  if (OnlineSourceTransfersCancelled()) return false;
   if (!item.is_remote || item.remote_cover_url.empty()) return false;
   const std::filesystem::path cover_path = OnlineCoverPathForItem(state, item);
   std::error_code ec;
@@ -470,14 +482,19 @@ bool DownloadOnlineCoverForItem(const OnlineSourceState &state, const BookItem &
   const std::filesystem::path temp_path = cover_path.string() + ".part";
   std::filesystem::remove(temp_path, ec);
   if (state.active_source_index >= 0 && state.active_source_index < static_cast<int>(state.sources.size()) &&
-      ToLowerAscii(state.sources[state.active_source_index].type) == "manual_web" &&
-      DownloadManualWebFile(item.remote_cover_url, temp_path, state.sources[state.active_source_index].url)) {
-    std::filesystem::rename(temp_path, cover_path, ec);
-    if (!ec) return true;
-    ec.clear();
-    std::filesystem::copy_file(temp_path, cover_path, std::filesystem::copy_options::overwrite_existing, ec);
+      ToLowerAscii(state.sources[state.active_source_index].type) == "manual_web") {
+    if (DownloadManualWebFile(item.remote_cover_url, temp_path, state.sources[state.active_source_index].url)) {
+      std::filesystem::rename(temp_path, cover_path, ec);
+      if (!ec) return true;
+      ec.clear();
+      std::filesystem::copy_file(temp_path, cover_path, std::filesystem::copy_options::overwrite_existing, ec);
+      std::filesystem::remove(temp_path, ec);
+      if (std::filesystem::exists(cover_path, ec) && !ec) return true;
+    }
     std::filesystem::remove(temp_path, ec);
-    if (std::filesystem::exists(cover_path, ec) && !ec) return true;
+    runtime_log::Line("online: manual web cover helper failed; no generic fallback title=" + item.name +
+                      " url=" + item.remote_cover_url);
+    return false;
   }
   const bool ok = DownloadFile(item.remote_cover_url, temp_path);
   if (ok) {
@@ -513,6 +530,7 @@ bool OnlineCatalogCoverExists(const OnlineSourceState &state, const OnlineCatalo
 }
 
 bool DownloadOnlineCoverForCatalogItem(const OnlineSourceState &state, const OnlineCatalogItem &catalog_item) {
+  if (OnlineSourceTransfersCancelled()) return false;
   if (catalog_item.cover_url.empty()) return false;
   BookItem item;
   item.name = catalog_item.title;
@@ -527,6 +545,10 @@ bool DownloadOnlineCoverForCatalogItem(const OnlineSourceState &state, const Onl
 }
 
 bool DownloadOnlineBookForItem(OnlineSourceState &state, const BookItem &item, BookItem &out_local_item) {
+  if (OnlineSourceTransfersCancelled()) {
+    state.status_message = "Download cancelled";
+    return false;
+  }
   runtime_log::Line("online: book download requested title=" + item.name);
   if (!item.is_remote || item.remote_download_url.empty() || item.remote_local_path.empty()) {
     state.status_message = "No remote download URL";
@@ -535,6 +557,7 @@ bool DownloadOnlineBookForItem(OnlineSourceState &state, const BookItem &item, B
   std::string download_url = item.remote_download_url;
   std::string referer;
   bool manual_web_source = false;
+  std::string expected_size;
   if (state.active_source_index >= 0 && state.active_source_index < static_cast<int>(state.sources.size())) {
     const OnlineSourceEntry &source = state.sources[state.active_source_index];
     if (ToLowerAscii(source.type) == "manual_web") {
@@ -553,6 +576,7 @@ bool DownloadOnlineBookForItem(OnlineSourceState &state, const BookItem &item, B
   }
   const std::filesystem::path final_path(item.remote_local_path);
   const std::filesystem::path temp_path = final_path.string() + ".part";
+  const std::filesystem::path size_path = final_path.string() + ".size";
   std::error_code ec;
   if (std::filesystem::exists(final_path, ec) && !ec) {
     out_local_item = item;
@@ -563,12 +587,21 @@ bool DownloadOnlineBookForItem(OnlineSourceState &state, const BookItem &item, B
     return true;
   }
   std::filesystem::remove(temp_path, ec);
+  std::filesystem::remove(size_path, ec);
+  expected_size = ProbeDownloadSize(download_url, referer);
+  if (!expected_size.empty()) {
+    std::ofstream size_out(size_path, std::ios::trunc);
+    if (size_out) size_out << expected_size;
+  }
   const bool downloaded = manual_web_source ? DownloadManualWebFile(download_url, temp_path, referer)
                                             : DownloadFile(download_url, temp_path, referer);
-  if (!downloaded) {
+  if (!downloaded || OnlineSourceTransfersCancelled()) {
     std::filesystem::remove(temp_path, ec);
-    state.status_message = "Download failed: " + item.name;
-    runtime_log::Line("online: book download failed title=" + item.name + " url=" + download_url);
+    std::filesystem::remove(size_path, ec);
+    state.status_message = OnlineSourceTransfersCancelled() ? "Download cancelled: " + item.name
+                                                            : "Download failed: " + item.name;
+    runtime_log::Line("online: book download failed title=" + item.name + " url=" + download_url +
+                      " cancelled=" + std::to_string(OnlineSourceTransfersCancelled() ? 1 : 0));
     return false;
   }
   std::filesystem::rename(temp_path, final_path, ec);
@@ -579,8 +612,10 @@ bool DownloadOnlineBookForItem(OnlineSourceState &state, const BookItem &item, B
   if (!std::filesystem::exists(final_path, ec) || ec) {
     state.status_message = "Save failed: " + item.name;
     runtime_log::Line("online: book save failed title=" + item.name + " path=" + final_path.string());
+    std::filesystem::remove(size_path, ec);
     return false;
   }
+  std::filesystem::remove(size_path, ec);
   out_local_item = item;
   out_local_item.is_remote = false;
   out_local_item.path = final_path.string();

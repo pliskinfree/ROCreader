@@ -25,6 +25,9 @@ export ROCREADER_LOG_MAX_BYTES="${ROCREADER_LOG_MAX_BYTES:-524288}"
 export ROCREADER_UPDATE_CONTENTS_URL="${ROCREADER_UPDATE_CONTENTS_URL:-https://github.com/LPF970915/ROCreader/tree/main/H700/Downloads}"
 if [ -x "$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch" ]; then
   export ROCREADER_MANUAL_WEB_FETCH="${ROCREADER_MANUAL_WEB_FETCH:-$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch}"
+  if [ -x "$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch_zip" ]; then
+    export ROCREADER_MANUAL_WEB_ZIP_FETCH="${ROCREADER_MANUAL_WEB_ZIP_FETCH:-$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch_zip}"
+  fi
   export ROCREADER_MANUAL_WEB_CURL="${ROCREADER_MANUAL_WEB_CURL:-$MANUAL_WEB_TRANSPORT_DIR/bin/curl-impersonate}"
   export ROCREADER_MANUAL_WEB_TRANSPORT="${ROCREADER_MANUAL_WEB_TRANSPORT:-1}"
   export ROCREADER_MANUAL_WEB_CATALOG_ONLY="${ROCREADER_MANUAL_WEB_CATALOG_ONLY:-0}"
@@ -369,6 +372,8 @@ perform_pending_update_if_any() {
   replace_runtime_entry "ui.pack" "$staged_runtime"
   replace_runtime_entry "native_config.ini" "$staged_runtime"
   replace_runtime_entry "native_keymap.ini" "$staged_runtime"
+  # Keep the user's online source config intact during update installs.
+  # online_sources.ini must not be overwritten by unpack-and-replace.
   replace_runtime_entry "fonts" "$staged_runtime"
   replace_runtime_entry "sounds" "$staged_runtime"
   replace_runtime_entry "lib" "$staged_runtime"

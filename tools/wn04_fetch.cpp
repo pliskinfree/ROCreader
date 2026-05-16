@@ -2,15 +2,28 @@
 #include <cstdlib>
 #include <cctype>
 #include <chrono>
+#if __has_include(<filesystem>)
 #include <filesystem>
+#elif __has_include(<experimental/filesystem>)
+#include <experimental/filesystem>
+#else
+#error "wn04_fetch requires filesystem or experimental/filesystem"
+#endif
 #include <iostream>
 #include <regex>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <sys/wait.h>
 #include <vector>
 
 namespace {
+
+#if __has_include(<filesystem>)
+namespace fs = std::filesystem;
+#else
+namespace fs = std::experimental::filesystem;
+#endif
 
 struct CommandResult {
   std::string output;
@@ -144,6 +157,20 @@ std::string ExtractBackupDownloadUrl(const std::string &html, const std::string 
   return {};
 }
 
+std::string NormalizeZipDownloadUrl(std::string url) {
+  const size_t zip = url.find(".zip");
+  if (zip == std::string::npos) return url;
+  const size_t after_zip = zip + 4;
+  const size_t query = url.find('?', after_zip);
+  if (query == std::string::npos) return url;
+  const std::string query_text = url.substr(query + 1);
+  if (url.find("wn01.download") != std::string::npos &&
+      (query_text.rfind("n=", 0) == 0 || query_text.find_first_of(" \t\r\n") != std::string::npos)) {
+    return url.substr(0, after_zip);
+  }
+  return url;
+}
+
 std::string SafeFilename(std::string name) {
   name = Trim(name);
   if (name.empty()) return "online_book";
@@ -158,11 +185,15 @@ std::string SafeFilename(std::string name) {
   return name.empty() ? "online_book" : name;
 }
 
-std::filesystem::path ExecutableDir(const char *argv0) {
+fs::path ExecutableDir(const char *argv0) {
   std::error_code ec;
-  std::filesystem::path self = std::filesystem::canonical(argv0, ec);
-  if (ec) self = std::filesystem::absolute(argv0, ec);
-  if (ec || self.empty()) return std::filesystem::current_path();
+  fs::path self = fs::canonical(argv0, ec);
+  if (ec) {
+    ec.clear();
+    const fs::path current = fs::current_path(ec);
+    self = ec ? fs::path(argv0) : current / argv0;
+  }
+  if (self.empty()) return fs::current_path();
   return self.parent_path();
 }
 
@@ -170,19 +201,19 @@ std::string CurlPath(const char *argv0) {
   if (const char *env = std::getenv("ROCREADER_MANUAL_WEB_CURL"); env && *env) return env;
   if (const char *env = std::getenv("WN04_CURL_IMPERSONATE"); env && *env) return env;
   if (const char *env = std::getenv("WN04_CURL_CHROME"); env && *env) return env;
-  const std::filesystem::path dir = ExecutableDir(argv0);
-  const std::vector<std::filesystem::path> candidates = {
+  const fs::path dir = ExecutableDir(argv0);
+  const std::vector<fs::path> candidates = {
       dir / "curl-impersonate",
       dir / "curl_chrome",
       dir / "curl-impersonate-chrome",
       dir.parent_path() / "bin" / "curl-impersonate",
       dir.parent_path() / "bin" / "curl_chrome",
-      std::filesystem::current_path() / "bin" / "curl-impersonate",
-      std::filesystem::current_path() / "bin" / "curl_chrome",
+      fs::current_path() / "bin" / "curl-impersonate",
+      fs::current_path() / "bin" / "curl_chrome",
   };
   std::error_code ec;
   for (const auto &candidate : candidates) {
-    if (std::filesystem::exists(candidate, ec) && !ec) return candidate.string();
+    if (fs::exists(candidate, ec) && !ec) return candidate.string();
   }
   return "curl-impersonate";
 }
@@ -193,7 +224,11 @@ std::string EnvValue(const char *name) {
 }
 
 std::vector<std::string> CurlBaseArgs(const std::string &curl, const std::string &referer) {
-  std::vector<std::string> args = {curl, "-LfsS", "--max-time", "60"};
+  const std::string connect_time =
+      EnvValue("WN04_FETCH_CONNECT_TIME").empty() ? "8" : EnvValue("WN04_FETCH_CONNECT_TIME");
+  const std::string max_time = EnvValue("WN04_FETCH_MAX_TIME").empty() ? "25" : EnvValue("WN04_FETCH_MAX_TIME");
+  std::vector<std::string> args = {curl, "-LfsS", "--globoff", "--connect-timeout", connect_time,
+                                  "--max-time", max_time};
   const std::string mode = EnvValue("WN04_FETCH_HEADER_MODE");
   if (mode.empty() || mode == "chrome120-h3" || mode == "success") {
     args.push_back("--impersonate");
@@ -232,8 +267,9 @@ void AddCookieJar(std::vector<std::string> &args, const std::string &cookie_jar)
 }
 
 std::vector<std::string> CurlApiArgs(const std::string &curl, const std::string &referer) {
-  std::vector<std::string> args = {curl, "-LfsS", "--max-time", "60", "--impersonate", "chrome120", "--http2",
-                                  "--compressed"};
+  const std::string max_time = EnvValue("WN04_API_MAX_TIME").empty() ? "12" : EnvValue("WN04_API_MAX_TIME");
+  std::vector<std::string> args = {curl, "-LfsS", "--globoff", "--connect-timeout", "8", "--max-time", max_time,
+                                  "--impersonate", "chrome120", "--http2", "--compressed"};
   if (!referer.empty()) {
     args.push_back("-H");
     args.push_back("Referer: " + referer);
@@ -243,7 +279,7 @@ std::vector<std::string> CurlApiArgs(const std::string &curl, const std::string 
 
 std::vector<std::string> CurlDownloadArgs(const std::string &curl, const std::string &referer) {
   const std::string max_time = EnvValue("WN04_DOWNLOAD_MAX_TIME").empty() ? "1800" : EnvValue("WN04_DOWNLOAD_MAX_TIME");
-  std::vector<std::string> args = {curl, "-LfsS", "--connect-timeout", "30", "--max-time", max_time,
+  std::vector<std::string> args = {curl, "-LfsS", "--globoff", "--connect-timeout", "30", "--max-time", max_time,
                                   "--retry", "2", "--retry-delay", "2"};
   const std::string mode = EnvValue("WN04_DOWNLOAD_HEADER_MODE");
   if (mode.empty() || mode == "chrome120-h2" || mode == "success") {
@@ -269,6 +305,41 @@ std::vector<std::string> CurlDownloadArgs(const std::string &curl, const std::st
   return args;
 }
 
+bool IsCoverUrl(const std::string &url) {
+  return url.find("wnacgimg") != std::string::npos;
+}
+
+std::vector<std::string> CurlCoverArgs(const std::string &curl, const std::string &referer) {
+  const std::string connect_time =
+      EnvValue("WN04_COVER_CONNECT_TIME").empty() ? "3" : EnvValue("WN04_COVER_CONNECT_TIME");
+  const std::string max_time = EnvValue("WN04_COVER_MAX_TIME").empty() ? "5" : EnvValue("WN04_COVER_MAX_TIME");
+  const std::string retry_count = EnvValue("WN04_COVER_RETRY").empty() ? "0" : EnvValue("WN04_COVER_RETRY");
+  std::vector<std::string> args = {curl, "-LfsS", "--globoff", "--connect-timeout", connect_time,
+                                  "--max-time", max_time, "--retry", retry_count, "--retry-delay", "1"};
+  const std::string mode = EnvValue("WN04_COVER_HEADER_MODE");
+  if (mode.empty() || mode == "chrome120-h2" || mode == "success") {
+    args.push_back("--impersonate");
+    args.push_back("chrome120");
+    args.push_back("--http2");
+    args.push_back("--compressed");
+  } else if (mode == "chrome120-h3" || mode == "h3") {
+    args.push_back("--impersonate");
+    args.push_back("chrome120");
+    args.push_back("--http3-only");
+    args.push_back("--compressed");
+  } else if (mode == "minimal") {
+    args.push_back("--compressed");
+    args.push_back("--http2");
+  }
+  if (!referer.empty()) {
+    args.push_back("-H");
+    args.push_back("Referer: " + referer);
+  }
+  args.push_back("-w");
+  args.push_back("WN04_COVER_RESULT http=%{http_code} remote=%{remote_ip} local=%{local_ip} size=%{size_download} time=%{time_total} speed=%{speed_download}\\n");
+  return args;
+}
+
 CommandResult Fetch(const std::string &curl, const std::string &url, const std::string &referer,
                     const std::string &cookie_jar = "") {
   std::vector<std::string> args = CurlBaseArgs(curl, referer);
@@ -278,14 +349,14 @@ CommandResult Fetch(const std::string &curl, const std::string &url, const std::
 }
 
 int Download(const std::string &curl, const std::string &url, const std::string &output, const std::string &referer) {
-  std::vector<std::string> args = CurlDownloadArgs(curl, referer);
+  std::vector<std::string> args = IsCoverUrl(url) ? CurlCoverArgs(curl, referer) : CurlDownloadArgs(curl, referer);
   args.push_back("-o");
   args.push_back(output);
   args.push_back(url);
   CommandResult result = RunCapture(args);
   if (result.exit_code == 0) {
     std::error_code ec;
-    if (std::filesystem::exists(output, ec) && !ec && std::filesystem::file_size(output, ec) > 0 && !ec) {
+    if (fs::exists(output, ec) && !ec && fs::file_size(output, ec) > 0 && !ec) {
       return 0;
     }
     std::cerr << "{\"error\":\"download_output_missing\",\"detail\":\"" << JsonEscape(result.output) << "\"}\n";
@@ -295,17 +366,49 @@ int Download(const std::string &curl, const std::string &url, const std::string 
   return result.exit_code;
 }
 
+int Size(const std::string &curl, const std::string &url, const std::string &referer) {
+  std::vector<std::string> args = IsCoverUrl(url) ? CurlCoverArgs(curl, referer) : CurlDownloadArgs(curl, referer);
+  args.push_back("-I");
+  args.push_back("-o");
+  args.push_back("/dev/null");
+  args.push_back("-w");
+  args.push_back("WN04_SIZE_RESULT http=%{http_code} size=%{size_download} content_length=%{content_length_download}\\n");
+  args.push_back(url);
+  CommandResult result = RunCapture(args);
+  if (result.exit_code != 0) {
+    std::cerr << "{\"error\":\"size_probe_failed\",\"detail\":\"" << JsonEscape(result.output) << "\"}\n";
+    return result.exit_code;
+  }
+  std::smatch match;
+  std::regex content_length_pattern(R"(content_length=([0-9]+))", std::regex::icase);
+  if (std::regex_search(result.output, match, content_length_pattern) && match[1].str() != "0") {
+    std::cout << "{\"size\":\"" << match[1].str() << "\"}\n";
+    return 0;
+  }
+  std::regex header_pattern(R"((?:^|\r?\n)content-length:\s*([0-9]+))", std::regex::icase);
+  std::string size;
+  for (std::sregex_iterator it(result.output.begin(), result.output.end(), header_pattern), end; it != end; ++it) {
+    size = (*it)[1].str();
+  }
+  if (!size.empty() && size != "0") {
+    std::cout << "{\"size\":\"" << size << "\"}\n";
+    return 0;
+  }
+  std::cerr << "{\"error\":\"content_length_missing\",\"detail\":\"" << JsonEscape(result.output) << "\"}\n";
+  return 9;
+}
+
 int Resolve(const std::string &curl, const std::string &detail_url, const std::string &title,
             const std::string &source_url) {
   const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-  std::filesystem::path cookie_path =
-      std::filesystem::temp_directory_path() / ("wn04_fetch_cookies_" + std::to_string(now) + ".txt");
+  fs::path cookie_path =
+      fs::temp_directory_path() / ("wn04_fetch_cookies_" + std::to_string(now) + ".txt");
   const std::string cookie_jar = cookie_path.string();
 
   CommandResult detail = Fetch(curl, detail_url, source_url, cookie_jar);
   if (detail.exit_code != 0 || detail.output.empty()) {
     std::error_code ec;
-    std::filesystem::remove(cookie_path, ec);
+    fs::remove(cookie_path, ec);
     std::cerr << "{\"error\":\"detail_fetch_failed\",\"detail\":\"" << JsonEscape(detail.output) << "\"}\n";
     return 2;
   }
@@ -315,7 +418,7 @@ int Resolve(const std::string &curl, const std::string &detail_url, const std::s
                          std::regex(R"(<a[^>]+href\s*=\s*(['"])([^'"]*/download-index-aid-[^'"]*)\1)",
                                     std::regex::icase))) {
     std::error_code ec;
-    std::filesystem::remove(cookie_path, ec);
+    fs::remove(cookie_path, ec);
     std::cerr << "{\"error\":\"download_landing_link_not_found\"}\n";
     return 3;
   }
@@ -323,19 +426,19 @@ int Resolve(const std::string &curl, const std::string &detail_url, const std::s
   CommandResult landing = Fetch(curl, landing_url, detail_url, cookie_jar);
   if (landing.exit_code != 0 || landing.output.empty()) {
     std::error_code ec;
-    std::filesystem::remove(cookie_path, ec);
+    fs::remove(cookie_path, ec);
     std::cerr << "{\"error\":\"landing_fetch_failed\",\"detail\":\"" << JsonEscape(landing.output) << "\"}\n";
     return 4;
   }
   if (const std::string backup_url = ExtractBackupDownloadUrl(landing.output, landing_url); !backup_url.empty()) {
     std::error_code ec;
-    std::filesystem::remove(cookie_path, ec);
-    std::cout << "{\"url\":\"" << JsonEscape(backup_url) << "\"}\n";
+    fs::remove(cookie_path, ec);
+    std::cout << "{\"url\":\"" << JsonEscape(NormalizeZipDownloadUrl(backup_url)) << "\"}\n";
     return 0;
   }
   if (!std::regex_search(landing.output, match, std::regex(R"(['"]((?:down/)[^'"]+\.zip)['"])", std::regex::icase))) {
     std::error_code ec;
-    std::filesystem::remove(cookie_path, ec);
+    fs::remove(cookie_path, ec);
     std::cerr << "{\"error\":\"download_key_not_found\"}\n";
     return 5;
   }
@@ -357,23 +460,25 @@ int Resolve(const std::string &curl, const std::string &detail_url, const std::s
   args.push_back(api);
   CommandResult api_result = RunCapture(args);
   std::error_code ec;
-  std::filesystem::remove(cookie_path, ec);
+  fs::remove(cookie_path, ec);
   if (api_result.exit_code != 0 || api_result.output.empty()) {
     std::cerr << "{\"error\":\"generate_link_failed\",\"detail\":\"" << JsonEscape(api_result.output) << "\"}\n";
     return 6;
   }
   const std::string real_url = ExtractJsonString(api_result.output, "url");
   if (real_url.empty()) {
-    std::cerr << "{\"error\":\"real_download_url_not_found\",\"detail\":\"" << JsonEscape(api_result.output) << "\"}\n";
+    std::cerr << "{\"error\":\"real_download_url_not_found\",\"detail\":\"" << JsonEscape(api_result.output)
+              << "\"}\n";
     return 7;
   }
-  std::cout << "{\"url\":\"" << JsonEscape(real_url) << "\"}\n";
+  std::cout << "{\"url\":\"" << JsonEscape(NormalizeZipDownloadUrl(real_url)) << "\"}\n";
   return 0;
 }
 
 void Usage() {
   std::cerr << "usage: wn04_fetch fetch URL [REFERER]\n"
             << "       wn04_fetch download URL OUTPUT [REFERER]\n"
+            << "       wn04_fetch size URL [REFERER]\n"
             << "       wn04_fetch resolve DETAIL_URL TITLE SOURCE_URL\n";
 }
 
@@ -403,6 +508,9 @@ int main(int argc, char **argv) {
       return 64;
     }
     return Download(curl, argv[2], argv[3], argc > 4 ? argv[4] : "");
+  }
+  if (mode == "size") {
+    return Size(curl, argv[2], argc > 3 ? argv[3] : "");
   }
   if (mode == "resolve") {
     if (argc < 5) {

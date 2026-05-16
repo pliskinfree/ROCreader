@@ -40,21 +40,17 @@ normal online shelf download failure path is shown.
 
 ## WN04 status
 
-Confirmed on device:
+Confirmed on device with the preserved `1.82` package plus manual `URL/`
+deployment:
 
-- `https://www.wn04.cfd/...` catalog pages load through the Chrome120 HTTP/3
-  helper.
+- `https://www.wn04.cfd/...` catalog pages load through the Chrome120 helper.
 - Detail pages load.
 - Cover images from `wnacgimg` load.
+- Book downloads work through the preserved zip helper path.
 
-Known blocker:
-
-- `https://d1.wcdn.date/api/generate-link` and signed
-  `https://d1.wcdn.date/download?...` URLs are not reachable from the tested
-  device network, even when forcing IPv4 and known Cloudflare IPs. Windows
-  `curl_cffi` can resolve and download, so future work should attach to the
-  preserved `ManualWebResolveDownload` / `ManualWebDownload` interfaces rather
-  than changing the UI or shelf modules.
+Future work should still attach to the preserved
+`ManualWebResolveDownload` / `ManualWebDownload` interfaces rather than
+changing the UI or shelf modules.
 
 ## Build notes
 
@@ -64,6 +60,5 @@ The low-glibc helper runtime currently lives under:
 experimental/wn04_v155_device_pkg/
 ```
 
-It contains only runtime files and compatibility notes. Old probe scripts,
-matrix logs, one-off signed URLs, and full build caches should not be kept in
-the project tree.
+It is an experimental build artifact. Old probe scripts, matrix logs, one-off
+signed URLs, and full build caches should not be kept in the project tree.

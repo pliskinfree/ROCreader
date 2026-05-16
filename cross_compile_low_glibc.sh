@@ -803,12 +803,34 @@ BIN="$APP_DIR/reader"
 LOG_FILE="${ROC_NATIVE_RUNTIME_LOG:-$APP_DIR/log.txt}"
 LIB_FULL_DIR="$APP_DIR/lib"
 LIB_SYSTEM_SDL_DIR="$APP_DIR/resources/lib_system_sdl"
+MANUAL_WEB_TRANSPORT_DIR="$APP_DIR/manual_web_transport"
+MANUAL_WEB_TRANSPORT_BRICK_DIR="$APP_DIR/manual_web_transport_brick"
 LIB_DIR="$LIB_FULL_DIR"
 PACKAGE_TAG="trimui-brick-20260426-system-volume-menu-start-select"
 
 export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-alsa}"
 export SDL_NOMOUSE="${SDL_NOMOUSE:-1}"
 export ROCREADER_ROOT="$APP_DIR"
+if [ -x "$MANUAL_WEB_TRANSPORT_BRICK_DIR/bin/wn04_fetch" ]; then
+  export ROCREADER_MANUAL_WEB_FETCH="${ROCREADER_MANUAL_WEB_FETCH:-$MANUAL_WEB_TRANSPORT_BRICK_DIR/bin/wn04_fetch}"
+  if [ -x "$MANUAL_WEB_TRANSPORT_BRICK_DIR/bin/wn04_fetch_zip" ]; then
+    export ROCREADER_MANUAL_WEB_ZIP_FETCH="${ROCREADER_MANUAL_WEB_ZIP_FETCH:-$MANUAL_WEB_TRANSPORT_BRICK_DIR/bin/wn04_fetch_zip}"
+  fi
+  export ROCREADER_MANUAL_WEB_CURL="${ROCREADER_MANUAL_WEB_CURL:-$MANUAL_WEB_TRANSPORT_BRICK_DIR/bin/curl-impersonate}"
+  export ROCREADER_MANUAL_WEB_TRANSPORT="${ROCREADER_MANUAL_WEB_TRANSPORT:-1}"
+  export ROCREADER_MANUAL_WEB_CATALOG_ONLY="${ROCREADER_MANUAL_WEB_CATALOG_ONLY:-0}"
+elif [ -x "$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch" ]; then
+  export ROCREADER_MANUAL_WEB_FETCH="${ROCREADER_MANUAL_WEB_FETCH:-$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch}"
+  if [ -x "$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch_zip" ]; then
+    export ROCREADER_MANUAL_WEB_ZIP_FETCH="${ROCREADER_MANUAL_WEB_ZIP_FETCH:-$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch_zip}"
+  fi
+  export ROCREADER_MANUAL_WEB_CURL="${ROCREADER_MANUAL_WEB_CURL:-$MANUAL_WEB_TRANSPORT_DIR/bin/curl-impersonate}"
+  export ROCREADER_MANUAL_WEB_TRANSPORT="${ROCREADER_MANUAL_WEB_TRANSPORT:-1}"
+  export ROCREADER_MANUAL_WEB_CATALOG_ONLY="${ROCREADER_MANUAL_WEB_CATALOG_ONLY:-0}"
+else
+  export ROCREADER_MANUAL_WEB_TRANSPORT="${ROCREADER_MANUAL_WEB_TRANSPORT:-0}"
+  export ROCREADER_MANUAL_WEB_CATALOG_ONLY="${ROCREADER_MANUAL_WEB_CATALOG_ONLY:-0}"
+fi
 if [ -z "${ROCREADER_CACHE_ROOT:-}" ]; then
   for cache_candidate in /mnt/UDISK/cache/ROCreader /mnt/UDISK/ROCreader/cache "$APP_DIR/cache"; do
     mkdir -p "$cache_candidate/txt_layouts" "$cache_candidate/cover_thumbs" 2>/dev/null || true
@@ -857,7 +879,7 @@ set_runtime_libs() {
   else
     LIB_DIR="$LIB_FULL_DIR"
   fi
-  export LD_LIBRARY_PATH="$LIB_DIR:$LIB_DIR/pulseaudio:/usr/lib:/lib:/mnt/vendor/lib:${LD_LIBRARY_PATH_BASE:-}"
+  export LD_LIBRARY_PATH="$LIB_DIR:$MANUAL_WEB_TRANSPORT_BRICK_DIR/lib:$MANUAL_WEB_TRANSPORT_DIR/lib:$LIB_DIR/pulseaudio:/usr/lib:/lib:/mnt/vendor/lib:${LD_LIBRARY_PATH_BASE:-}"
 }
 
 log_line() {
@@ -999,8 +1021,18 @@ extract_zip_to_stage() {
   return 127
 }
 
+protect_local_online_sources() {
+  staged_runtime="$1"
+  [ "$TRIMUI_BRICK_LAYOUT" = "1" ] || return 0
+  rm -f "$staged_runtime/online_sources.ini" 2>/dev/null || true
+}
+
 replace_runtime_entry() {
   name="$1"
+  if [ "$TRIMUI_BRICK_LAYOUT" = "1" ] && [ "$name" = "online_sources.ini" ]; then
+    log_line "[update] keep local online_sources.ini"
+    return 0
+  fi
   src="$2/$name"
   dst="$APP_DIR/$name"
   [ -e "$src" ] || return 0
@@ -1070,6 +1102,7 @@ perform_pending_update_if_any() {
     return 1
   fi
 
+  protect_local_online_sources "$staged_runtime"
   replace_runtime_entry "reader" "$staged_runtime"
   replace_runtime_entry "rocreader_sdl" "$staged_runtime"
   replace_runtime_entry "launch.sh" "$staged_runtime"

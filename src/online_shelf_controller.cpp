@@ -2,10 +2,12 @@
 
 #include "online_session_service.h"
 #include "online_source_runtime.h"
+#include "online_source_transport.h"
 #include "runtime_log.h"
 
 #include <algorithm>
 #include <array>
+#include <fstream>
 
 OnlineShelfController::OnlineShelfController() = default;
 
@@ -155,8 +157,17 @@ bool OnlineShelfController::OpenOrDownloadBook(const BookItem &item, const Onlin
 }
 
 bool OnlineShelfController::MarkForLocal(const BookItem &item, const OnlineShelfControllerDeps &deps) {
+  const std::filesystem::path local_path = !item.remote_local_path.empty()
+                                               ? std::filesystem::path(item.remote_local_path)
+                                               : std::filesystem::path(item.real_path);
+  if (!LocalZipComplete(local_path)) {
+    if (deps.show_message) deps.show_message(u8"\u8bf7\u5148\u4e0b\u8f7d\u5b8c\u6210");
+    state_.status_message = "Download first: " + item.name;
+    return false;
+  }
   const bool ok = MarkOnlineItemForLocal(state_, item);
   if (ok && deps.show_message) deps.show_message(u8"\u5df2\u6807\u8bb0\u4fdd\u5b58\u5230\u672c\u5730");
+  if (!ok && deps.show_message) deps.show_message(u8"\u8bf7\u5148\u4e0b\u8f7d\u5b8c\u6210");
   return ok;
 }
 
@@ -164,6 +175,35 @@ bool OnlineShelfController::UnmarkForLocal(const BookItem &item, const OnlineShe
   const bool ok = UnmarkOnlineItemForLocal(state_, item);
   if (ok && deps.show_message) deps.show_message(u8"\u5df2\u53d6\u6d88\u4fdd\u5b58\u6807\u8bb0");
   return ok;
+}
+
+void OnlineShelfController::StopOnlineBackgroundJobs() {
+  CancelOnlineSourceTransfers();
+  JoinCoverJob();
+  JoinDownloadJob();
+  {
+    std::lock_guard<std::mutex> lock(cover_job_.mutex);
+    cover_job_.active = false;
+    cover_job_.finished = false;
+    cover_job_.success = false;
+    cover_job_.items.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lock(download_job_.mutex);
+    download_job_.active = false;
+    download_job_.finished = false;
+    download_job_.success = false;
+    download_job_.remote_item = BookItem{};
+    download_job_.local_item = BookItem{};
+    download_job_.message.clear();
+  }
+  state_.covers_loading = false;
+  state_.cover_download_cursor = 0;
+  last_cover_window_begin_ = 0;
+  last_cover_window_end_ = 0;
+  cover_window_cursor_ = 0;
+  cover_window_category_index_ = -1;
+  cover_window_catalog_size_ = 0;
 }
 
 int OnlineShelfController::NavItemCount() const {
@@ -198,6 +238,10 @@ OnlineShelfControllerTickResult OnlineShelfController::TickAfterInput(ShelfRunti
       const std::string key = BookKey(download_job_.remote_item);
       book_status_text_[key] = download_job_.success ? u8"\u4e0b\u8f7d\u6210\u529f" : u8"\u4e0b\u8f7d\u5931\u8d25";
       state_.status_message = download_job_.message;
+      if (download_job_.success) {
+        (void)SyncDownloadedOnlineItem(state_, download_job_.remote_item, download_job_.local_item);
+        result.shelf_items_changed = true;
+      }
       download_job_.active = false;
       result.download_active = false;
     }
@@ -292,6 +336,7 @@ bool OnlineShelfController::HasDeferredConnect() const {
 
 void OnlineShelfController::HandleDeferredDisconnect(const std::vector<std::string> &books_roots,
                                                      const std::vector<std::string> &cover_roots) {
+  StopOnlineBackgroundJobs();
   DisconnectOnlineSourceWithMigration(state_, books_roots, cover_roots);
 }
 
@@ -308,6 +353,30 @@ bool OnlineShelfController::FileExists(const std::filesystem::path &path, const 
   return deps.file_exists ? deps.file_exists(path) : false;
 }
 
+bool OnlineShelfController::LocalZipComplete(const std::filesystem::path &path) const {
+  std::error_code ec;
+  if (path.empty() || !std::filesystem::exists(path, ec) || ec ||
+      !std::filesystem::is_regular_file(path, ec) || ec ||
+      std::filesystem::file_size(path, ec) < 22 || ec) {
+    return false;
+  }
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return false;
+  char sig[4] = {};
+  in.read(sig, sizeof(sig));
+  if (in.gcount() != static_cast<std::streamsize>(sizeof(sig))) return false;
+  if (!(sig[0] == 'P' && sig[1] == 'K' && ((sig[2] == 3 && sig[3] == 4) || (sig[2] == 5 && sig[3] == 6)))) {
+    return false;
+  }
+  in.seekg(0, std::ios::end);
+  const std::streamoff size = in.tellg();
+  const std::streamoff start = std::max<std::streamoff>(0, size - 65536);
+  in.seekg(start, std::ios::beg);
+  std::string tail(static_cast<size_t>(size - start), '\0');
+  in.read(&tail[0], static_cast<std::streamsize>(tail.size()));
+  return tail.find("PK\005\006") != std::string::npos || tail.find("PK\006\006") != std::string::npos;
+}
+
 bool OnlineShelfController::BookDownloaded(const BookItem &item, const OnlineShelfControllerDeps &deps) const {
   if (!item.is_remote || item.remote_local_path.empty()) return false;
   return FileExists(std::filesystem::path(item.remote_local_path), deps);
@@ -322,11 +391,19 @@ bool OnlineShelfController::BookDownloading(const BookItem &item) const {
 float OnlineShelfController::BookDownloadProgress(const BookItem &item, const OnlineShelfControllerDeps &deps) const {
   if (!item.is_remote || item.remote_local_path.empty()) return -1.0f;
   const std::filesystem::path part_path = std::filesystem::path(item.remote_local_path).string() + ".part";
+  const std::filesystem::path size_path = std::filesystem::path(item.remote_local_path).string() + ".size";
   std::error_code ec;
   const uintmax_t part_size = std::filesystem::exists(part_path, ec) && !ec ? std::filesystem::file_size(part_path, ec) : 0;
   if (part_size == 0 || ec) return -1.0f;
-  // The signed WCDN URL does not expose a total size here, so use a soft progress curve:
-  // it visibly advances while avoiding a false 100% before rename succeeds.
+  uintmax_t total_size = 0;
+  if (std::filesystem::exists(size_path, ec) && !ec) {
+    std::ifstream in(size_path);
+    if (in) in >> total_size;
+  }
+  if (total_size > 0) {
+    const double progress = static_cast<double>(part_size) / static_cast<double>(total_size);
+    return std::clamp(static_cast<float>(progress), 0.0f, 0.995f);
+  }
   constexpr double kSoftFullBytes = 256.0 * 1024.0 * 1024.0;
   const double progress = static_cast<double>(part_size) / (static_cast<double>(part_size) + kSoftFullBytes);
   return std::clamp(static_cast<float>(progress), 0.02f, 0.92f);
@@ -371,10 +448,13 @@ bool OnlineShelfController::ProcessFocusedCoverWindow(int focus_index, int grid_
   if (begin >= end) return false;
   std::vector<OnlineCatalogItem> batch;
   batch.reserve(4);
-  for (size_t index = begin; index < end; ++index) {
+  const size_t span = end - begin;
+  for (size_t n = 0; n < span; ++n) {
+    const size_t index = begin + ((cover_window_cursor_ - begin + n) % span);
     const OnlineCatalogItem &item = state_.catalog_items[index];
     if (!OnlineCatalogCoverExists(state_, item)) {
       cover_window_cursor_ = index + 1;
+      if (cover_window_cursor_ >= end) cover_window_cursor_ = begin;
       batch.push_back(item);
       if (batch.size() >= 4) break;
     }
