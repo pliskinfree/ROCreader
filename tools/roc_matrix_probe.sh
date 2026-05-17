@@ -2,6 +2,8 @@
 # ROCreader hardware/system matrix probe for Linux ports.
 # Run on the target device:
 #   sh tools/roc_matrix_probe.sh
+# Reports default to the directory containing this script, so launching it from
+# /mnt/mmc/Roms/APPS/roc_matrix_probe.sh writes next to that script.
 # Optional:
 #   sh tools/roc_matrix_probe.sh --keys 30
 #   sh tools/roc_matrix_probe.sh --out /tmp/roc_probe
@@ -25,7 +27,7 @@ ROCreader to another Linux handheld/chipset. It writes a report directory and
 a compressed tarball next to it when tar is available.
 
 Options:
-  --out DIR       Output directory base. Default: ./roc_matrix_report_YYYYmmdd_HHMMSS
+  --out DIR       Output directory base. Default: script directory/roc_matrix_report_YYYYmmdd_HHMMSS
   --keys N        Try interactive input/key capture for N seconds. Default: 20
   --no-keys       Skip interactive key capture.
   -h, --help      Show this help.
@@ -65,9 +67,22 @@ timestamp() {
   date '+%Y%m%d_%H%M%S' 2>/dev/null || echo "unknown_time"
 }
 
+script_dir() {
+  case "$0" in
+    */*)
+      dir=${0%/*}
+      ;;
+    *)
+      dir=.
+      ;;
+  esac
+  cd "$dir" 2>/dev/null && pwd -P || pwd
+}
+
 NOW=$(timestamp)
+SCRIPT_DIR=$(script_dir)
 if [ -z "$OUT_BASE" ]; then
-  OUT_BASE="./roc_matrix_report_$NOW"
+  OUT_BASE="$SCRIPT_DIR/roc_matrix_report_$NOW"
 fi
 
 REPORT_DIR=$OUT_BASE
@@ -580,7 +595,16 @@ section "Files Written"
   echo "Summary: $SUMMARY"
   echo "Raw command output: $RAW_DIR/commands"
   echo "Raw sysfs/proc snapshots: $RAW_DIR"
+  echo "Latest summary copy: $SCRIPT_DIR/roc_matrix_probe_latest_summary.txt"
+  echo "Latest report path marker: $SCRIPT_DIR/roc_matrix_probe_latest_path.txt"
 } >> "$SUMMARY"
+
+cp "$SUMMARY" "$SCRIPT_DIR/roc_matrix_probe_latest_summary.txt" 2>/dev/null || true
+{
+  echo "Report directory: $REPORT_DIR"
+  echo "Summary: $SUMMARY"
+  echo "Raw data: $RAW_DIR"
+} > "$SCRIPT_DIR/roc_matrix_probe_latest_path.txt" 2>/dev/null || true
 
 if have_cmd tar; then
   archive="${REPORT_DIR}.tar.gz"
@@ -589,6 +613,8 @@ if have_cmd tar; then
     log "Archive: $archive"
   }
 fi
+
+cp "$SUMMARY" "$SCRIPT_DIR/roc_matrix_probe_latest_summary.txt" 2>/dev/null || true
 
 log "Done."
 log "Summary: $SUMMARY"

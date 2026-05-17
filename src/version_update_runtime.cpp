@@ -531,6 +531,14 @@ void RemovePendingMarkerFile(const std::filesystem::path &marker_path) {
   std::filesystem::remove(marker_path, ec);
 }
 
+void RemovePendingMarkerAndInstalledPackage(const std::filesystem::path &marker_path,
+                                            const std::filesystem::path &package_path) {
+  RemovePendingMarkerFile(marker_path);
+  if (package_path.empty()) return;
+  std::error_code ec;
+  std::filesystem::remove(package_path, ec);
+}
+
 bool ReadPendingMarker(const std::filesystem::path &marker_path, VersionUpdateState &state) {
   std::ifstream in(marker_path);
   if (!in) return false;
@@ -545,14 +553,23 @@ bool ReadPendingMarker(const std::filesystem::path &marker_path, VersionUpdateSt
     if (key == "filename") package_path = marker_path.parent_path() / value;
     else if (key == "version") version = value;
   }
+  version = TrimAsciiWhitespace(version);
   std::error_code ec;
   if (package_path.empty() || !std::filesystem::exists(package_path, ec) || ec) {
     RemovePendingMarkerFile(marker_path);
     return false;
   }
+  if (version.empty()) {
+    TryExtractVersionToken(package_path.filename().string(), version);
+  }
   if (!version.empty() && !state.current_version.empty() && !IsVersionNewer(version, state.current_version)) {
     AppendUpdateLog("Pending marker is stale; installed version is already " + state.current_version);
-    RemovePendingMarkerFile(marker_path);
+    RemovePendingMarkerAndInstalledPackage(marker_path, package_path);
+    return false;
+  }
+  if (version.empty()) {
+    AppendUpdateLog("Pending marker has no version; clearing stale package " + package_path.string());
+    RemovePendingMarkerAndInstalledPackage(marker_path, package_path);
     return false;
   }
   state.pending_package_path = package_path;
@@ -810,8 +827,13 @@ void TickVersionUpdateState(VersionUpdateState &state, float dt) {
     state.status = VersionUpdateStatus::Downloaded;
     state.download_progress_pct = 100;
     state.download_speed_bytes_per_sec = 0.0;
-    WritePendingMarker(state);
-    AppendUpdateLog("Update package downloaded successfully.");
+    if (WritePendingMarker(state)) {
+      AppendUpdateLog("Update package downloaded successfully.");
+    } else {
+      state.has_pending_package = false;
+      state.status = VersionUpdateStatus::DownloadFailed;
+      AppendUpdateLog("Update package downloaded but pending marker write failed.");
+    }
   } else if (state.status == VersionUpdateStatus::Downloading) {
     state.status = VersionUpdateStatus::DownloadFailed;
     state.download_progress_pct = 0;
