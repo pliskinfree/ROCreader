@@ -1087,7 +1087,7 @@ perform_pending_update_if_any() {
     package_path="$package_dir/$package_name"
     [ -n "$package_version" ] || package_version="$(extract_version_from_name "$package_path")"
   fi
-  [ -n "$package_path" ] || return 2
+  [ -n "$package_path" ] || return 0
 
   log_line "[update] pending marker: ${marker:-none}"
   log_line "[update] installed version: ${installed_version:-unknown}"
@@ -1098,19 +1098,19 @@ perform_pending_update_if_any() {
   if [ ! -f "$package_path" ]; then
     log_line "[update] missing package, skip install"
     write_update_status "failed" "$package_version"
-    return 1
+    return 0
   fi
   if ! extract_zip_to_stage "$package_path" "$update_stage_dir"; then
     log_line "[update] extract failed"
     write_update_status "failed" "$package_version"
-    return 1
+    return 0
   fi
   staged_runtime="$(find_staged_runtime_dir "$update_stage_dir" || true)"
   if [ ! -d "$staged_runtime" ]; then
     log_line "[update] staged runtime missing under: $update_stage_dir"
     write_update_status "failed" "$package_version"
     rm -rf "$update_stage_dir"
-    return 1
+    return 0
   fi
 
   protect_local_online_sources "$staged_runtime"
@@ -1172,11 +1172,6 @@ if [ "${1:-}" = "--install-pending-update" ]; then
   exit $?
 fi
 
-if pending_update_available; then
-  export ROCREADER_BOOT_INSTALL_PENDING_UPDATE="${ROCREADER_BOOT_INSTALL_PENDING_UPDATE:-1}"
-  export ROCREADER_UPDATE_INSTALL_COMMAND="${ROCREADER_UPDATE_INSTALL_COMMAND:-\"$LAUNCHER_PATH\" --install-pending-update}"
-fi
-
 maybe_install_after_exit() {
   if pending_update_available; then
     log_line "[update] pending package found after app exit; install deferred until next launch"
@@ -1236,6 +1231,7 @@ trim_log_if_needed
 if [ "${ROCREADER_VERBOSE_LOG:-0}" = "1" ] || [ "${ROCREADER_DEBUG_LOG:-0}" = "1" ]; then
   log_line "===== $(date '+%F %T %Z') ====="
 fi
+perform_pending_update_if_any
 log_line "[launcher] package_tag=$PACKAGE_TAG"
 log_line "[launcher] app=$APP_DIR"
 log_line "[launcher] cache_root=${ROCREADER_CACHE_ROOT}"
