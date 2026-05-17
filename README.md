@@ -1,43 +1,136 @@
-# ROCreader Native (SDL2 / C++)
+# ROCreader
 
-This folder is the standalone native ROCreader project for RG35XX/H700-class handheld systems.
-The previous Python project layout is no longer required here.
+ROCreader is a native SDL2/C++ reader for handheld Linux devices such as
+H700-class systems and Trimui Brick. It focuses on local reading, fast shelf
+navigation, device-friendly controls, and optional connections to user-provided
+legal online catalogs.
 
-## Goals
+This project does not provide, host, index, recommend, or bundle copyrighted
+books, comics, manga, novels, third-party source lists, illegal download links,
+or any content source that the user is not authorized to access.
 
-- Replace the Python + pygame display/input layer with native SDL2.
-- Keep core business ideas (book scanning/state/input actions).
-- Start with a minimal, stable loop that can run on handheld firmware.
+## Legal and Content Policy
 
-## Current status
+ROCreader is a general-purpose document and comic reader. It is intended for:
 
-- SDL2 fullscreen window + render loop
-- D-pad / ABXY / L1/L2/R1/R2 / Start / Select / Menu mapping
-- Bookshelf scan from card roots:
-  - card1 first: `.../ROCreader/books`
-  - card2 fallback: `.../ROCreader/books`
-  - Windows dev fallback: local `./books`
-- Cover roots scan:
-  - card1/card2: `.../ROCreader/book_covers`
-  - Windows dev fallback: local `./book_covers`
-- Cover resolve parity (manual cover + folder internal cover), with graceful fallback:
-  - if `SDL2_image` exists: load `png/jpg/jpeg/webp/bmp`
-  - otherwise fallback to `SDL_LoadBMP` and rectangle placeholders
-- Reader state implemented (`boot/shelf/settings/reader`) with:
-  - page/rotation/zoom/scroll persistence (`native_progress.tsv`)
-  - long-press smooth scrolling and cross-page continuation
-  - rotation-aware short/long key mapping
-- Optional `SDL2_ttf` title rendering:
-  - unfocused book title: truncated display with `...`
-  - focused book title: horizontal marquee loop for full name
-- Optional `SDL2_mixer` key SFX (`sounds/move|select|back|change.wav`, controlled by `native_config.ini` `audio=1`)
-- Volume keys:
-  - Windows preview maps keypad `+/-` to app SFX volume up/down
-  - ARM/H700 builds prefer device/system volume via `amixer`, with app SFX volume as fallback
-- Cover texture cache capped (LRU-style) for low-memory devices
-- Launch-log output to stdout/stderr
+- Local files owned by the user or used with permission.
+- Public-domain, open-license, or otherwise lawfully obtained works.
+- Private or authorized OPDS/Kavita catalogs configured by the user.
+- Personal libraries stored on the user's own SD card or device.
 
-## Build (native on device)
+The official release package ships only a template `online_sources.ini`.
+Maintainers must not include real third-party content sources, site-specific
+illegal source lists, infringing download links, or copyrighted works in release
+packages, README examples, screenshots, Issues, Discussions, Wiki pages, or
+other official project materials.
+
+Users are responsible for making sure every source they configure and every file
+they read or download is lawful in their jurisdiction. The project maintainers
+do not control user-configured sources and do not authorize using ROCreader to
+access, copy, distribute, or download infringing content.
+
+If you believe official project material contains infringing or otherwise
+illegal content, please open an issue or contact the maintainer with enough
+detail to identify the material. Valid reports will be reviewed and the relevant
+official links, files, or references will be removed or disabled where
+appropriate.
+
+See [LEGAL.md](LEGAL.md) for the full legal disclaimer and contributor rules.
+
+## Features
+
+- Native SDL2 fullscreen reader optimized for low-power handheld devices.
+- Bookshelf scanning from `books/` directories on supported storage roots.
+- Cover scanning from sibling `book_covers/` directories.
+- ZIP/CBZ comic reading with zoom, rotation, scrolling, page persistence, and
+  cover caching.
+- PDF reading when a real PDF backend such as MuPDF/Fitz or Poppler is present.
+- EPUB reading, including flow/comic-oriented reader paths.
+- TXT reading with encoding detection and UTF-8 conversion support.
+- Reader progress, favorites, history, and settings persistence.
+- Optional `SDL2_ttf` title rendering with focused-title marquee.
+- Optional `SDL2_mixer` key sound effects.
+- Device/system volume integration with fallback app sound volume.
+- URL Entry panel for user-configured lawful OPDS/Kavita catalogs.
+- Optional `manual_web` development interface for private, lawful site adapters;
+  official releases must keep this unconfigured and source-free.
+- Online downloads are stored under the app's `Downloads/` cache and can be
+  moved into the local library only after user action.
+
+## Supported Content
+
+Local library files are expected under:
+
+```text
+ROCreader/books/
+ROCreader/book_covers/
+```
+
+Supported reader paths include:
+
+- `.zip` / `.cbz` image archives
+- `.pdf` with a real PDF backend
+- `.epub`
+- `.txt`
+
+Manual cover files should use the same base name as the book file when possible
+and live under `book_covers/`.
+
+## URL Entry
+
+The URL Entry feature is an online shelf interface. It reads configuration from
+`online_sources.ini` in the runtime directory, or from the path specified by
+`ROCREADER_ONLINE_SOURCES`.
+
+Official release packages must ship a template-only configuration:
+
+```ini
+[source.template]
+name=Template only - copy this block and fill a real source
+type=opds
+url=
+visible=0
+enabled=0
+category.0.name=All
+category.0.url=
+```
+
+Supported source types:
+
+- `opds`: standard OPDS-compatible feeds.
+- `kavita`: Kavita OPDS-compatible feeds.
+- `manual_web`: development hook for user-owned or otherwise lawful custom
+  catalog adapters.
+
+No official release should include real third-party source entries. Do not use
+project infrastructure to share source lists for copyrighted works unless you
+own the rights or have explicit permission.
+
+## Install Layout
+
+Typical device package layout:
+
+```text
+Roms/APPS/ROCreader.sh
+Roms/APPS/ROCreader/
+  rocreader_sdl
+  online_sources.ini
+  native_config.ini
+  native_keymap.ini
+  fonts/
+  sounds/
+  lib/
+  lib_system_sdl/
+  books/
+  book_covers/
+  cache/
+  Downloads/
+```
+
+Online updates must preserve the user's local `online_sources.ini`. Treat it as
+device/user configuration, not packaged content.
+
+## Build on Device
 
 ```sh
 cd /Roms/APPS/ROCreader
@@ -45,7 +138,19 @@ chmod +x build_and_run.sh
 ./build_and_run.sh
 ```
 
-## Preflight Check (recommended)
+The build defaults to requiring a real PDF backend:
+
+```sh
+REQUIRE_MUPDF=1 ./build_and_run.sh
+```
+
+Only use mock PDF rendering for explicit development tests:
+
+```sh
+REQUIRE_MUPDF=0 ./build_and_run.sh
+```
+
+## Preflight Check
 
 ```sh
 cd /Roms/APPS/ROCreader
@@ -53,35 +158,14 @@ chmod +x preflight_check.sh
 ./preflight_check.sh
 ```
 
-Cross preflight (for Ubuntu/WSL cross toolchain):
+Cross preflight example:
 
 ```sh
 cd /path/to/ROCreader
 PRECHECK_MODE=cross CROSS_TOOL_PREFIX=arm-linux-gnueabihf ./preflight_check.sh
 ```
 
-Notes:
-- `build_and_run.sh` now defaults to `REQUIRE_MUPDF=1`.
-- Build fails early if no real PDF backend is available (MuPDF/Fitz or Poppler), to prevent mock rendering from slipping into test builds.
-- To allow mock backend explicitly: `REQUIRE_MUPDF=0 ./build_and_run.sh`
-- Window mode on desktop testing:
-  - default on x86/WSL: windowed
-  - force windowed: `ROCREADER_WINDOWED=1 ./build/rocreader_sdl`
-  - force fullscreen: `ROCREADER_FULLSCREEN=1 ./build/rocreader_sdl`
-
-## Package to /Roms/APPS
-
-```sh
-cd /Roms/APPS/ROCreader
-chmod +x package_to_apps.sh
-./package_to_apps.sh
-```
-
-Outputs:
-- `/Roms/APPS/ROCreader.sh`
-- `/Roms/APPS/ROCreader/`
-
-## Cross Compile + Package (finalized)
+## Cross Compile and Package
 
 ```sh
 cd /path/to/ROCreader
@@ -89,17 +173,20 @@ chmod +x cross_compile_and_package.sh
 CROSS_TOOL_PREFIX=arm-linux-gnueabihf REQUIRE_MUPDF=1 ./cross_compile_and_package.sh
 ```
 
-Outputs:
-- `dist_h700/APPS/ROCreader.sh`
-- `dist_h700/APPS/ROCreader/rocreader_sdl`
-- `dist_h700/ROCreader_APPS.tar.gz`
+Typical outputs:
 
-Then copy `dist_h700/APPS` contents to your SD card `/Roms/APPS`.
+```text
+dist_h700/APPS/ROCreader.sh
+dist_h700/APPS/ROCreader/rocreader_sdl
+dist_h700/ROCreader_APPS.tar.gz
+```
 
-## Low-GLIBC Cross Build (recommended for 34xxSP)
+Copy the generated `APPS` contents to the SD card's `/Roms/APPS` directory.
 
-When runtime shows errors like `GLIBC_2.38 not found`, build against a sysroot
-synced from the device itself:
+## Low-GLIBC H700 Build
+
+When the device reports errors such as `GLIBC_2.38 not found`, build against a
+sysroot synced from the target device:
 
 ```sh
 cd /path/to/ROCreader
@@ -111,105 +198,100 @@ REQUIRE_MUPDF=1 \
 ./cross_compile_low_glibc.sh
 ```
 
-Output packages:
+Release outputs are written under:
 
-- `H700/dist_lowglibc/ROCreader_APPS_lowglibc.tar.gz`
-- `H700/Downloads/<versioned H700 release zip>`
-
-Release zip rules:
-
-- `H700/Downloads` stores the H700 final release `.zip` files
-- root `Downloads` is kept as the legacy online-update mirror for old H700 builds and is updated automatically during H700 packaging
-- staging files are generated under `H700/dist_lowglibc/release_stage`
-- zip root contains:
-  - `Roms/APPS/Imgs/ROCreader.png`
-  - `Roms/APPS/ROCreader.sh`
-  - `Roms/APPS/ROCreader/`
-- `Roms/APPS/ROCreader/` contains the full runtime payload:
-  - `rocreader_sdl`
-  - `ui.pack`
-  - `native_config.ini`
-  - `native_keymap.ini`
-  - `fonts/`
-  - `sounds/`
-  - `lib/`
-  - `lib_system_sdl/`
-  - empty `books/`, `book_covers/`, `cache/` directories
-- zip version is auto-incremented from the latest existing H700 release zip
-
-## Runtime Crash Logs (on device)
-
-Launcher writes runtime diagnostics to:
-
-- `/Roms/APPS/ROCreader.log`
-
-What it logs:
-- `ldd` output (if available) to detect missing `.so`
-- attempted `SDL_VIDEODRIVER` backends and exit code per backend
-- basic environment/path info
-
-Common signs:
-- `not found` in `ldd` output: missing dependency library
-- all drivers failed: likely SDL video backend mismatch on firmware
-
-## Build (manual)
-
-```sh
-cd /Roms/APPS/ROCreader
-make print-config REQUIRE_MUPDF=1
-make REQUIRE_MUPDF=1
-./build/rocreader_sdl
+```text
+H700/dist_lowglibc/
+H700/Downloads/
 ```
 
-## Cross compile notes
+The root `Downloads/` directory is retained only as a legacy online-update
+mirror for older H700 builds.
 
-Use your own toolchain by overriding variables:
+## Trimui Brick Build
 
-```sh
-make CXX=arm-linux-gnueabihf-g++ \
-     PKG_CONFIG=arm-linux-gnueabihf-pkg-config
+Trimui Brick packaging is maintained under `TrimuiBrick/`.
+
+```powershell
+.\TrimuiBrick\build_low_glibc_docker.ps1
 ```
 
-Equivalent for finalized script:
+See [TrimuiBrick/README.md](TrimuiBrick/README.md) for the dedicated build
+workflow and PDF backend notes.
+
+## Desktop Testing
+
+Window mode on desktop builds:
 
 ```sh
-CROSS_CXX=arm-linux-gnueabihf-g++ \
-CROSS_PKG_CONFIG=arm-linux-gnueabihf-pkg-config \
-./cross_compile_and_package.sh
+ROCREADER_WINDOWED=1 ./build/rocreader_sdl
 ```
 
-If `pkg-config sdl2` is unavailable, pass flags manually:
+Fullscreen mode:
 
 ```sh
-make SDL_CFLAGS="-I/path/to/sdl2/include" SDL_LIBS="-L/path/to/lib -lSDL2"
+ROCREADER_FULLSCREEN=1 ./build/rocreader_sdl
 ```
 
-## Controls (default)
+## Controls
 
-- Shelf:
-  - D-pad: move focus
-  - A: enter folder / open book
-  - B: back to root shelf (when in folder)
-  - Menu: open sidebar settings
-- Reader:
-  - Short press: page turn (rotation aware)
-  - Long press: directional smooth scroll (rotation aware)
-  - L1/R1: zoom out/in
-  - L2/R2: rotate -90/+90
-  - A: reset to fit in current orientation
-  - B: exit reader and save progress
-  - Menu: open sidebar settings
-- Global:
-  - Start + Select: exit app
-  - Volume +/-: adjust volume
+Shelf:
 
-## Dev model
+- D-pad: move focus.
+- A: enter folder or open book.
+- B: back to root shelf when inside a folder.
+- Menu: open sidebar settings.
 
-- Root Python app (`launcher.py`, `core/*`) remains the primary feature playground.
-- The native SDL2/C++ code in this root folder is the active H700 project.
-- Keep behavior/perf notes in `H700_SDL2_MIGRATION.md` and `PERF_OPTIMIZATION_CHECKLIST.md`.
+Reader:
 
-## Next steps
+- D-pad short press: page turn, rotation-aware.
+- D-pad long press: smooth scroll, rotation-aware.
+- L1/R1: zoom out/in.
+- L2/R2: rotate -90/+90.
+- A: reset to fit current orientation.
+- B: exit reader and save progress.
+- Menu: open sidebar settings.
 
-- Add PDF first-page cover extraction fallback path
-- Add on-device perf trace counters (frame time / render spikes) for tuning
+Global:
+
+- Start + Select: exit app.
+- Volume +/-: adjust volume.
+
+## Runtime Logs
+
+The launcher writes diagnostics to:
+
+```text
+/Roms/APPS/ROCreader.log
+```
+
+Useful signs:
+
+- `not found` in `ldd` output usually means a missing shared library.
+- All video drivers failing usually points to an SDL video backend mismatch.
+- URL Entry failures are logged with `online:` prefixes when runtime logging is
+  enabled.
+
+## Contributing
+
+Contributions are welcome when they improve the reader, device support,
+performance, accessibility, build reliability, or lawful source compatibility.
+
+Do not submit:
+
+- Copyrighted books, comics, manga, novels, fonts, music, or artwork without
+  permission.
+- Third-party source lists for unauthorized content.
+- Site-specific adapters whose purpose is to bypass access controls or download
+  infringing works.
+- Screenshots or documentation that promote illegal content access.
+
+Pull requests that add online-source functionality should keep configuration
+template-only and document lawful use cases such as private OPDS/Kavita
+libraries, public-domain catalogs, or authorized institutional catalogs.
+
+## License
+
+Add or update the project license before distributing binaries broadly. Any
+third-party libraries, fonts, sounds, images, and bundled assets must be used in
+compliance with their own licenses.
