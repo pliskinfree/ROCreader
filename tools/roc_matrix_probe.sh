@@ -15,6 +15,7 @@ KEY_SECONDS=20
 OUT_BASE=""
 RUN_KEY_PROBE=1
 DISPLAY_TEST_SECONDS=0
+ARGS_COUNT=$#
 
 usage() {
   cat <<'EOF'
@@ -91,6 +92,35 @@ script_dir() {
 
 NOW=$(timestamp)
 SCRIPT_DIR=$(script_dir)
+
+{
+  echo "Started: $(date 2>/dev/null || echo unknown)"
+  echo "Script: $0"
+  echo "Script dir: $SCRIPT_DIR"
+  echo "Original arg count: $ARGS_COUNT"
+} > "$SCRIPT_DIR/roc_matrix_probe_click_started.txt" 2>/dev/null || true
+
+if [ "$ARGS_COUNT" -eq 0 ] && [ "$DISPLAY_TEST_SECONDS" -eq 0 ] 2>/dev/null; then
+  for candidate in \
+    "$SCRIPT_DIR/rgds_sdl_dualscreen_probe.sh" \
+    "$SCRIPT_DIR/rgds_sdl_dualscreen_probe" \
+    "$SCRIPT_DIR/ROCreader/rgds_sdl_dualscreen_probe.sh" \
+    "$SCRIPT_DIR/ROCreader/rgds_sdl_dualscreen_probe"; do
+    if [ -r "$candidate" ] || [ -x "$candidate" ]; then
+      DISPLAY_TEST_SECONDS=15
+      RUN_KEY_PROBE=0
+      KEY_SECONDS=0
+      {
+        echo "Auto mode: RGDS display test enabled because no args were passed and probe exists."
+        echo "Probe: $candidate"
+        echo "Display test seconds: $DISPLAY_TEST_SECONDS"
+        echo "Key probe: disabled"
+      } >> "$SCRIPT_DIR/roc_matrix_probe_click_started.txt" 2>/dev/null || true
+      break
+    fi
+  done
+fi
+
 if [ -z "$OUT_BASE" ]; then
   OUT_BASE="$SCRIPT_DIR/roc_matrix_report_$NOW"
 fi

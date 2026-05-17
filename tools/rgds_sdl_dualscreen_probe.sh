@@ -25,9 +25,13 @@ SECONDS_TO_RUN="${ROCREADER_RGDS_DISPLAY_TEST_SECONDS:-15}"
 BIN_CANDIDATE="$SCRIPT_DIR/rgds_sdl_dualscreen_probe"
 TMP_CPP="/tmp/rgds_sdl_dualscreen_probe.cpp"
 TMP_BIN="/tmp/rgds_sdl_dualscreen_probe"
+LOG_FILE="$SCRIPT_DIR/rgds_sdl_dualscreen_probe_latest.log"
+
+: > "$LOG_FILE" 2>/dev/null || true
 
 log() {
   printf '%s\n' "$*"
+  printf '%s\n' "$*" >> "$LOG_FILE" 2>/dev/null || true
 }
 
 have_cmd() {
@@ -36,12 +40,25 @@ have_cmd() {
 
 run_probe_bin() {
   bin="$1"
+  log "[rgds_probe_sh] executing: $bin"
   if [ -z "${SDL_VIDEODRIVER:-}" ]; then
-    SDL_VIDEODRIVER=KMSDRM ROCREADER_RGDS_DISPLAY_TEST_SECONDS="$SECONDS_TO_RUN" "$bin"
+    SDL_VIDEODRIVER=KMSDRM ROCREADER_RGDS_DISPLAY_TEST_SECONDS="$SECONDS_TO_RUN" "$bin" >> "$LOG_FILE" 2>&1
   else
-    ROCREADER_RGDS_DISPLAY_TEST_SECONDS="$SECONDS_TO_RUN" "$bin"
+    ROCREADER_RGDS_DISPLAY_TEST_SECONDS="$SECONDS_TO_RUN" "$bin" >> "$LOG_FILE" 2>&1
   fi
+  rc=$?
+  log "[rgds_probe_sh] executable exit code: $rc"
+  return "$rc"
 }
+
+log "[rgds_probe_sh] started: $(date 2>/dev/null || echo unknown)"
+log "[rgds_probe_sh] script=$0"
+log "[rgds_probe_sh] script_dir=$SCRIPT_DIR"
+log "[rgds_probe_sh] seconds=$SECONDS_TO_RUN"
+log "[rgds_probe_sh] SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-}"
+log "[rgds_probe_sh] PATH=${PATH:-}"
+log "[rgds_probe_sh] uname=$(uname -a 2>/dev/null || true)"
+log "[rgds_probe_sh] log=$LOG_FILE"
 
 if [ -x "$BIN_CANDIDATE" ]; then
   log "[rgds_probe_sh] running sibling binary: $BIN_CANDIDATE"
@@ -253,6 +270,14 @@ done
 if [ -z "$compiler" ]; then
   log "[rgds_probe_sh] no C++ compiler found on target."
   log "[rgds_probe_sh] Copy a prebuilt rgds_sdl_dualscreen_probe next to this script, or build it on your PC/sysroot."
+  log "[rgds_probe_sh] command availability:"
+  for c in g++ c++ clang++ aarch64-linux-gnu-g++ pkg-config sdl2-config modetest; do
+    if have_cmd "$c"; then
+      log "  $c=$(command -v "$c" 2>/dev/null)"
+    else
+      log "  $c=missing"
+    fi
+  done
   exit 127
 fi
 
@@ -268,7 +293,7 @@ fi
 
 log "[rgds_probe_sh] compiling with $compiler"
 # shellcheck disable=SC2086
-if ! "$compiler" -O2 -std=c++17 $sdl_cflags "$TMP_CPP" -o "$TMP_BIN" $sdl_libs; then
+if ! "$compiler" -O2 -std=c++17 $sdl_cflags "$TMP_CPP" -o "$TMP_BIN" $sdl_libs >> "$LOG_FILE" 2>&1; then
   log "[rgds_probe_sh] compile failed."
   log "[rgds_probe_sh] compiler=$compiler"
   log "[rgds_probe_sh] sdl_cflags=$sdl_cflags"
