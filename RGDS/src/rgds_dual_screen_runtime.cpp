@@ -169,14 +169,10 @@ void DualScreenRuntime::DrawFocusFrame(SurfaceId surface, float alpha) const {
   if (!renderer || alpha <= 0.001f) return;
   const int w = rgds::kScreenW;
   const int h = rgds::kScreenH;
-  const Uint8 fill_alpha = static_cast<Uint8>(std::clamp(alpha * 42.0f, 0.0f, 42.0f));
-  const Uint8 line_alpha = static_cast<Uint8>(std::clamp(alpha * 230.0f, 0.0f, 230.0f));
+  const Uint8 line_alpha = static_cast<Uint8>(std::clamp(alpha * 255.0f, 0.0f, 255.0f));
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-  SDL_SetRenderDrawColor(renderer, 90, 190, 255, fill_alpha);
-  SDL_Rect fill{0, 0, w, h};
-  SDL_RenderFillRect(renderer, &fill);
   SDL_SetRenderDrawColor(renderer, 120, 210, 255, line_alpha);
-  for (int i = 0; i < 8; ++i) {
+  for (int i = 0; i < 3; ++i) {
     SDL_Rect border{i, i, std::max(1, w - i * 2), std::max(1, h - i * 2)};
     SDL_RenderDrawRect(renderer, &border);
   }

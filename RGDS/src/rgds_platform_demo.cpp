@@ -1,4 +1,5 @@
 #include "rgds_dual_screen_runtime.h"
+#include "rgds_evdev_input.h"
 
 #include <SDL.h>
 
@@ -22,17 +23,6 @@ enum class Focus {
   ReaderMenu,
 };
 
-struct InputAction {
-  bool select = false;
-  bool menu = false;
-  bool back = false;
-  bool confirm = false;
-  bool up = false;
-  bool down = false;
-  bool left = false;
-  bool right = false;
-};
-
 int ReadEnvInt(const char *name, int fallback_value, int min_value, int max_value) {
   const char *raw = std::getenv(name);
   if (!raw || !*raw) return fallback_value;
@@ -43,17 +33,27 @@ int ReadEnvInt(const char *name, int fallback_value, int min_value, int max_valu
   }
 }
 
+float ConsumeFlashAlpha(uint32_t &flash_until) {
+  if (flash_until == 0) return 0.0f;
+  const uint32_t now = SDL_GetTicks();
+  if (SDL_TICKS_PASSED(now, flash_until)) {
+    flash_until = 0;
+    return 0.0f;
+  }
+  return static_cast<float>(flash_until - now) / 450.0f;
+}
+
 bool IsSelectKey(SDL_Keycode key, SDL_Scancode scancode) {
   return key == SDLK_SELECT || key == SDLK_TAB || scancode == SDL_SCANCODE_SELECT;
 }
 
 bool IsMenuKey(SDL_Keycode key, SDL_Scancode scancode) {
-  return key == SDLK_MENU || key == SDLK_m || scancode == SDL_SCANCODE_MENU;
+  return key == SDLK_MENU || key == SDLK_m || scancode == SDL_SCANCODE_MENU ||
+         scancode == SDL_SCANCODE_AC_BACK;
 }
 
 bool IsBackKey(SDL_Keycode key, SDL_Scancode scancode) {
-  return key == SDLK_AC_BACK || key == SDLK_ESCAPE || scancode == SDL_SCANCODE_AC_BACK ||
-         scancode == SDL_SCANCODE_BACKSPACE;
+  return key == SDLK_ESCAPE || scancode == SDL_SCANCODE_BACKSPACE;
 }
 
 bool IsConfirmKey(SDL_Keycode key, SDL_Scancode scancode) {
@@ -77,8 +77,8 @@ bool IsRightKey(SDL_Keycode key, SDL_Scancode scancode) {
   return key == SDLK_RIGHT || scancode == SDL_SCANCODE_RIGHT;
 }
 
-InputAction ActionFromKey(const SDL_KeyboardEvent &event) {
-  InputAction action;
+rgds::InputAction ActionFromKey(const SDL_KeyboardEvent &event) {
+  rgds::InputAction action;
   const SDL_Keycode key = event.keysym.sym;
   const SDL_Scancode scancode = event.keysym.scancode;
   action.select = IsSelectKey(key, scancode);
@@ -89,70 +89,6 @@ InputAction ActionFromKey(const SDL_KeyboardEvent &event) {
   action.down = IsDownKey(key, scancode);
   action.left = IsLeftKey(key, scancode);
   action.right = IsRightKey(key, scancode);
-  return action;
-}
-
-InputAction ActionFromControllerButton(Uint8 button) {
-  InputAction action;
-  switch (button) {
-    case SDL_CONTROLLER_BUTTON_DPAD_UP:
-      action.up = true;
-      break;
-    case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
-      action.down = true;
-      break;
-    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
-      action.left = true;
-      break;
-    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
-      action.right = true;
-      break;
-    case SDL_CONTROLLER_BUTTON_A:
-      action.confirm = true;
-      break;
-    case SDL_CONTROLLER_BUTTON_B:
-      action.back = true;
-      break;
-    case SDL_CONTROLLER_BUTTON_BACK:
-      action.select = true;
-      break;
-    case SDL_CONTROLLER_BUTTON_START:
-    case SDL_CONTROLLER_BUTTON_GUIDE:
-      action.menu = true;
-      break;
-    default:
-      break;
-  }
-  return action;
-}
-
-InputAction ActionFromJoystickButton(Uint8 button) {
-  InputAction action;
-  switch (button) {
-    case 0:
-      action.confirm = true;
-      break;
-    case 1:
-      action.back = true;
-      break;
-    case 6:
-      action.select = true;
-      break;
-    case 7:
-      action.menu = true;
-      break;
-    default:
-      break;
-  }
-  return action;
-}
-
-InputAction ActionFromHat(Uint8 value) {
-  InputAction action;
-  action.up = (value & SDL_HAT_UP) != 0;
-  action.down = (value & SDL_HAT_DOWN) != 0;
-  action.left = (value & SDL_HAT_LEFT) != 0;
-  action.right = (value & SDL_HAT_RIGHT) != 0;
   return action;
 }
 
@@ -188,25 +124,28 @@ void DrawMockMenu(SDL_Renderer *renderer, int selected) {
   }
 }
 
-void DrawReaderCanvas(SDL_Renderer *renderer, int page_offset) {
+void DrawReaderSurface(SDL_Renderer *renderer, int page_offset, int slice_y) {
   SDL_SetRenderDrawColor(renderer, 238, 235, 225, 255);
   SDL_RenderClear(renderer);
   for (int y = 0; y < rgds::kVirtualReaderH; y += 40) {
     const Uint8 shade = static_cast<Uint8>(220 - (y / 40) % 2 * 12);
     SDL_SetRenderDrawColor(renderer, shade, shade, static_cast<Uint8>(shade - 8), 255);
-    SDL_Rect band{0, y, rgds::kVirtualReaderW, 40};
+    SDL_Rect band{0, y - slice_y, rgds::kVirtualReaderW, 40};
+    if (band.y + band.h < 0 || band.y >= rgds::kScreenH) continue;
     SDL_RenderFillRect(renderer, &band);
   }
   SDL_SetRenderDrawColor(renderer, 48, 52, 58, 255);
   for (int i = 0; i < 22; ++i) {
     const int y = 36 + i * 39 - (page_offset % 39);
-    if (y < 0 || y >= rgds::kVirtualReaderH) continue;
-    SDL_Rect line{58, y, 524 - (i % 5) * 42, 7};
+    if (y < slice_y || y >= slice_y + rgds::kScreenH) continue;
+    SDL_Rect line{58, y - slice_y, 524 - (i % 5) * 42, 7};
     SDL_RenderFillRect(renderer, &line);
   }
-  SDL_SetRenderDrawColor(renderer, 180, 80, 70, 255);
-  SDL_Rect split_hint{0, rgds::kScreenH - 1, rgds::kVirtualReaderW, 2};
-  SDL_RenderFillRect(renderer, &split_hint);
+  if (slice_y == 0) {
+    SDL_SetRenderDrawColor(renderer, 180, 80, 70, 255);
+    SDL_Rect split_hint{0, rgds::kScreenH - 1, rgds::kVirtualReaderW, 2};
+    SDL_RenderFillRect(renderer, &split_hint);
+  }
 }
 
 void DrawReaderMenuOverlay(SDL_Renderer *renderer, int selected) {
@@ -222,7 +161,7 @@ void DrawReaderMenuOverlay(SDL_Renderer *renderer, int selected) {
   }
 }
 
-void DrawBootTop(SDL_Renderer *top_renderer, int tick, bool focused) {
+void DrawBootTop(SDL_Renderer *top_renderer, int tick) {
   SDL_SetRenderDrawColor(top_renderer, 24, 31, 46, 255);
   SDL_RenderClear(top_renderer);
 
@@ -235,15 +174,9 @@ void DrawBootTop(SDL_Renderer *top_renderer, int tick, bool focused) {
   SDL_RenderFillRect(top_renderer, &fill_top);
   SDL_SetRenderDrawColor(top_renderer, 160, 215, 255, 255);
   SDL_RenderDrawRect(top_renderer, &outline_top);
-
-  if (focused) {
-    SDL_SetRenderDrawColor(top_renderer, 120, 210, 255, 40);
-    SDL_Rect fill{0, 0, rgds::kScreenW, rgds::kScreenH};
-    SDL_RenderFillRect(top_renderer, &fill);
-  }
 }
 
-void DrawBootBottom(SDL_Renderer *bottom_renderer, bool focused) {
+void DrawBootBottom(SDL_Renderer *bottom_renderer) {
   SDL_SetRenderDrawColor(bottom_renderer, 26, 34, 50, 255);
   SDL_RenderClear(bottom_renderer);
 
@@ -252,15 +185,9 @@ void DrawBootBottom(SDL_Renderer *bottom_renderer, bool focused) {
   SDL_RenderFillRect(bottom_renderer, &bottom_panel);
   SDL_SetRenderDrawColor(bottom_renderer, 64, 104, 138, 255);
   SDL_RenderDrawRect(bottom_renderer, &bottom_panel);
-
-  if (focused) {
-    SDL_SetRenderDrawColor(bottom_renderer, 120, 210, 255, 40);
-    SDL_Rect fill{0, 0, rgds::kScreenW, rgds::kScreenH};
-    SDL_RenderFillRect(bottom_renderer, &fill);
-  }
 }
 
-void ApplyAction(const InputAction &action,
+void ApplyAction(const rgds::InputAction &action,
                  DemoMode &mode,
                  Focus &focus,
                  uint32_t &focus_flash_until,
@@ -269,11 +196,18 @@ void ApplyAction(const InputAction &action,
                  int &reader_menu_selected,
                  int &page_offset,
                  bool &running) {
+  if (action.exit_app) {
+    running = false;
+    return;
+  }
+
   if (action.back) {
-    if (mode == DemoMode::Reader || mode == DemoMode::ReaderMenu) {
+    if (mode == DemoMode::ReaderMenu) {
+      mode = DemoMode::Reader;
+      focus = Focus::ReaderContent;
+    } else if (mode == DemoMode::Reader) {
       mode = DemoMode::ShelfMenu;
       focus = Focus::TopShelf;
-      focus_flash_until = SDL_GetTicks() + 450;
     } else {
       running = false;
     }
@@ -292,7 +226,6 @@ void ApplyAction(const InputAction &action,
     if (mode == DemoMode::ShelfMenu && focus == Focus::TopShelf) {
       mode = DemoMode::Reader;
       focus = Focus::ReaderContent;
-      focus_flash_until = SDL_GetTicks() + 450;
     }
     return;
   }
@@ -301,11 +234,6 @@ void ApplyAction(const InputAction &action,
     if (mode == DemoMode::Reader) {
       mode = DemoMode::ReaderMenu;
       focus = Focus::ReaderMenu;
-      focus_flash_until = SDL_GetTicks() + 450;
-    } else if (mode == DemoMode::ReaderMenu) {
-      mode = DemoMode::Reader;
-      focus = Focus::ReaderContent;
-      focus_flash_until = SDL_GetTicks() + 450;
     }
     return;
   }
@@ -330,9 +258,10 @@ void ApplyAction(const InputAction &action,
 
 int main(int, char **) {
   if (std::getenv("SDL_VIDEODRIVER") == nullptr) {
-    SDL_setenv("SDL_VIDEODRIVER", "KMSDRM", 0);
+    SDL_setenv("SDL_VIDEODRIVER", "wayland", 0);
   }
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) != 0) {
+  SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "0");
+  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
     std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
     return 2;
   }
@@ -368,7 +297,7 @@ int main(int, char **) {
   const uint32_t end_ticks = SDL_GetTicks() + static_cast<uint32_t>(seconds * 1000);
   DemoMode mode = DemoMode::ShelfMenu;
   Focus focus = Focus::TopShelf;
-  uint32_t focus_flash_until = SDL_GetTicks() + 800;
+  uint32_t focus_flash_until = 0;
   int shelf_selected = 0;
   int menu_selected = 0;
   int reader_menu_selected = 0;
@@ -376,17 +305,9 @@ int main(int, char **) {
   bool boot_phase = true;
   bool running = true;
 
-  const int joysticks = SDL_NumJoysticks();
-  std::cout << "[rgds_demo] joysticks=" << joysticks << "\n";
-  for (int i = 0; i < joysticks; ++i) {
-    if (SDL_IsGameController(i)) {
-      std::cout << "[rgds_demo] opening controller index=" << i << "\n";
-      SDL_GameControllerOpen(i);
-    } else {
-      std::cout << "[rgds_demo] opening joystick index=" << i << "\n";
-      SDL_JoystickOpen(i);
-    }
-  }
+  rgds::EvdevInput evdev;
+  evdev.OpenAll();
+  std::cout << "[rgds_demo] evdev_devices=" << evdev.DescribeDevices() << "\n";
 
   while (running && !SDL_TICKS_PASSED(SDL_GetTicks(), end_ticks)) {
     SDL_Event event;
@@ -395,37 +316,27 @@ int main(int, char **) {
       if (event.type == SDL_KEYDOWN && !event.key.repeat) {
         std::cout << "[rgds_demo] keydown key=" << event.key.keysym.sym
                   << " scancode=" << event.key.keysym.scancode << "\n";
-        const InputAction action = ActionFromKey(event.key);
-        ApplyAction(action, mode, focus, focus_flash_until, shelf_selected, menu_selected,
-                    reader_menu_selected, page_offset, running);
-      } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
-        std::cout << "[rgds_demo] controllerbutton button=" << static_cast<int>(event.cbutton.button) << "\n";
-        const InputAction action = ActionFromControllerButton(event.cbutton.button);
-        ApplyAction(action, mode, focus, focus_flash_until, shelf_selected, menu_selected,
-                    reader_menu_selected, page_offset, running);
-      } else if (event.type == SDL_JOYBUTTONDOWN) {
-        std::cout << "[rgds_demo] joybutton button=" << static_cast<int>(event.jbutton.button) << "\n";
-        const InputAction action = ActionFromJoystickButton(event.jbutton.button);
-        ApplyAction(action, mode, focus, focus_flash_until, shelf_selected, menu_selected,
-                    reader_menu_selected, page_offset, running);
-      } else if (event.type == SDL_JOYHATMOTION && event.jhat.value != SDL_HAT_CENTERED) {
-        std::cout << "[rgds_demo] joyhat value=" << static_cast<int>(event.jhat.value) << "\n";
-        const InputAction action = ActionFromHat(event.jhat.value);
+        const rgds::InputAction action = ActionFromKey(event.key);
         ApplyAction(action, mode, focus, focus_flash_until, shelf_selected, menu_selected,
                     reader_menu_selected, page_offset, running);
       }
     }
 
+    rgds::InputAction evdev_action;
+    if (evdev.Poll(evdev_action)) {
+      ApplyAction(evdev_action, mode, focus, focus_flash_until, shelf_selected, menu_selected,
+                  reader_menu_selected, page_offset, running);
+    }
+
     if (boot_phase) {
       SDL_Renderer *top_renderer = dual.BeginSurface(rgds::SurfaceId::Top);
-      DrawBootTop(top_renderer, static_cast<int>(SDL_GetTicks() / 16), focus == Focus::TopShelf);
+      DrawBootTop(top_renderer, static_cast<int>(SDL_GetTicks() / 16));
       dual.EndSurface();
       SDL_Renderer *bottom_renderer = dual.BeginSurface(rgds::SurfaceId::Bottom);
-      DrawBootBottom(bottom_renderer, focus != Focus::TopShelf);
+      DrawBootBottom(bottom_renderer);
       dual.EndSurface();
-      if (SDL_GetTicks() > focus_flash_until) {
+      if (SDL_GetTicks() > 800) {
         boot_phase = false;
-        focus_flash_until = SDL_GetTicks() + 450;
       }
     } else if (mode == DemoMode::ShelfMenu) {
       SDL_Renderer *top_renderer = dual.BeginSurface(rgds::SurfaceId::Top);
@@ -434,29 +345,26 @@ int main(int, char **) {
       SDL_Renderer *bottom_renderer = dual.BeginSurface(rgds::SurfaceId::Bottom);
       DrawMockMenu(bottom_renderer, menu_selected);
       dual.EndSurface();
-      const float flash = SDL_TICKS_PASSED(focus_flash_until, SDL_GetTicks())
-                              ? 0.0f
-                              : static_cast<float>(focus_flash_until - SDL_GetTicks()) / 450.0f;
+      const float flash = ConsumeFlashAlpha(focus_flash_until);
       if (focus == Focus::TopShelf) dual.DrawFocusFrame(rgds::SurfaceId::Top, flash);
       else dual.DrawFocusFrame(rgds::SurfaceId::Bottom, flash);
     } else {
       SDL_Renderer *top_renderer = dual.BeginSurface(rgds::SurfaceId::Top);
-      SDL_SetRenderTarget(top_renderer, dual.ReaderCanvas());
-      DrawReaderCanvas(top_renderer, page_offset);
-      SDL_SetRenderTarget(top_renderer, nullptr);
+      DrawReaderSurface(top_renderer, page_offset, 0);
       dual.EndSurface();
-      dual.ClearSurface(rgds::SurfaceId::Top, SDL_Color{0, 0, 0, 255});
-      dual.ClearSurface(rgds::SurfaceId::Bottom, SDL_Color{0, 0, 0, 255});
-      dual.PresentReaderCanvasSplit();
+      SDL_Renderer *bottom_renderer = dual.BeginSurface(rgds::SurfaceId::Bottom);
+      DrawReaderSurface(bottom_renderer, page_offset, rgds::kScreenH);
+      dual.EndSurface();
       if (mode == DemoMode::ReaderMenu) {
-        SDL_Renderer *bottom_renderer = dual.BeginSurface(rgds::SurfaceId::Bottom);
+        bottom_renderer = dual.BeginSurface(rgds::SurfaceId::Bottom);
         DrawReaderMenuOverlay(bottom_renderer, reader_menu_selected);
         dual.EndSurface();
       }
-      const float flash = SDL_TICKS_PASSED(focus_flash_until, SDL_GetTicks())
-                              ? 0.0f
-                              : static_cast<float>(focus_flash_until - SDL_GetTicks()) / 450.0f;
-      if (mode == DemoMode::ReaderMenu) dual.DrawFocusFrame(rgds::SurfaceId::Bottom, flash);
+      const float flash = ConsumeFlashAlpha(focus_flash_until);
+      if (flash > 0.0f) {
+        if (mode == DemoMode::ReaderMenu) dual.DrawFocusFrame(rgds::SurfaceId::Bottom, flash);
+        else if (focus == Focus::ReaderContent) dual.DrawFocusFrame(rgds::SurfaceId::Top, flash);
+      }
     }
     dual.PresentBoth();
     SDL_Delay(16);
