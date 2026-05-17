@@ -34,6 +34,10 @@ Hardware facts verified by `roc_matrix_probe.sh`:
 ## Current Contents
 
 - `build_rgds_dualscreen_probe.ps1`: builds the precompiled aarch64 SDL/KMSDRM dual-screen probe.
+- `build_rgds_drm_probe.ps1`: builds the direct DRM/KMS dumb-buffer dual-screen probe.
+- `rgds_drm_dualscreen_probe.sh`: click-friendly launcher for the direct DRM/KMS probe; writes `rgds_drm_dualscreen_probe_latest.log`.
+- `rgds_display_owner_probe.sh`: click-friendly process/FD probe to find system components repainting the display.
+- `rgds_stop_weston_drm_probe.sh`: stops Weston, runs the direct DRM probe, then attempts to restore Weston.
 - `rgds_platform_demo.sh`: click-friendly launcher for the RGDS prototype; writes `rgds_platform_demo_latest.log`.
 - `src/rgds_dual_screen_runtime.*`: RGDS-specific SDL dual-screen runtime abstraction.
 - `src/rgds_platform_demo.cpp`: standalone RGDS dual-screen platform prototype.
