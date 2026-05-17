@@ -539,6 +539,83 @@ void RemovePendingMarkerAndInstalledPackage(const std::filesystem::path &marker_
   std::filesystem::remove(package_path, ec);
 }
 
+bool IsTrimuiBrickPackageName(const std::string &filename) {
+  const std::string lower = ToLowerAscii(filename);
+  return lower.find("trimui brick") != std::string::npos || lower.find("trimuibrick") != std::string::npos;
+}
+
+void ClearInstalledPendingArtifacts(const std::filesystem::path &downloads_dir,
+                                    const std::string &installed_version) {
+  if (downloads_dir.empty() || installed_version.empty()) return;
+  std::error_code ec;
+  if (!std::filesystem::exists(downloads_dir, ec) || ec || !std::filesystem::is_directory(downloads_dir, ec)) {
+    return;
+  }
+
+  const std::filesystem::path marker_path = downloads_dir / kPendingMarkerFilename;
+  std::filesystem::path marker_package_path;
+  std::string marker_version;
+  {
+    std::ifstream in(marker_path);
+    std::string line;
+    while (std::getline(in, line)) {
+      const size_t eq = line.find('=');
+      if (eq == std::string::npos) continue;
+      const std::string key = line.substr(0, eq);
+      const std::string value = line.substr(eq + 1);
+      if (key == "filename") marker_package_path = downloads_dir / value;
+      else if (key == "version") marker_version = TrimAsciiWhitespace(value);
+    }
+  }
+  if (!marker_package_path.empty() && marker_version.empty()) {
+    TryExtractVersionToken(marker_package_path.filename().string(), marker_version);
+  }
+  if (!marker_package_path.empty() &&
+      (marker_version.empty() || !IsVersionNewer(marker_version, installed_version))) {
+    AppendUpdateLog("Clearing stale pending marker for installed version " + installed_version);
+    RemovePendingMarkerAndInstalledPackage(marker_path, marker_package_path);
+  }
+
+  for (std::filesystem::directory_iterator it(downloads_dir, ec), end; !ec && it != end; it.increment(ec)) {
+    if (ec) {
+      ec.clear();
+      continue;
+    }
+    if (!filesystem_compat::IsRegularFile(*it, ec)) {
+      ec.clear();
+      continue;
+    }
+    const std::string filename = it->path().filename().string();
+    if (!IsTrimuiBrickPackageName(filename)) continue;
+    std::string version;
+    if (!TryExtractVersionToken(filename, version)) continue;
+    if (!IsVersionNewer(version, installed_version)) {
+      std::error_code remove_ec;
+      std::filesystem::remove(it->path(), remove_ec);
+    }
+  }
+}
+
+void ClearInstalledPendingArtifactsForAllRoots(const std::string &installed_version) {
+  if (installed_version.empty()) return;
+  std::vector<std::filesystem::path> roots;
+  for (const std::string &root : storage_paths::DetectStorageCardRoots()) {
+    if (!root.empty()) roots.emplace_back(root);
+  }
+  for (const std::string &root : storage_paths::DetectRocreaderRoots()) {
+    if (!root.empty()) roots.emplace_back(std::filesystem::path(root));
+  }
+  std::error_code ec;
+  const std::filesystem::path cwd = std::filesystem::current_path(ec);
+  if (!ec) {
+    roots.push_back(cwd);
+    roots.push_back(cwd.parent_path());
+  }
+  for (const auto &root : roots) {
+    ClearInstalledPendingArtifacts(root / "Downloads", installed_version);
+  }
+}
+
 bool ReadPendingMarker(const std::filesystem::path &marker_path, VersionUpdateState &state) {
   std::ifstream in(marker_path);
   if (!in) return false;
@@ -565,6 +642,10 @@ bool ReadPendingMarker(const std::filesystem::path &marker_path, VersionUpdateSt
   if (!version.empty() && !state.current_version.empty() && !IsVersionNewer(version, state.current_version)) {
     AppendUpdateLog("Pending marker is stale; installed version is already " + state.current_version);
     RemovePendingMarkerAndInstalledPackage(marker_path, package_path);
+    state.status = VersionUpdateStatus::UpToDate;
+    state.has_pending_package = false;
+    state.pending_package_path.clear();
+    state.latest_version = state.current_version;
     return false;
   }
   if (version.empty()) {
@@ -610,6 +691,7 @@ bool BeginVersionUpdateDownloadInternal(VersionUpdateState &state) {
   const std::string installed_version = DetectInstalledVersionLabel();
   if (!installed_version.empty()) {
     state.current_version = installed_version;
+    ClearInstalledPendingArtifactsForAllRoots(installed_version);
   }
 
   state.download_root = DetectDownloadRoot();
@@ -781,6 +863,7 @@ void InitializeVersionUpdateState(VersionUpdateState &state) {
   const std::string installed_version = DetectInstalledVersionLabel();
   if (!installed_version.empty()) {
     state.current_version = installed_version;
+    ClearInstalledPendingArtifactsForAllRoots(installed_version);
   }
   state.download_root = DetectDownloadRoot();
   if (state.download_root.empty()) return;

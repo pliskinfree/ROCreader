@@ -5,6 +5,7 @@ H700_OPTIMIZE ?= 0
 
 TARGET ?= build/rocreader_sdl
 WN04_FETCH_TARGET ?= bin/wn04_fetch
+RGDS_DUALSCREEN_PROBE_TARGET ?= build/rgds_sdl_dualscreen_probe
 APP_SRCS := \
   src/main.cpp \
   src/app_runtime.cpp \
@@ -231,7 +232,7 @@ $(error REQUIRE_MUPDF=1 but no real PDF backend found. Install MuPDF/Fitz or pop
 endif
 endif
 
-.PHONY: all clean run print-config smoke-windows wn04-fetch
+.PHONY: all clean run print-config smoke-windows wn04-fetch rgds-dualscreen-probe
 
 all: $(TARGET)
 
@@ -244,6 +245,12 @@ wn04-fetch: $(WN04_FETCH_TARGET)
 $(WN04_FETCH_TARGET): tools/wn04_fetch.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) -O2 -std=c++17 -Wall -Wextra -I./src $< -o $@ $(FS_LIBS)
+
+rgds-dualscreen-probe: $(RGDS_DUALSCREEN_PROBE_TARGET)
+
+$(RGDS_DUALSCREEN_PROBE_TARGET): tools/rgds_sdl_dualscreen_probe.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) -O2 -std=c++17 -Wall -Wextra $(SDL_CFLAGS) $< -o $@ $(SDL_LIBS)
 
 src/%.o: src/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -279,4 +286,4 @@ print-config:
 	@echo "REQUIRE_MUPDF=$(REQUIRE_MUPDF)"
 
 clean:
-	rm -f src/*.o $(TARGET) $(WN04_FETCH_TARGET)
+	rm -f src/*.o $(TARGET) $(WN04_FETCH_TARGET) $(RGDS_DUALSCREEN_PROBE_TARGET)

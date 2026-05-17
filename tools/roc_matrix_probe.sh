@@ -14,13 +14,14 @@ VERSION="2026-05-17"
 KEY_SECONDS=20
 OUT_BASE=""
 RUN_KEY_PROBE=1
+DISPLAY_TEST_SECONDS=0
 
 usage() {
   cat <<'EOF'
 ROCreader matrix probe
 
 Usage:
-  sh roc_matrix_probe.sh [--out DIR] [--keys SECONDS] [--no-keys]
+  sh roc_matrix_probe.sh [--out DIR] [--keys SECONDS] [--no-keys] [--display-test SECONDS]
 
 The script collects read-only hardware/system information useful when porting
 ROCreader to another Linux handheld/chipset. It writes a report directory and
@@ -30,6 +31,10 @@ Options:
   --out DIR       Output directory base. Default: script directory/roc_matrix_report_YYYYmmdd_HHMMSS
   --keys N        Try interactive input/key capture for N seconds. Default: 20
   --no-keys       Skip interactive key capture.
+  --display-test N
+                  If a bundled rgds_sdl_dualscreen_probe executable is found,
+                  show a visual dual-screen SDL/KMSDRM test for N seconds and
+                  save its log. Use this on RGDS before starting code refactors.
   -h, --help      Show this help.
 EOF
 }
@@ -50,6 +55,11 @@ while [ "$#" -gt 0 ]; do
     --no-keys)
       RUN_KEY_PROBE=0
       shift
+      ;;
+    --display-test)
+      [ "$#" -ge 2 ] || { echo "missing value for --display-test" >&2; exit 2; }
+      DISPLAY_TEST_SECONDS=$2
+      shift 2
       ;;
     -h|--help)
       usage
@@ -150,6 +160,20 @@ run_shell() {
     echo "\$ $cmd"
     echo
     sh -c "$cmd"
+  } > "$out" 2>&1
+  rc=$?
+  echo "exit_code=$rc" >> "$out"
+  return 0
+}
+
+run_shell_with_env() {
+  name=$1
+  shift
+  out="$RAW_DIR/commands/$name.txt"
+  {
+    echo "\$ $*"
+    echo
+    env "$@"
   } > "$out" 2>&1
   rc=$?
   echo "exit_code=$rc" >> "$out"
@@ -350,6 +374,64 @@ copy_tree_text_limited /sys/class/leds "$RAW_DIR/display/sys_class_leds" 300
 for c in fbset modetest kmsprint xrandr weston-info xdpyinfo glxinfo eglinfo; do
   have_cmd "$c" && run_cmd "$c" "$c"
 done
+
+section "RGDS SDL Dual-Screen Visual Test"
+{
+  echo "Requested seconds: $DISPLAY_TEST_SECONDS"
+  echo "Purpose: prove whether SDL/KMSDRM can open and independently present both 640x480 DRM outputs."
+  echo "Expected visual result when available:"
+  echo "  - top/first display: blue background"
+  echo "  - bottom/second display: green background"
+  echo "  - a light-blue focus frame alternates between displays"
+  echo
+} >> "$SUMMARY"
+
+find_dualscreen_probe() {
+  for candidate in \
+    "$SCRIPT_DIR/rgds_sdl_dualscreen_probe.sh" \
+    "$SCRIPT_DIR/ROCreader/rgds_sdl_dualscreen_probe.sh" \
+    "$SCRIPT_DIR/tools/rgds_sdl_dualscreen_probe.sh" \
+    "$SCRIPT_DIR/ROCreader/tools/rgds_sdl_dualscreen_probe.sh" \
+    "$SCRIPT_DIR/rgds_sdl_dualscreen_probe" \
+    "$SCRIPT_DIR/ROCreader/rgds_sdl_dualscreen_probe" \
+    "$SCRIPT_DIR/tools/rgds_sdl_dualscreen_probe" \
+    "$SCRIPT_DIR/ROCreader/tools/rgds_sdl_dualscreen_probe"; do
+    [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    case "$candidate" in
+      *.sh) [ -r "$candidate" ] && { printf '%s\n' "$candidate"; return 0; } ;;
+    esac
+  done
+  return 1
+}
+
+if [ "${DISPLAY_TEST_SECONDS:-0}" -gt 0 ] 2>/dev/null; then
+  probe_bin="$(find_dualscreen_probe || true)"
+  if [ -n "$probe_bin" ]; then
+    echo "Running visual dual-screen probe: $probe_bin" >> "$SUMMARY"
+    case "$probe_bin" in
+      *.sh)
+        run_shell_with_env rgds_sdl_dualscreen_probe \
+          SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-KMSDRM}" \
+          ROCREADER_RGDS_DISPLAY_TEST_SECONDS="$DISPLAY_TEST_SECONDS" \
+          sh "$probe_bin"
+        ;;
+      *)
+        run_shell_with_env rgds_sdl_dualscreen_probe \
+          SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-KMSDRM}" \
+          ROCREADER_RGDS_DISPLAY_TEST_SECONDS="$DISPLAY_TEST_SECONDS" \
+          "$probe_bin"
+        ;;
+    esac
+    append_file "RGDS SDL dual-screen probe log" "$RAW_DIR/commands/rgds_sdl_dualscreen_probe.txt"
+  else
+    {
+      echo "No rgds_sdl_dualscreen_probe.sh or executable rgds_sdl_dualscreen_probe found next to the script or runtime."
+      echo "Build/copy it before using --display-test, or run the script without this option for passive detection."
+    } >> "$SUMMARY"
+  fi
+else
+  echo "Skipped. Re-run with --display-test 15 after copying rgds_sdl_dualscreen_probe.sh to Roms/APPS." >> "$SUMMARY"
+fi
 
 section "Audio Summary"
 {
