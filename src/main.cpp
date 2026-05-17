@@ -184,6 +184,58 @@ std::string NormalizePathKey(const std::string &path) {
   }
 }
 
+void HashAppend(uint64_t &hash, const std::string &value) {
+  constexpr uint64_t kFnvPrime = 1099511628211ull;
+  for (unsigned char c : value) {
+    hash ^= static_cast<uint64_t>(c);
+    hash *= kFnvPrime;
+  }
+  hash ^= 0xffu;
+  hash *= kFnvPrime;
+}
+
+std::string FileFingerprintToken(const std::string &path) {
+  std::error_code ec;
+  const std::filesystem::path fs_path(path);
+  const uintmax_t size = std::filesystem::file_size(fs_path, ec);
+  const uintmax_t safe_size = ec ? 0 : size;
+  ec.clear();
+  const auto mtime_raw = std::filesystem::last_write_time(fs_path, ec);
+  const long long mtime = ec ? 0LL : static_cast<long long>(mtime_raw.time_since_epoch().count());
+  return std::to_string(safe_size) + "|" + std::to_string(mtime);
+}
+
+std::string BuildShelfPreloadFingerprint(const std::vector<BookItem> &books,
+                                         const std::vector<std::string> &books_roots,
+                                         const std::vector<std::string> &cover_roots,
+                                         int cover_w,
+                                         int cover_h) {
+  uint64_t hash = 1469598103934665603ull;
+  HashAppend(hash, "shelf-cover-preload-v1");
+  HashAppend(hash, std::to_string(cover_w) + "x" + std::to_string(cover_h));
+  for (const auto &root : books_roots) HashAppend(hash, "root|" + NormalizePathKey(root));
+  for (const auto &root : cover_roots) HashAppend(hash, "cover_root|" + NormalizePathKey(root));
+  for (const BookItem &item : books) {
+    const std::string path = book_library_service::RealPathForItem(item);
+    HashAppend(hash, NormalizePathKey(path) + "|" + FileFingerprintToken(path));
+  }
+  return std::to_string(books.size()) + "|" + std::to_string(hash);
+}
+
+bool LoadShelfPreloadFingerprint(const std::filesystem::path &path, std::string &fingerprint) {
+  std::ifstream in(path);
+  if (!in) return false;
+  std::getline(in, fingerprint);
+  return !fingerprint.empty();
+}
+
+void SaveShelfPreloadFingerprint(const std::filesystem::path &path, const std::string &fingerprint) {
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(), ec);
+  std::ofstream out(path, std::ios::trunc);
+  if (out) out << fingerprint << "\n";
+}
+
 std::string GetLowerExt(const std::string &path) {
   try {
     std::string ext = std::filesystem::path(path).extension().string();
@@ -1105,6 +1157,12 @@ int main(int, char **argv) {
   std::deque<BookItem> shelf_cover_preload_queue;
   std::unordered_set<std::string> shelf_cover_preload_queued_keys;
   uint64_t shelf_cover_preload_signature = 0;
+  const std::filesystem::path shelf_cover_preload_manifest_path =
+      cover_thumb_cache_dir.parent_path() / "shelf_cover_preload_manifest.txt";
+  std::string saved_shelf_cover_preload_fingerprint;
+  const bool shelf_cover_preload_manifest_loaded =
+      LoadShelfPreloadFingerprint(shelf_cover_preload_manifest_path, saved_shelf_cover_preload_fingerprint);
+  std::string pending_shelf_cover_preload_fingerprint;
 
   MenuSceneState menu_state;
   menu_state.items = {
@@ -1420,15 +1478,6 @@ int main(int, char **argv) {
     return out;
   };
 
-  auto preload_shelf_cover_texture = [&](const BookItem &item) {
-    ShelfCategory category = current_category();
-    if (item.preload_category >= static_cast<int>(ShelfCategory::AllComics) &&
-        item.preload_category <= static_cast<int>(ShelfCategory::History)) {
-      category = static_cast<ShelfCategory>(item.preload_category);
-    }
-    preload_cover_texture_for_category(category, item);
-  };
-
   auto boot_preload_item_limit = [&](ShelfCategory category) -> size_t {
     const size_t windows = (category == ShelfCategory::AllComics)
                                ? kBootDefaultShelfPreloadWindows
@@ -1437,6 +1486,27 @@ int main(int, char **argv) {
     const size_t cols = static_cast<size_t>(ShelfGridCols());
     if (windows == 0) return 0;
     return visible + (windows - 1) * cols;
+  };
+
+  auto build_boot_shelf_cover_preload_items = [&]() -> std::vector<BookItem> {
+    if (online_shelf_active()) return {};
+    const std::vector<BookItem> items = build_shelf_cover_preload_items(boot_preload_item_limit);
+    pending_shelf_cover_preload_fingerprint =
+        BuildShelfPreloadFingerprint(items, books_roots, cover_roots, cover_texture_w(), cover_texture_h());
+    if (shelf_cover_preload_manifest_loaded &&
+        pending_shelf_cover_preload_fingerprint == saved_shelf_cover_preload_fingerprint) {
+      return {};
+    }
+    return items;
+  };
+
+  auto preload_shelf_cover_texture = [&](const BookItem &item) {
+    ShelfCategory category = current_category();
+    if (item.preload_category >= static_cast<int>(ShelfCategory::AllComics) &&
+        item.preload_category <= static_cast<int>(ShelfCategory::History)) {
+      category = static_cast<ShelfCategory>(item.preload_category);
+    }
+    preload_cover_texture_for_category(category, item);
   };
 
   auto queue_shelf_cover_preload = [&](ShelfCategory category, const BookItem &item) {
@@ -2342,12 +2412,18 @@ int main(int, char **argv) {
             SDL_DestroyTexture(generated);
           },
           [&]() {
-            return build_shelf_cover_preload_items(boot_preload_item_limit);
+            return build_boot_shelf_cover_preload_items();
           },
           preload_shelf_cover_texture,
           [&]() { return boot_scene.InstallPendingUpdateFromEnvironment(); },
           [&]() { boot_scene.RestartAfterInstalledUpdate(); },
           [&](size_t total_books, size_t cover_generate_count) {
+            if (!pending_shelf_cover_preload_fingerprint.empty() &&
+                (!shelf_cover_preload_manifest_loaded ||
+                 pending_shelf_cover_preload_fingerprint != saved_shelf_cover_preload_fingerprint)) {
+              SaveShelfPreloadFingerprint(shelf_cover_preload_manifest_path,
+                                          pending_shelf_cover_preload_fingerprint);
+            }
             boot_scene.FinishScanAndEnterShelf(
                 total_books,
                 cover_generate_count,

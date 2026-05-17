@@ -9,26 +9,76 @@
 #include <system_error>
 
 namespace {
-std::string SafeLocalFilename(std::string name) {
+bool IsUtf8Continuation(unsigned char ch) {
+  return (ch & 0xC0) == 0x80;
+}
+
+size_t Utf8SequenceLength(unsigned char ch) {
+  if (ch < 0x80) return 1;
+  if (ch >= 0xC2 && ch <= 0xDF) return 2;
+  if (ch >= 0xE0 && ch <= 0xEF) return 3;
+  if (ch >= 0xF0 && ch <= 0xF4) return 4;
+  return 0;
+}
+
+bool IsValidUtf8Sequence(const std::string &text, size_t offset, size_t length) {
+  if (length == 0 || offset + length > text.size()) return false;
+  if (length == 1) return static_cast<unsigned char>(text[offset]) < 0x80;
+  for (size_t i = 1; i < length; ++i) {
+    if (!IsUtf8Continuation(static_cast<unsigned char>(text[offset + i]))) return false;
+  }
+  const unsigned char a = static_cast<unsigned char>(text[offset]);
+  const unsigned char b = static_cast<unsigned char>(text[offset + 1]);
+  if (a == 0xE0 && b < 0xA0) return false;
+  if (a == 0xED && b >= 0xA0) return false;
+  if (a == 0xF0 && b < 0x90) return false;
+  if (a == 0xF4 && b >= 0x90) return false;
+  return true;
+}
+
+std::string TrimTrailingFilenameChars(std::string text) {
+  while (!text.empty() && (text.back() == ' ' || text.back() == '.')) text.pop_back();
+  while (text.find("__") != std::string::npos) text.replace(text.find("__"), 2, "_");
+  if (text.empty() || text == "_") text = "online_book";
+  return text;
+}
+
+std::string Utf8SafeFilename(std::string name, size_t max_bytes) {
   if (name.empty()) name = "online_book";
   std::string safe;
-  safe.reserve(name.size());
-  for (char ch : name) {
-    const unsigned char uch = static_cast<unsigned char>(ch);
-    if (ch == '\\' || ch == '/' || ch == ':' || ch == '*' || ch == '?' || ch == '"' || ch == '<' ||
-        ch == '>' || ch == '|' || uch < 32) {
-      safe.push_back('_');
-    } else {
-      safe.push_back(ch);
+  safe.reserve(std::min(name.size(), max_bytes));
+  for (size_t i = 0; i < name.size();) {
+    const unsigned char ch = static_cast<unsigned char>(name[i]);
+    if (ch < 0x80) {
+      const char ascii = static_cast<char>(ch);
+      if (ascii == '\\' || ascii == '/' || ascii == ':' || ascii == '*' || ascii == '?' || ascii == '"' ||
+          ascii == '<' || ascii == '>' || ascii == '|' || ch < 32) {
+        if (safe.size() + 1 > max_bytes) break;
+        safe.push_back('_');
+      } else {
+        if (safe.size() + 1 > max_bytes) break;
+        safe.push_back(ascii);
+      }
+      ++i;
+      continue;
     }
+
+    const size_t length = Utf8SequenceLength(ch);
+    if (!IsValidUtf8Sequence(name, i, length)) {
+      if (safe.size() + 1 > max_bytes) break;
+      safe.push_back('_');
+      ++i;
+      continue;
+    }
+    if (safe.size() + length > max_bytes) break;
+    safe.append(name, i, length);
+    i += length;
   }
-  while (!safe.empty() && (safe.back() == ' ' || safe.back() == '.')) safe.pop_back();
-  while (safe.find("__") != std::string::npos) safe.replace(safe.find("__"), 2, "_");
-  if (safe.empty() || safe == "_") safe = "online_book";
-  if (safe.size() > 160) safe.resize(160);
-  while (!safe.empty() && (static_cast<unsigned char>(safe.back()) & 0xC0) == 0x80) safe.pop_back();
-  if (safe.empty()) safe = "online_book";
-  return safe;
+  return TrimTrailingFilenameChars(std::move(safe));
+}
+
+std::string SafeLocalFilename(std::string name) {
+  return Utf8SafeFilename(std::move(name), 160);
 }
 
 std::string SafeAsciiLocalFilename(std::string name) {
@@ -44,8 +94,7 @@ std::string SafeAsciiLocalFilename(std::string name) {
       ascii.push_back(ch);
     }
   }
-  while (!ascii.empty() && (ascii.back() == ' ' || ascii.back() == '.')) ascii.pop_back();
-  while (ascii.find("__") != std::string::npos) ascii.replace(ascii.find("__"), 2, "_");
+  ascii = TrimTrailingFilenameChars(std::move(ascii));
   if (ascii.empty() || ascii == "_") {
     std::ostringstream oss;
     oss << "book_" << std::hex << std::hash<std::string>{}(name);
@@ -53,6 +102,11 @@ std::string SafeAsciiLocalFilename(std::string name) {
   }
   if (ascii.size() > 80) ascii.resize(80);
   return ascii;
+}
+
+std::string ErrorText(const std::error_code &ec) {
+  if (!ec) return "ok";
+  return std::to_string(ec.value()) + ":" + ec.message();
 }
 
 std::filesystem::path MakeLocalBookDestPath(const std::filesystem::path &books_root,
@@ -178,16 +232,53 @@ std::filesystem::path SelectMigrationCoversRoot(const std::filesystem::path &boo
 
 bool MoveOrCopyFile(const std::filesystem::path &from, const std::filesystem::path &to) {
   std::error_code ec;
-  if (from.empty() || !std::filesystem::exists(from, ec) || ec) return false;
+  if (from.empty() || !std::filesystem::exists(from, ec) || ec) {
+    runtime_log::Line("online: move source missing from=" + from.string() + " error=" + ErrorText(ec));
+    return false;
+  }
   std::filesystem::create_directories(to.parent_path(), ec);
-  if (ec) return false;
+  if (ec) {
+    runtime_log::Line("online: move mkdir failed dir=" + to.parent_path().string() +
+                      " error=" + ErrorText(ec));
+    return false;
+  }
   std::filesystem::rename(from, to, ec);
   if (!ec) return true;
+  const std::string rename_error = ErrorText(ec);
   ec.clear();
   std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, ec);
-  if (ec) return false;
+  if (ec) {
+    const std::string copy_file_error = ErrorText(ec);
+    ec.clear();
+    std::ifstream in(from, std::ios::binary);
+    std::ofstream out(to, std::ios::binary | std::ios::trunc);
+    if (!in || !out) {
+      runtime_log::Line("online: move copy open failed from=" + from.string() + " to=" + to.string() +
+                        " rename_error=" + rename_error + " copy_file_error=" + copy_file_error);
+      return false;
+    }
+    out << in.rdbuf();
+    out.close();
+    in.close();
+    if (!out) {
+      runtime_log::Line("online: move stream copy failed from=" + from.string() + " to=" + to.string() +
+                        " rename_error=" + rename_error + " copy_file_error=" + copy_file_error);
+      return false;
+    }
+    ec.clear();
+    if (!std::filesystem::exists(to, ec) || ec) {
+      runtime_log::Line("online: move stream copy missing dest from=" + from.string() + " to=" + to.string() +
+                        " rename_error=" + rename_error + " copy_file_error=" + copy_file_error +
+                        " exists_error=" + ErrorText(ec));
+      return false;
+    }
+  }
   ec.clear();
   std::filesystem::remove(from, ec);
+  if (ec) {
+    runtime_log::Line("online: move copied but remove failed from=" + from.string() +
+                      " to=" + to.string() + " error=" + ErrorText(ec));
+  }
   return true;
 }
 
@@ -249,7 +340,7 @@ std::filesystem::path ResolveDownloadedBookPath(const OnlineSourceState &state,
   std::error_code ec;
   if (std::filesystem::exists(books_dir, ec) && !ec) {
     for (std::filesystem::recursive_directory_iterator it(books_dir, ec), end; !ec && it != end; it.increment(ec)) {
-      if (it->is_regular_file(ec) && !ec && it->path().extension() == catalog_item.file_ext &&
+      if (std::filesystem::is_regular_file(it->path(), ec) && !ec && it->path().extension() == catalog_item.file_ext &&
           LooksLikeCompleteZip(it->path())) {
         if (!catalog_item.local_path.empty() && it->path().filename() == std::filesystem::path(catalog_item.local_path).filename()) {
           runtime_log::Line("online: migrate fallback matched filename title=" + catalog_item.title +

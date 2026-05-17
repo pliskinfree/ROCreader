@@ -6,6 +6,8 @@
 #include "runtime_log.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cctype>
 #include <fstream>
 #include <iostream>
@@ -13,6 +15,7 @@
 #include <set>
 #include <sstream>
 #include <system_error>
+#include <thread>
 
 namespace {
 std::string Trim(std::string text) {
@@ -35,6 +38,80 @@ std::string StripInlineComment(const std::string &line) {
 bool StartsWith(const std::string &text, const std::string &prefix) {
   return text.rfind(prefix, 0) == 0;
 }
+
+uintmax_t ParseUnsignedFileValue(const std::filesystem::path &path) {
+  std::ifstream in(path);
+  uintmax_t value = 0;
+  if (in) in >> value;
+  return value;
+}
+
+void WriteDownloadProgressSidecar(const std::filesystem::path &progress_path,
+                                  uintmax_t downloaded,
+                                  uintmax_t total) {
+  if (progress_path.empty()) return;
+  const std::filesystem::path temp_path = progress_path.string() + ".tmp";
+  std::ofstream out(temp_path, std::ios::trunc);
+  if (!out) return;
+  out << downloaded << ' ' << total << '\n';
+  out.close();
+  std::error_code ec;
+  std::filesystem::rename(temp_path, progress_path, ec);
+  if (ec) {
+    ec.clear();
+    std::filesystem::copy_file(temp_path, progress_path, std::filesystem::copy_options::overwrite_existing, ec);
+    std::filesystem::remove(temp_path, ec);
+  }
+}
+
+class DownloadProgressMonitor {
+ public:
+  DownloadProgressMonitor(std::filesystem::path part_path,
+                          std::filesystem::path size_path,
+                          std::filesystem::path progress_path)
+      : part_path_(std::move(part_path)),
+        size_path_(std::move(size_path)),
+        progress_path_(std::move(progress_path)) {
+    worker_ = std::thread([this]() { Run(); });
+  }
+
+  ~DownloadProgressMonitor() {
+    Stop();
+  }
+
+  void Stop() {
+    bool expected = false;
+    if (stopped_.compare_exchange_strong(expected, true)) {
+      if (worker_.joinable()) worker_.join();
+      std::error_code ec;
+      std::filesystem::remove(progress_path_, ec);
+      std::filesystem::remove(progress_path_.string() + ".tmp", ec);
+    }
+  }
+
+ private:
+  void Run() {
+    while (!stopped_.load()) {
+      std::error_code ec;
+      uintmax_t downloaded = 0;
+      if (std::filesystem::exists(part_path_, ec) && !ec) {
+        downloaded = std::filesystem::file_size(part_path_, ec);
+        if (ec) downloaded = 0;
+      }
+      const uintmax_t total = ParseUnsignedFileValue(size_path_);
+      if (downloaded > 0 || total > 0) {
+        WriteDownloadProgressSidecar(progress_path_, downloaded, total);
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+  }
+
+  std::filesystem::path part_path_;
+  std::filesystem::path size_path_;
+  std::filesystem::path progress_path_;
+  std::atomic_bool stopped_{false};
+  std::thread worker_;
+};
 
 std::string ToLowerAscii(std::string text) {
   std::transform(text.begin(), text.end(), text.begin(),
@@ -597,9 +674,13 @@ bool DownloadOnlineBookForItem(OnlineSourceState &state, const BookItem &item, B
   } else {
     runtime_log::Line("online: book download expected size unavailable title=" + item.name);
   }
+  const std::filesystem::path progress_path = temp_path.string() + ".progress";
+  DownloadProgressMonitor progress_monitor(temp_path, size_path, progress_path);
   const bool downloaded = manual_web_source ? DownloadManualWebFile(download_url, temp_path, referer)
                                             : DownloadFile(download_url, temp_path, referer);
+  progress_monitor.Stop();
   if (!downloaded || OnlineSourceTransfersCancelled()) {
+    std::filesystem::remove(progress_path, ec);
     std::filesystem::remove(temp_path, ec);
     std::filesystem::remove(size_path, ec);
     state.status_message = OnlineSourceTransfersCancelled() ? "Download cancelled: " + item.name
@@ -616,9 +697,11 @@ bool DownloadOnlineBookForItem(OnlineSourceState &state, const BookItem &item, B
   if (!std::filesystem::exists(final_path, ec) || ec) {
     state.status_message = "Save failed: " + item.name;
     runtime_log::Line("online: book save failed title=" + item.name + " path=" + final_path.string());
+    std::filesystem::remove(progress_path, ec);
     std::filesystem::remove(size_path, ec);
     return false;
   }
+  std::filesystem::remove(progress_path, ec);
   std::filesystem::remove(size_path, ec);
   out_local_item = item;
   out_local_item.is_remote = false;

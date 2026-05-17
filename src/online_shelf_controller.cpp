@@ -102,7 +102,28 @@ std::string OnlineShelfController::RemoteBookStatusText(const BookItem &item, co
 
 float OnlineShelfController::RemoteBookStatusProgress(const BookItem &item, const OnlineShelfControllerDeps &deps) const {
   if (!item.is_remote) return 1.0f;
-  if (BookDownloading(item)) return BookDownloadProgress(item, deps);
+  if (BookDownloading(item)) {
+    const float progress = BookDownloadProgress(item, deps);
+    if (progress >= 0.0f) return progress;
+    std::lock_guard<std::mutex> lock(download_job_.mutex);
+    if (download_job_.active && BookKey(download_job_.remote_item) == BookKey(item) && download_job_.started_ticks > 0) {
+      const uint32_t elapsed_ms = SDL_GetTicks() - download_job_.started_ticks;
+      return std::clamp(0.02f + static_cast<float>(elapsed_ms) / 900000.0f, 0.02f, 0.75f);
+    }
+    return 0.02f;
+  }
+  const std::string key = BookKey(item);
+  auto status_it = book_status_text_.find(key);
+  if (status_it != book_status_text_.end() && status_it->second == u8"\u4e0b\u8f7d\u4e2d") {
+    const float progress = BookDownloadProgress(item, deps);
+    if (progress >= 0.0f) return progress;
+    auto started_it = book_download_started_ticks_.find(key);
+    if (started_it != book_download_started_ticks_.end() && started_it->second > 0) {
+      const uint32_t elapsed_ms = SDL_GetTicks() - started_it->second;
+      return std::clamp(0.02f + static_cast<float>(elapsed_ms) / 900000.0f, 0.02f, 0.75f);
+    }
+    return 0.02f;
+  }
   if (!RemoteCoverLoading(item, deps)) return 1.0f;
   if (last_cover_window_end_ <= last_cover_window_begin_) return -1.0f;
   const size_t total = last_cover_window_end_ - last_cover_window_begin_;
@@ -134,12 +155,14 @@ bool OnlineShelfController::OpenOrDownloadBook(const BookItem &item, const Onlin
     download_job_.active = true;
     download_job_.finished = false;
     download_job_.success = false;
+    download_job_.started_ticks = SDL_GetTicks();
     download_job_.remote_item = item;
     download_job_.local_item = BookItem{};
     download_job_.message.clear();
   }
 
   book_status_text_[key] = u8"\u4e0b\u8f7d\u4e2d";
+  book_download_started_ticks_[key] = download_job_.started_ticks;
   if (deps.show_message) deps.show_message(u8"\u4e0b\u8f7d\u4e2d...");
   OnlineSourceState state_snapshot = state_;
   JoinDownloadJob();
@@ -192,6 +215,7 @@ void OnlineShelfController::StopOnlineBackgroundJobs() {
     download_job_.active = false;
     download_job_.finished = false;
     download_job_.success = false;
+    download_job_.started_ticks = 0;
     download_job_.remote_item = BookItem{};
     download_job_.local_item = BookItem{};
     download_job_.message.clear();
@@ -237,6 +261,9 @@ OnlineShelfControllerTickResult OnlineShelfController::TickAfterInput(ShelfRunti
       result.download_success = download_job_.success;
       const std::string key = BookKey(download_job_.remote_item);
       book_status_text_[key] = download_job_.success ? u8"\u4e0b\u8f7d\u6210\u529f" : u8"\u4e0b\u8f7d\u5931\u8d25";
+      if (!download_job_.success) {
+        book_download_started_ticks_[key] = download_job_.started_ticks;
+      }
       state_.status_message = download_job_.message;
       if (download_job_.success) {
         (void)SyncDownloadedOnlineItem(state_, download_job_.remote_item, download_job_.local_item);
@@ -397,6 +424,13 @@ bool OnlineShelfController::BookDownloading(const BookItem &item) const {
 
 float OnlineShelfController::BookDownloadProgress(const BookItem &item, const OnlineShelfControllerDeps &deps) const {
   if (!item.is_remote || item.remote_local_path.empty()) return -1.0f;
+  uint32_t started_ticks = 0;
+  {
+    std::lock_guard<std::mutex> lock(download_job_.mutex);
+    if (download_job_.active && BookKey(download_job_.remote_item) == BookKey(item)) {
+      started_ticks = download_job_.started_ticks;
+    }
+  }
   const std::filesystem::path part_path = std::filesystem::path(item.remote_local_path).string() + ".part";
   const std::filesystem::path progress_path = part_path.string() + ".progress";
   const std::filesystem::path size_path = std::filesystem::path(item.remote_local_path).string() + ".size";
@@ -419,19 +453,27 @@ float OnlineShelfController::BookDownloadProgress(const BookItem &item, const On
     }
   }
   const uintmax_t part_size = std::filesystem::exists(part_path, ec) && !ec ? std::filesystem::file_size(part_path, ec) : 0;
-  if (part_size == 0 || ec) return -1.0f;
+  const bool part_size_valid = !ec;
   total_size = 0;
   if (std::filesystem::exists(size_path, ec) && !ec) {
     std::ifstream in(size_path);
     if (in) in >> total_size;
   }
   if (total_size > 0) {
-    const double progress = static_cast<double>(part_size) / static_cast<double>(total_size);
-    return std::clamp(static_cast<float>(progress), 0.0f, 0.995f);
+    const double progress = part_size_valid
+                                ? static_cast<double>(part_size) / static_cast<double>(total_size)
+                                : 0.0;
+    return std::clamp(static_cast<float>(progress), 0.01f, 0.995f);
   }
+  if (part_size == 0 || !part_size_valid) return -1.0f;
   constexpr double kSoftFullBytes = 256.0 * 1024.0 * 1024.0;
   const double progress = static_cast<double>(part_size) / (static_cast<double>(part_size) + kSoftFullBytes);
-  return std::clamp(static_cast<float>(progress), 0.02f, 0.92f);
+  const float file_soft_progress = std::clamp(static_cast<float>(progress), 0.02f, 0.92f);
+  if (started_ticks == 0) return file_soft_progress;
+  const uint32_t elapsed_ms = SDL_GetTicks() - started_ticks;
+  const float time_soft_progress =
+      std::clamp(0.02f + static_cast<float>(elapsed_ms) / 900000.0f, 0.02f, 0.86f);
+  return std::max(file_soft_progress, time_soft_progress);
 }
 
 BookItem OnlineShelfController::LocalItemForRemote(const BookItem &item) const {

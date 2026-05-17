@@ -89,6 +89,7 @@ private:
     bool active = false;
     bool finished = false;
     bool success = false;
+    uint32_t started_ticks = 0;
     BookItem remote_item;
     BookItem local_item;
     std::string message;
@@ -121,6 +122,7 @@ private:
   DownloadJob download_job_;
   CoverJob cover_job_;
   std::unordered_map<std::string, std::string> book_status_text_;
+  std::unordered_map<std::string, uint32_t> book_download_started_ticks_;
   std::unordered_map<std::string, uint32_t> cover_retry_after_ticks_;
   size_t last_cover_window_begin_ = 0;
   size_t last_cover_window_end_ = 0;
