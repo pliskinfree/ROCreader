@@ -123,6 +123,7 @@ PY
 }
 
 ZIPFILE="${DOWNLOAD_ZIP_FILE:-$(next_download_zip_utf8)}"
+RELEASE_VERSION="$(basename "$ZIPFILE" | sed -n 's/.*\(ver[0-9][0-9.]*\).*[.]zip$/\1/p')"
 
 if [ ! -d "$SYSROOT" ]; then
   echo "[low_glibc] ERROR: SYSROOT not found: $SYSROOT"
@@ -663,6 +664,9 @@ find_so_in_libdir() {
   elif [ -f "$SELF_DIR/online_sources.ini" ]; then
     cp "$SELF_DIR/online_sources.ini" "$RUNTIME_DIR/online_sources.ini"
   fi
+  if [ -n "$RELEASE_VERSION" ]; then
+    printf '%s\n' "$RELEASE_VERSION" >"$RUNTIME_DIR/version.txt"
+  fi
   mkdir -p "$RUNTIME_DIR/Downloads"
 
   collect_needed() {
@@ -975,6 +979,12 @@ find_latest_download_zip() {
       [ -f "$zip_file" ] || continue
       zip_version="$(extract_version_from_name "$zip_file")"
       [ -n "$zip_version" ] || continue
+      if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
+        case "$(basename "$zip_file")" in
+          *"Trimui Brick"*.zip|*"trimui brick"*.zip|*"TrimuiBrick"*.zip|*"trimuibrick"*.zip) ;;
+          *) continue ;;
+        esac
+      fi
       if [ -z "$best_path" ] || version_is_newer "$zip_version" "$best_version"; then
         best_path="$zip_file"
         best_version="$zip_version"
@@ -1103,6 +1113,9 @@ perform_pending_update_if_any() {
   fi
 
   protect_local_online_sources "$staged_runtime"
+  if [ -z "$package_version" ] && [ -f "$staged_runtime/version.txt" ]; then
+    package_version="$(head -n 1 "$staged_runtime/version.txt")"
+  fi
   replace_runtime_entry "reader" "$staged_runtime"
   replace_runtime_entry "rocreader_sdl" "$staged_runtime"
   replace_runtime_entry "launch.sh" "$staged_runtime"
@@ -1119,8 +1132,8 @@ perform_pending_update_if_any() {
   replace_runtime_entry "sounds" "$staged_runtime"
   chmod +x "$APP_DIR/reader" "$APP_DIR/launch.sh" 2>/dev/null || true
   chmod +x "$APP_DIR/rocreader_sdl" 2>/dev/null || true
-  printf '%s\n' "$package_version" >"$APP_DIR/version.txt"
-  rm -f /mnt/SDCARD/Downloads/ROCreader_update_pending.txt /mnt/sdcard/Downloads/ROCreader_update_pending.txt /mnt/mmc/Downloads/ROCreader_update_pending.txt
+  [ -n "$package_version" ] && printf '%s\n' "$package_version" >"$APP_DIR/version.txt"
+  rm -f /mnt/SDCARD/Downloads/ROCreader_update_pending.txt /mnt/sdcard/Downloads/ROCreader_update_pending.txt /mnt/mmc/Downloads/ROCreader_update_pending.txt "$APP_DIR/Downloads/ROCreader_update_pending.txt"
   rm -f "$package_path" 2>/dev/null || true
   cleanup_installed_download_zips "$package_version"
   rm -rf "$update_stage_dir"
