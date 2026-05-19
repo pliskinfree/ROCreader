@@ -69,6 +69,9 @@
 #include "reader_progress_controller.h"
 #include "reader_launch_service.h"
 #include "reader_scene.h"
+#include "rgds_interaction.h"
+#include "rgds_render.h"
+#include "rgds_runtime.h"
 #include "reader_session_ops.h"
 #include "reader_session_state.h"
 #include "runtime_log.h"
@@ -160,6 +163,7 @@ void FatalSignalHandler(int sig) {
 }
 
 std::string NormalizePathKey(const std::string &path);
+std::string ToLowerAscii(std::string s);
 
 int ClampInt(int v, int lo, int hi) { return std::max(lo, std::min(hi, v)); }
 
@@ -659,6 +663,9 @@ int main(int, char **argv) {
   const char *env_fullscreen = std::getenv("ROCREADER_FULLSCREEN");
   const bool force_windowed = env_windowed && std::string(env_windowed) == "1";
   const bool force_fullscreen = env_fullscreen && std::string(env_fullscreen) == "1";
+  const std::string device_model_token = DetectDeviceModelToken();
+  const rgds::PlatformConfig rgds_platform = rgds::DetectPlatformConfig(device_model_token);
+  rgds::Runtime rgds_runtime;
   runtime_log::Line("main: DetectScreenProfile begin");
   const ScreenProfile screen_profile = DetectScreenProfile();
   const bool verbose_log = VerboseLogEnabled();
@@ -673,6 +680,7 @@ int main(int, char **argv) {
     win_flags |= SDL_WINDOW_FULLSCREEN;
   }
   SetLayoutProfile(SelectLayoutProfile(screen_profile.screen_w, screen_profile.screen_h));
+  win_flags = rgds::ApplyWindowFlags(win_flags, rgds_platform);
   if (verbose_log) {
     std::cout << "[native_h700] screen detect: source=" << screen_profile.detection_source
               << " detected=" << screen_profile.detected_w << "x" << screen_profile.detected_h
@@ -681,14 +689,17 @@ int main(int, char **argv) {
   }
 
   runtime_log::Line(std::string("main: screen source=") + screen_profile.detection_source + " detected=" + std::to_string(screen_profile.detected_w) + "x" + std::to_string(screen_profile.detected_h) + " profile=" + screen_profile.profile_name);
+  rgds::ProbeDisplayBounds(rgds_runtime, rgds_platform, Layout(), verbose_log);
   runtime_log::Line("main: SDL_CreateWindow begin");
+  const int window_x = rgds::TopWindowX(rgds_runtime, rgds_platform);
+  const int window_y = rgds::TopWindowY(rgds_runtime, rgds_platform);
   SDL_Window *window =
       SDL_CreateWindow("ROCreader Native H700",
-                       SDL_WINDOWPOS_CENTERED,
-                       SDL_WINDOWPOS_CENTERED,
-                       Layout().screen_w,
-                       Layout().screen_h,
-                       win_flags);
+                        window_x,
+                        window_y,
+                        rgds::TopWindowW(rgds_runtime, rgds_platform, Layout()),
+                        rgds::TopWindowH(rgds_runtime, rgds_platform, Layout()),
+                        win_flags);
   if (!window) {
     runtime_log::Line(std::string("main: SDL_CreateWindow failed: ") + SDL_GetError());
     std::cerr << "[native_h700] window failed: " << SDL_GetError() << "\n";
@@ -696,6 +707,7 @@ int main(int, char **argv) {
     return 2;
   }
   runtime_log::Line("main: SDL_CreateWindow ok");
+  rgds::ConfigureMainWindow(rgds_runtime, rgds_platform, window, verbose_log);
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
   runtime_log::Line("main: SDL_CreateRenderer begin");
   SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -718,10 +730,16 @@ int main(int, char **argv) {
   }
   runtime_log::Line("main: SDL_CreateRenderer ok");
   const bool renderer_supports_target_textures = (renderer_info.flags & SDL_RENDERER_TARGETTEXTURE) != 0;
+  rgds::AttachStackedPreviewSurface(rgds_runtime, rgds_platform, renderer);
+  rgds::CreateBottomSurface(rgds_runtime, rgds_platform, Layout(), win_flags, verbose_log);
+  rgds::CreateReaderCanvas(rgds_runtime, renderer, renderer_supports_target_textures);
 
   AppContext app_context;
   app_context.window = window;
   app_context.renderer = renderer;
+  app_context.rgds_bottom_window = rgds_runtime.bottom_window;
+  app_context.rgds_bottom_renderer = rgds_runtime.bottom_renderer;
+  app_context.rgds_dual_screen = rgds::IsActive(rgds_runtime);
   app_context.screen_profile = screen_profile;
   app_context.layout = &Layout();
   app_context.verbose_log = verbose_log;
@@ -803,6 +821,7 @@ int main(int, char **argv) {
   };
 
   UiAssets ui_assets;
+  rgds::RenderResources rgds_render_resources;
   TextureRegistry texture_registry;
   auto forget_texture_size = [&](SDL_Texture *tex) { texture_registry.Forget(tex); };
   auto remember_texture_size = [&](SDL_Texture *tex, int w, int h) { texture_registry.Remember(tex, w, h); };
@@ -927,15 +946,15 @@ int main(int, char **argv) {
   const std::filesystem::path keymap_path = resolve_runtime_file("native_keymap.ini");
 #if defined(__arm__) || defined(__aarch64__)
   const bool use_h700_defaults = true;
-  const std::string device_model_token = DetectDeviceModelToken();
 #else
   const bool use_h700_defaults = false;
-  const std::string device_model_token = DetectDeviceModelToken();
 #endif
   const bool use_trimui_brick_keymap =
       device_model_token == "trimui-brick" || screen_profile.profile_name == "1024x768";
   const InputProfile input_profile =
-      use_trimui_brick_keymap
+      device_model_token == "rgds"
+          ? InputProfile::RGDS
+          : use_trimui_brick_keymap
           ? InputProfile::TrimuiBrick
           : (use_h700_defaults
                  ? (Uses34xxSpKeymap(device_model_token)
@@ -1028,7 +1047,7 @@ int main(int, char **argv) {
                                                     system_settings_state.levels.brightness) &&
         system_settings_state.levels.brightness.available) {
       const int applied_level =
-          std::clamp(system_settings_state.levels.brightness.level, 0, system_settings_state.levels.brightness.max_level);
+          std::clamp(system_settings_state.levels.brightness.level, 0, std::max(1, system_settings_state.levels.brightness.max_level));
       if (config.Mutable().screen_brightness_level != applied_level) {
         config.Mutable().screen_brightness_level = applied_level;
         changed = true;
@@ -1045,6 +1064,8 @@ int main(int, char **argv) {
   }
 
   AppUiState app_ui{};
+  rgds::InteractionState rgds_interaction;
+  const bool is_rgds_runtime = input_profile == InputProfile::RGDS && rgds::IsActive(rgds_runtime);
   uint32_t last_system_volume_sync = 0;
   app_ui.volume_display_percent = ClampInt((config.Get().sfx_volume * 100) / std::max(1, SDL_MIX_MAXVOLUME), 0, 100);
   if (system_settings_state.levels.volume.available) {
@@ -1156,6 +1177,16 @@ int main(int, char **argv) {
   std::string pending_shelf_cover_preload_fingerprint;
 
   MenuSceneState menu_state;
+  auto snap_rgds_shelf_menu_open = [&]() {
+    menu_state.anim.Snap(1.0f);
+    menu_state.closing = false;
+    menu_state.close_armed = false;
+    menu_state.toggle_guard = 0.0f;
+  };
+  if (is_rgds_runtime) {
+    snap_rgds_shelf_menu_open();
+    rgds::EnterShelf(rgds_interaction);
+  }
   menu_state.items = {
       SettingId::KeyGuide,
       SettingId::SystemControls,
@@ -1186,6 +1217,7 @@ int main(int, char **argv) {
   uint32_t last_user_input_tick = SDL_GetTicks();
   enum class ScreenOffMode { Awake, Manual, Auto };
   ScreenOffMode screen_off_mode = ScreenOffMode::Awake;
+  bool rgds_display_sleep_active = false;
   TxtTranscodeJob txt_transcode_job{};
   ReaderUiState reader_ui{};
   std::string &current_book = reader_ui.current_book;
@@ -1635,6 +1667,23 @@ int main(int, char **argv) {
     open_ui_font();
     return GetUiTextTexture(ui_text_cache, renderer, text, color, UiTextRole::Reader);
   };
+  rgds::LoadRenderResources(rgds_render_resources, rgds::RenderResourceLoadDeps{
+      rgds_runtime,
+      exe_path,
+      ui_path,
+      screen_profile.profile_name,
+      LoadTextureFromFile,
+      LoadSurfaceFromMemory,
+      CreateTextureFromSurface,
+      remember_texture_size,
+      forget_texture_size,
+      0,
+      ScalePx(96),
+      kTextCacheMaxEntries,
+      body_font_pt,
+      title_font_pt,
+      current_reader_font_pt,
+  });
 
   auto shelf_title_text = [&](const BookItem &item) -> std::string {
     if (item.is_remote) return item.name;
@@ -1728,16 +1777,26 @@ int main(int, char **argv) {
 #ifdef HAVE_SDL2_TTF
     if (ui_text_cache.reader_font) font_h = TTF_FontHeight(ui_text_cache.reader_font);
 #endif
-    return GetTxtViewportBounds(
-        renderer,
+    const bool use_rgds_virtual_canvas = is_rgds_runtime;
+    const int viewport_w = use_rgds_virtual_canvas ? rgds::kVirtualReaderW : Layout().screen_w;
+    const int viewport_h = use_rgds_virtual_canvas ? rgds::kVirtualReaderH : Layout().screen_h;
+    SDL_Rect bounds = GetTxtViewportBounds(
+        use_rgds_virtual_canvas ? nullptr : renderer,
         TxtViewportRequest{
-            Layout().screen_w,
-            Layout().screen_h,
+            viewport_w,
+            viewport_h,
             Layout().txt_margin_x,
             Layout().txt_margin_y,
             font_pt,
             font_h + ScalePx(kTxtLineSpacing),
         });
+    if (use_rgds_virtual_canvas) {
+      runtime_log::Line("main: RGDS txt viewport locked to virtual reader canvas bounds=" +
+                        std::to_string(bounds.x) + "," + std::to_string(bounds.y) + " " +
+                        std::to_string(bounds.w) + "x" + std::to_string(bounds.h) +
+                        " canvas=" + std::to_string(viewport_w) + "x" + std::to_string(viewport_h));
+    }
+    return bounds;
   };
 
 #ifdef HAVE_SDL2_TTF
@@ -1826,6 +1885,10 @@ int main(int, char **argv) {
   reader_manager.Register(ReaderMode::ZipImage, &zip_image_reader_module);
   ReaderScene reader_scene([&]() {
     app_shell.Scenes().EnterShelf();
+    if (is_rgds_runtime) {
+      rgds::CloseReaderToShelf(rgds_interaction);
+      snap_rgds_shelf_menu_open();
+    }
     app_shell.StartSceneFlash();
   });
   MenuScene menu_scene;
@@ -1866,14 +1929,38 @@ int main(int, char **argv) {
             show_transient_message,
         });
   };
-  auto make_reader_scene_render_services = [&]() {
+  auto make_reader_scene_render_services = [&](SDL_Renderer *target_renderer = nullptr) {
+    SDL_Renderer *render_target = target_renderer ? target_renderer : renderer;
     return MakeReaderSceneRenderServices(
-        renderer,
+        render_target,
         [](int value) { return ScalePx(value); },
-        [&](int x, int y, int w, int h, SDL_Color c, bool filled) { DrawRect(renderer, x, y, w, h, c, filled); },
+        [render_target](int x, int y, int w, int h, SDL_Color c, bool filled) {
+          DrawRect(render_target, x, y, w, h, c, filled);
+        },
         clamp_text_scroll,
         get_text_texture,
         get_reader_text_texture);
+  };
+  auto make_rgds_reader_render_deps = [&](SDL_Renderer *target_renderer, float frame_dt, bool tick_modules,
+                                          const rgds::ReaderLayout &reader_layout) {
+    return ReaderSceneRenderDeps{
+        target_renderer,
+        reader_ui,
+        &reader_manager,
+        reader_progress_deps,
+        frame_dt,
+        reader_layout.canvas_w,
+        reader_layout.canvas_h,
+        GetTxtBackgroundColor(config.Get().txt_background_color),
+        GetTxtFontColor(config.Get().txt_font_color),
+        Layout().settings_sidebar_w,
+        make_reader_progress_overlay_metrics(),
+        reader_layout.overlay_viewport,
+        true,
+        true,
+        make_reader_scene_render_services(target_renderer),
+        tick_modules,
+    };
   };
   auto make_menu_scene_layout_metrics = [&]() {
     return MakeMenuSceneLayoutMetrics(Layout());
@@ -1885,7 +1972,6 @@ int main(int, char **argv) {
         },
         [&](int delta, SystemControlLevels &levels) {
           const bool ok = system_control_service.AdjustVolume(delta, levels);
-          system_control_service.Refresh(levels);
           if (levels.volume.available) {
             const int saved_percent =
                 std::clamp((levels.volume.level * 100) / std::max(1, levels.volume.max_level), 0, 100);
@@ -2010,10 +2096,13 @@ int main(int, char **argv) {
         },
     };
   };
-  auto make_settings_input_actions = [&]() {
+  auto make_settings_input_actions = [&](bool menu_toggle_request = false,
+                                         std::function<void()> on_close_override = {}) {
     return SettingsRuntimeInputActions{
-        false,
-        [&]() { app_shell.Scenes().ReturnFromSettings(); },
+        menu_toggle_request,
+        on_close_override ? std::move(on_close_override) : std::function<void()>([&]() {
+          app_shell.Scenes().ReturnFromSettings();
+        }),
         [&]() { app_shell.RequestQuit(); },
         clear_history_and_refresh_shelf,
         clear_runtime_cache_files,
@@ -2030,10 +2119,11 @@ int main(int, char **argv) {
         },
     };
   };
-  auto make_settings_render_services = [&](const std::function<void()> &draw_volume_overlay) {
+  auto make_settings_render_services = [&](SDL_Renderer *target_renderer,
+                                           const std::function<void()> &draw_volume_overlay) {
     return MakeMenuSceneRenderServices(MenuSceneRenderServiceCallbacks{
         [&](int x, int y, int w, int h, SDL_Color c, bool filled) {
-          DrawRect(renderer, x, y, w, h, c, filled);
+          DrawRect(target_renderer ? target_renderer : renderer, x, y, w, h, c, filled);
         },
         get_texture_size,
         get_text_texture,
@@ -2069,8 +2159,23 @@ int main(int, char **argv) {
       GetLowerExt,
       open_epub_text_book,
       [&](const std::string &path) { history_store.Add(path); },
-      [&]() { app_shell.Scenes().EnterReader(); },
-      [&]() { app_shell.Scenes().EnterShelf(); },
+      [&]() {
+        if (is_rgds_runtime) {
+          rgds::EnterReader(rgds_interaction);
+          menu_state.anim.Snap(1.0f);
+          menu_state.closing = false;
+          menu_state.close_armed = true;
+          menu_state.toggle_guard = 0.0f;
+        }
+        app_shell.Scenes().EnterReader();
+      },
+      [&]() {
+        if (is_rgds_runtime) {
+          rgds::EnterShelf(rgds_interaction);
+          snap_rgds_shelf_menu_open();
+        }
+        app_shell.Scenes().EnterShelf();
+      },
       [&]() { app_shell.StartSceneFlash(); },
       [&](const std::string &message) { show_transient_message(message); },
     });
@@ -2137,12 +2242,13 @@ int main(int, char **argv) {
         forget_texture_size,
     });
   };
-  auto make_menu_scene_input_services = [&]() {
+  auto make_menu_scene_input_services = [&](bool menu_toggle_request = false,
+                                            std::function<void()> on_close_override = {}) {
     return MakeMenuSceneInputServices(
         make_system_settings_callbacks(),
         make_txt_settings_callbacks(),
         make_version_update_callbacks(),
-        make_settings_input_actions());
+        make_settings_input_actions(menu_toggle_request, std::move(on_close_override)));
   };
 
   uint32_t prev_ticks = SDL_GetTicks();
@@ -2212,7 +2318,13 @@ int main(int, char **argv) {
       const uint32_t idle_ms = AutoSleepIntervalMsFromIndex(system_settings_state.auto_sleep_interval_index);
       if (now - last_user_input_tick < idle_ms) return;
       if (lid_power_controller.TriggerAutoIfEnabled()) {
-        screen_off_mode = ScreenOffMode::Auto;
+        if (input_profile == InputProfile::RGDS) {
+          rgds_display_sleep_active = true;
+          last_user_input_tick = now;
+          runtime_log::Line("main: RGDS auto sleep activated");
+        } else {
+          screen_off_mode = ScreenOffMode::Auto;
+        }
       }
     };
     const AppEventPumpResult event_pump =
@@ -2260,8 +2372,26 @@ int main(int, char **argv) {
       if (observed_input_this_frame && screen_off_mode == ScreenOffMode::Awake) last_user_input_tick = SDL_GetTicks();
     }
 
+    if (is_rgds_runtime && rgds_display_sleep_active) {
+      if (input.IsJustPressed(Button::Power)) {
+        runtime_log::Line("main: RGDS wake requested");
+        const bool wake_ok = lid_power_controller.TriggerScreenOn(input_profile);
+        rgds_display_sleep_active = false;
+        last_user_input_tick = SDL_GetTicks();
+        if (wake_ok) {
+          runtime_log::Line("main: RGDS wake completed");
+        } else {
+          runtime_log::Line("main: RGDS wake failed");
+        }
+      }
+      input.ResetAll();
+      app_shell.ResetFrameClock(prev_ticks);
+      continue;
+    }
+
     if (screen_off_mode != ScreenOffMode::Awake) {
       if (input.IsJustPressed(Button::Power)) {
+        lid_power_controller.TriggerScreenOn(input_profile);
         screen_off_mode = ScreenOffMode::Awake;
         last_user_input_tick = SDL_GetTicks();
       }
@@ -2272,7 +2402,12 @@ int main(int, char **argv) {
 
     if (input.IsJustPressed(Button::Power)) {
       if (lid_power_controller.TriggerPowerKeyScreenOff(input_profile)) {
-        screen_off_mode = ScreenOffMode::Manual;
+        if (input_profile == InputProfile::RGDS) {
+          rgds_display_sleep_active = true;
+          runtime_log::Line("main: RGDS manual sleep activated");
+        } else {
+          screen_off_mode = ScreenOffMode::Manual;
+        }
         last_user_input_tick = SDL_GetTicks();
         input.ResetAll();
         app_shell.ResetFrameClock(prev_ticks);
@@ -2299,7 +2434,8 @@ int main(int, char **argv) {
     }
     process_txt_transcode_step();
     flush_deferred_writes(false);
-    if (state == AppScene::Settings && volume_controller.UsesSystemVolume() && now - last_system_volume_sync >= 250) {
+    if (!is_rgds_runtime && state == AppScene::Settings && volume_controller.UsesSystemVolume() &&
+        now - last_system_volume_sync >= 250) {
       int synced_volume_percent = app_ui.volume_display_percent;
       if (volume_controller.RefreshPercent(synced_volume_percent)) {
         app_ui.volume_display_percent = synced_volume_percent;
@@ -2343,7 +2479,7 @@ int main(int, char **argv) {
       transient_message_dismissed_this_frame = true;
     }
 
-    if (state == AppScene::Shelf || state == AppScene::Settings) {
+    if (state == AppScene::Shelf || (!is_rgds_runtime && state == AppScene::Settings)) {
       if (input.IsJustPressed(Button::Up) || input.IsJustPressed(Button::Down) ||
           input.IsJustPressed(Button::Left) || input.IsJustPressed(Button::Right)) {
         play_sfx(SfxId::Move);
@@ -2357,27 +2493,45 @@ int main(int, char **argv) {
       }
     }
 
+    rgds::InteractionResult rgds_input_result;
+    if (is_rgds_runtime) {
+      rgds_input_result = rgds::HandleFrameInput(rgds_interaction, input, state, now);
+      if (rgds_input_result.quit_requested) app_shell.RequestQuit();
+      if (rgds_input_result.play_change_sfx) play_sfx(SfxId::Change);
+      if (rgds_input_result.play_back_sfx) play_sfx(SfxId::Back);
+    }
     if (input.IsPressed(Button::Start) && input.IsPressed(Button::Select)) app_shell.RequestQuit();
 
-    // Dedicated settings toggle path (single entry for Start / Select mapping).
-    const MenuToggleAction menu_toggle_action =
-        HandleMenuToggleInput(app_ui, input, state == AppScene::Settings, state == AppScene::Shelf,
-                              state == AppScene::Reader, menu_scene.CanCloseWithToggle(menu_state), 0.0f,
-                              false,
-                              kMenuToggleDebounceSec, input_profile);
-    if (menu_toggle_action == MenuToggleAction::CloseSettings) {
-      menu_scene.BeginClose(
-          menu_state,
-          MenuSceneAnimationConfig{config.Get().animations, 0.16f, 0.20f, kSettingsToggleGuardSec});
-      play_sfx(SfxId::Back);
-    } else if (menu_toggle_action == MenuToggleAction::OpenFromShelf ||
-               menu_toggle_action == MenuToggleAction::OpenFromReader) {
-      app_shell.Scenes().OpenSettingsFrom(
-          (menu_toggle_action == MenuToggleAction::OpenFromShelf) ? AppScene::Shelf : AppScene::Reader);
-      menu_scene.BeginOpen(
-          menu_state,
-          MenuSceneAnimationConfig{config.Get().animations, 0.16f, 0.20f, kSettingsToggleGuardSec});
-      play_sfx(SfxId::Back);
+    if (is_rgds_runtime) {
+      if (rgds_input_result.menu_key_consumed && state == AppScene::Reader && rgds_interaction.menu_open) {
+        menu_state.anim.Snap(1.0f);
+        menu_state.closing = false;
+        menu_state.close_armed = true;
+        menu_state.toggle_guard = 0.0f;
+      }
+      if (state == AppScene::Settings) {
+        app_shell.Scenes().Set(app_shell.Scenes().SettingsReturnScene());
+      }
+    } else {
+      const MenuToggleAction menu_toggle_action =
+          HandleMenuToggleInput(app_ui, input, state == AppScene::Settings, state == AppScene::Shelf,
+                                state == AppScene::Reader, menu_scene.CanCloseWithToggle(menu_state), 0.0f,
+                                false,
+                                kMenuToggleDebounceSec, input_profile);
+      if (menu_toggle_action == MenuToggleAction::CloseSettings) {
+        menu_scene.BeginClose(
+            menu_state,
+            MenuSceneAnimationConfig{config.Get().animations, 0.16f, 0.20f, kSettingsToggleGuardSec});
+        play_sfx(SfxId::Back);
+      } else if (menu_toggle_action == MenuToggleAction::OpenFromShelf ||
+                 menu_toggle_action == MenuToggleAction::OpenFromReader) {
+        app_shell.Scenes().OpenSettingsFrom(
+            (menu_toggle_action == MenuToggleAction::OpenFromShelf) ? AppScene::Shelf : AppScene::Reader);
+        menu_scene.BeginOpen(
+            menu_state,
+            MenuSceneAnimationConfig{config.Get().animations, 0.16f, 0.20f, kSettingsToggleGuardSec});
+        play_sfx(SfxId::Back);
+      }
     }
 
     if (state == AppScene::Boot) {
@@ -2433,19 +2587,45 @@ int main(int, char **argv) {
       boot_scene.Tick(dt, boot_tick_deps);
     } else if (state == AppScene::Shelf) {
       const NativeConfig &ui_cfg = config.Get();
-      ShelfSceneInputContext shelf_input_context{
-          input,
-          shelf_runtime,
-          shelf_state,
-          ShelfGridCols(),
-          dt,
-          ui_cfg.animations,
-          kPageSlideDurationSec,
-          kTitleMarqueePauseSec,
-          ScaleFloat(kTitleMarqueeSpeedPx),
-          make_shelf_scene_input_services(),
-      };
-      shelf_scene.HandleInput(shelf_input_context);
+      if (!is_rgds_runtime || rgds::RoutesInputToTop(rgds_interaction)) {
+        ShelfSceneInputContext shelf_input_context{
+            input,
+            shelf_runtime,
+            shelf_state,
+            ShelfGridCols(),
+            dt,
+            ui_cfg.animations,
+            kPageSlideDurationSec,
+            kTitleMarqueePauseSec,
+            ScaleFloat(kTitleMarqueeSpeedPx),
+            make_shelf_scene_input_services(),
+        };
+        shelf_scene.HandleInput(shelf_input_context);
+      } else {
+        if (menu_scene.IsSelected(menu_state, SettingId::SystemControls)) {
+          system_control_service.Refresh(system_settings_state.levels);
+        }
+        SyncContributorAvatarState(contributor_avatar_state, contributor_avatar_entries.size());
+        MenuSceneInputContext menu_input_context{
+            input,
+            ui_cfg,
+            dt,
+            menu_state,
+            system_settings_state,
+            txt_settings_state,
+            contributor_avatar_state,
+            contributor_avatar_entries.size(),
+            version_update_state,
+            online_source_state,
+            make_menu_scene_input_services(false, [&]() {
+              rgds_interaction.focus_top = true;
+              menu_state.anim.Snap(1.0f);
+              menu_state.closing = false;
+              menu_state.close_armed = true;
+            }),
+        };
+        if (!rgds_input_result.select_key_consumed) menu_scene.HandleInput(menu_input_context);
+      }
       ensure_shelf_page_cover_textures(shelf_state.shelf_page);
       queue_visible_shelf_cover_lookahead();
     } else if (state == AppScene::Settings) {
@@ -2493,21 +2673,55 @@ int main(int, char **argv) {
         reset_shelf_cover_stream_preload();
         app_shell.Scenes().EnterShelf();
       }
+      if (is_rgds_runtime) {
+        app_shell.Scenes().Set(AppScene::Shelf);
+      }
     } else if (state == AppScene::Reader) {
-      ReaderSceneInputDeps reader_input_deps{
-          input,
-          reader_ui,
-          progress,
-          &reader_manager,
-          pdf_runtime,
-          epub_runtime,
-          zip_image_runtime,
-          dt,
-          make_reader_progress_input_config(),
-          transient_message_dismissed_this_frame,
-          make_reader_scene_input_services(),
-      };
-      reader_scene.HandleInput(reader_input_deps);
+      if (is_rgds_runtime && rgds::RoutesInputToMenu(rgds_interaction, state)) {
+        const NativeConfig &ui_cfg = config.Get();
+        if (menu_scene.IsSelected(menu_state, SettingId::SystemControls)) {
+          system_control_service.Refresh(system_settings_state.levels);
+        }
+        SyncContributorAvatarState(contributor_avatar_state, contributor_avatar_entries.size());
+        MenuSceneInputContext menu_input_context{
+            input,
+            ui_cfg,
+            dt,
+            menu_state,
+            system_settings_state,
+            txt_settings_state,
+            contributor_avatar_state,
+            contributor_avatar_entries.size(),
+            version_update_state,
+            online_source_state,
+            make_menu_scene_input_services(input.IsJustPressed(Button::Menu) && !rgds_input_result.menu_key_consumed, [&]() {
+              rgds_interaction.menu_open = false;
+              rgds_interaction.focus_top = rgds_interaction.focus_before_menu_top;
+            }),
+        };
+        if (!rgds_input_result.menu_key_consumed && !rgds_input_result.select_key_consumed) {
+          menu_scene.HandleInput(menu_input_context);
+        }
+      } else {
+        ReaderSceneInputDeps reader_input_deps{
+            input,
+            reader_ui,
+            progress,
+            &reader_manager,
+            pdf_runtime,
+            epub_runtime,
+            zip_image_runtime,
+            dt,
+            make_reader_progress_input_config(),
+            is_rgds_runtime,
+            transient_message_dismissed_this_frame,
+            make_reader_scene_input_services(),
+        };
+        reader_scene.HandleInput(reader_input_deps);
+      }
+      if (is_rgds_runtime && state == AppScene::Settings) {
+        app_shell.Scenes().Set(AppScene::Reader);
+      }
     }
 
     shelf_state.any_grid_animating = false;
@@ -2523,11 +2737,12 @@ int main(int, char **argv) {
       shelf_state.page_animating = false;
       shelf_state.page_slide.Snap(0.0f);
       app_shell.TickSceneFlash(dt, false);
-      if (state != AppScene::Settings) menu_scene.SnapClosed(menu_state);
+      if (!is_rgds_runtime && state != AppScene::Settings) menu_scene.SnapClosed(menu_state);
     }
 
     // Draw
     app_shell.BeginDraw();
+    app_shell.BeginTopDraw();
 
     if (state == AppScene::Boot) {
       BootSceneRenderDeps boot_render_deps{
@@ -2547,7 +2762,7 @@ int main(int, char **argv) {
 
       std::function<void()> draw_volume_overlay = []() {};
       std::function<void()> draw_system_status_overlay = []() {};
-      if (state == AppScene::Shelf || state == AppScene::Settings) {
+      if (state == AppScene::Shelf || (!is_rgds_runtime && state == AppScene::Settings)) {
         draw_volume_overlay = [&]() {
           VolumeOverlayRenderDeps volume_deps{
               renderer,
@@ -2618,24 +2833,40 @@ int main(int, char **argv) {
       }
 
       if (state == AppScene::Reader) {
-        ReaderSceneRenderDeps reader_render_deps{
-            renderer,
-            reader_ui,
-            &reader_manager,
-            reader_progress_deps,
-            dt,
-            Layout().screen_w,
-            Layout().screen_h,
-            GetTxtBackgroundColor(config.Get().txt_background_color),
-            GetTxtFontColor(config.Get().txt_font_color),
-            Layout().settings_sidebar_w,
-            make_reader_progress_overlay_metrics(),
-            make_reader_scene_render_services(),
-        };
-        reader_scene.Draw(reader_render_deps);
+        if (is_rgds_runtime && rgds_runtime.reader_canvas) {
+          IReaderModule *rgds_active_reader_module = reader_manager.Module(reader_mode);
+          const ReaderProgress rgds_active_progress =
+              rgds_active_reader_module && rgds_active_reader_module->IsOpen()
+                  ? rgds_active_reader_module->Progress()
+                  : ReaderProgress{};
+          const rgds::ReaderLayout rgds_reader_layout =
+              rgds::ResolveReaderLayout(reader_mode, rgds_active_reader_module, rgds_active_progress.rotation);
+          rgds::DrawTopReaderSlice(rgds_runtime, renderer, reader_scene,
+                                   make_rgds_reader_render_deps(renderer, dt, true, rgds_reader_layout),
+                                   rgds_reader_layout);
+        } else {
+          ReaderSceneRenderDeps reader_render_deps{
+              renderer,
+              reader_ui,
+              &reader_manager,
+              reader_progress_deps,
+              dt,
+              Layout().screen_w,
+              Layout().screen_h,
+              GetTxtBackgroundColor(config.Get().txt_background_color),
+              GetTxtFontColor(config.Get().txt_font_color),
+              Layout().settings_sidebar_w,
+              make_reader_progress_overlay_metrics(),
+              SDL_Rect{0, 0, 0, 0},
+              false,
+              false,
+              make_reader_scene_render_services(),
+          };
+          reader_scene.Draw(reader_render_deps);
+        }
       }
 
-      if (state == AppScene::Settings) {
+      if (!is_rgds_runtime && state == AppScene::Settings) {
         MenuSceneRenderContext menu_render_context{
             renderer,
             ui_assets,
@@ -2651,31 +2882,32 @@ int main(int, char **argv) {
             version_update_state,
             online_source_state,
             make_menu_scene_layout_metrics(),
-            make_settings_render_services(draw_volume_overlay),
+            make_settings_render_services(renderer, draw_volume_overlay),
+            true,
         };
-      menu_scene.Draw(menu_render_context);
-      draw_system_status_overlay();
-      if (online_shelf_controller.HasDeferredConnect()) {
-        app_shell.Present();
-        if (online_shelf_controller.HandleDeferredConnect()) {
-          const OnlineShelfControllerTickResult online_after_connect =
-              online_shelf_controller.TickAfterInput(shelf_runtime);
-          if (online_after_connect.online_shelf_needs_reset) {
-          shelf_scene.ResetToCategoryRoot(shelf_state);
+        menu_scene.Draw(menu_render_context);
+        draw_system_status_overlay();
+        if (online_shelf_controller.HasDeferredConnect()) {
+          app_shell.Present();
+          if (online_shelf_controller.HandleDeferredConnect()) {
+            const OnlineShelfControllerTickResult online_after_connect =
+                online_shelf_controller.TickAfterInput(shelf_runtime);
+            if (online_after_connect.online_shelf_needs_reset) {
+              shelf_scene.ResetToCategoryRoot(shelf_state);
+            }
+            if (online_after_connect.cover_cache_changed) {
+              clear_cover_cache();
+            }
+            if (online_after_connect.shelf_items_changed) {
+              rebuild_shelf_items();
+            }
+            if (online_after_connect.online_shelf_needs_reset || online_after_connect.shelf_items_changed) {
+              reset_shelf_cover_stream_preload();
+              app_shell.Scenes().EnterShelf();
+            }
           }
-          if (online_after_connect.cover_cache_changed) {
-          clear_cover_cache();
-          }
-          if (online_after_connect.shelf_items_changed) {
-          rebuild_shelf_items();
-          }
-          if (online_after_connect.online_shelf_needs_reset || online_after_connect.shelf_items_changed) {
-          reset_shelf_cover_stream_preload();
-          app_shell.Scenes().EnterShelf();
-          }
+          continue;
         }
-        continue;
-      }
       }
 
 #ifdef HAVE_SDL2_TTF
@@ -2700,7 +2932,52 @@ int main(int, char **argv) {
     }
 
     app_shell.DrawSceneFlash();
-
+    if (is_rgds_runtime) {
+      rgds::DrawFocusFlash(renderer, now, rgds_interaction, true);
+    }
+    IReaderModule *rgds_bottom_reader_module = reader_manager.Module(reader_mode);
+    const ReaderProgress rgds_bottom_progress =
+        rgds_bottom_reader_module && rgds_bottom_reader_module->IsOpen()
+            ? rgds_bottom_reader_module->Progress()
+            : ReaderProgress{};
+    const rgds::ReaderLayout rgds_bottom_reader_layout =
+        rgds::ResolveReaderLayout(reader_mode, rgds_bottom_reader_module, rgds_bottom_progress.rotation);
+    const bool rgds_bottom_direct_reader_render =
+        is_rgds_runtime && state == AppScene::Reader &&
+        rgds_bottom_reader_module && rgds_bottom_reader_module->IsOpen() &&
+        !rgds::IsImageReaderMode(reader_mode, rgds_bottom_reader_module) &&
+        !rgds_runtime.spanning && !rgds_runtime.stacked_preview;
+    ReaderSceneRenderDeps rgds_bottom_reader_render_deps =
+        make_rgds_reader_render_deps(rgds_runtime.bottom_renderer ? rgds_runtime.bottom_renderer : renderer,
+                                     dt,
+                                     false,
+                                     rgds_bottom_reader_layout);
+    rgds::DrawBottomScreen(rgds::BottomRenderDeps{
+        rgds_runtime,
+        rgds_render_resources,
+        rgds_interaction,
+        state,
+        now,
+        config.Get(),
+        input_profile,
+        menu_scene,
+        menu_state,
+        kSidebarMaskMaxAlpha,
+        txt_transcode_job,
+        system_settings_state,
+        txt_settings_state,
+        is_rgds_runtime ? nullptr : &contributor_avatar_entries,
+        contributor_avatar_state,
+        version_update_state,
+        online_source_state,
+        make_menu_scene_layout_metrics(),
+        rgds_bottom_reader_layout,
+        &reader_scene,
+        &rgds_bottom_reader_render_deps,
+        rgds_bottom_direct_reader_render,
+        get_texture_size,
+        Utf8Ellipsize,
+    });
     app_shell.Present();
     if (state == AppScene::Shelf) {
       const OnlineShelfControllerTickResult online_after_present =
@@ -2763,6 +3040,7 @@ int main(int, char **argv) {
   clear_cover_cache();
   avatar_badge.Shutdown();
   DestroyContributorAvatarEntries(contributor_avatar_entries, forget_texture_size);
+  rgds::DestroyRenderResources(rgds_render_resources, forget_texture_size);
   DestroyUiAssets(ui_assets, forget_texture_size);
 #ifdef HAVE_SDL2_TTF
   ShutdownUiTextCache(ui_text_cache, forget_texture_size);
@@ -2778,6 +3056,7 @@ int main(int, char **argv) {
     if (js) SDL_JoystickClose(js);
   }
   sfx.Shutdown();
+  rgds::Destroy(rgds_runtime);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
 #ifdef HAVE_SDL2_IMAGE

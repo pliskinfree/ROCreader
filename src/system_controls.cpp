@@ -21,12 +21,11 @@
 
 namespace {
 constexpr int kDispBrightnessMax = 255;
+constexpr int kDispBrightnessUsableMin = 20;
 constexpr int kDispBrightnessUsableMax = 226;
 constexpr int kBrightnessUiMaxLevel = 8;
-constexpr int kSafeBrightnessMin = 20;
-constexpr std::array<int, kBrightnessUiMaxLevel + 1> kDispBrightnessUiLevels = {
-    20, 46, 72, 97, 123, 149, 170, 198, 226,
-};
+constexpr int kSafeBrightnessMin = kDispBrightnessUsableMin;
+constexpr int kSysfsBrightnessUsableMinRaw = 20;
 #if !defined(_WIN32)
 constexpr unsigned long kDispSetBrightness = 0x102;
 constexpr unsigned long kDispGetBrightness = 0x103;
@@ -95,22 +94,39 @@ std::vector<std::string> UniqueMixerCards(const std::string &preferred) {
   return cards;
 }
 
-int RawBrightnessToUiLevel(int raw_brightness) {
-  const int clamped = std::clamp(raw_brightness, kSafeBrightnessMin, kDispBrightnessUsableMax);
-  int best_level = 0;
-  int best_distance = std::abs(clamped - kDispBrightnessUiLevels[0]);
-  for (int level = 1; level <= kBrightnessUiMaxLevel; ++level) {
-    const int distance = std::abs(clamped - kDispBrightnessUiLevels[static_cast<size_t>(level)]);
-    if (distance < best_distance) {
-      best_distance = distance;
-      best_level = level;
-    }
-  }
-  return best_level;
+int DispRawBrightnessToLevel(int raw_brightness) {
+  const int clamped = std::clamp(raw_brightness, kDispBrightnessUsableMin, kDispBrightnessUsableMax);
+  const int span = std::max(1, kDispBrightnessUsableMax - kDispBrightnessUsableMin);
+  return std::clamp(((clamped - kDispBrightnessUsableMin) * kBrightnessUiMaxLevel + span / 2) / span,
+                    0, kBrightnessUiMaxLevel);
 }
 
-int UiLevelToRawBrightness(int level) {
-  return kDispBrightnessUiLevels[static_cast<size_t>(std::clamp(level, 0, kBrightnessUiMaxLevel))];
+int LevelToDispRawBrightness(int level) {
+  const int clamped = std::clamp(level, 0, kBrightnessUiMaxLevel);
+  const int span = std::max(1, kDispBrightnessUsableMax - kDispBrightnessUsableMin);
+  return std::clamp(kDispBrightnessUsableMin +
+                        (clamped * span + kBrightnessUiMaxLevel / 2) / kBrightnessUiMaxLevel,
+                    kDispBrightnessUsableMin, kDispBrightnessUsableMax);
+}
+
+int SysfsRawBrightnessToLevel(int raw_brightness, int max_brightness) {
+  if (max_brightness <= 0) return 0;
+  const int min_raw = max_brightness <= kSysfsBrightnessUsableMinRaw ? 1 : kSysfsBrightnessUsableMinRaw;
+  if (max_brightness <= min_raw) return raw_brightness > 0 ? kBrightnessUiMaxLevel : 0;
+  const int clamped = std::clamp(raw_brightness, min_raw, max_brightness);
+  const int span = max_brightness - min_raw;
+  return std::clamp(((clamped - min_raw) * kBrightnessUiMaxLevel + span / 2) / span,
+                    0, kBrightnessUiMaxLevel);
+}
+
+int LevelToSysfsRawBrightness(int level, int max_brightness) {
+  if (max_brightness <= 0) return 0;
+  const int clamped = std::clamp(level, 0, kBrightnessUiMaxLevel);
+  const int min_raw = max_brightness <= kSysfsBrightnessUsableMinRaw ? 1 : kSysfsBrightnessUsableMinRaw;
+  if (max_brightness <= min_raw) return max_brightness;
+  const int span = max_brightness - min_raw;
+  return std::clamp(min_raw + (clamped * span + kBrightnessUiMaxLevel / 2) / kBrightnessUiMaxLevel,
+                    min_raw, max_brightness);
 }
 
 int ReadEnvInt(const char *name, int fallback_value, int min_value, int max_value) {
@@ -150,6 +166,20 @@ std::string ReplaceAll(std::string text, const std::string &from, const std::str
   }
   return text;
 }
+
+bool g_shared_volume_level_initialized = false;
+int g_shared_volume_level = 0;
+
+void StoreSharedVolumeLevel(int level) {
+  g_shared_volume_level = level;
+  g_shared_volume_level_initialized = true;
+}
+
+bool TryLoadSharedVolumeLevel(int &level) {
+  if (!g_shared_volume_level_initialized) return false;
+  level = g_shared_volume_level;
+  return true;
+}
 } // namespace
 
 SystemControlService::SystemControlService(bool prefer_system_volume)
@@ -185,8 +215,14 @@ bool SystemControlService::ApplyBrightnessLevel(int level, SystemControlValue &v
 }
 
 bool SystemControlService::AdjustVolume(int delta_steps, SystemControlLevels &levels) {
-  RefreshVolume(levels.volume);
-  if (!levels.volume.available) return false;
+  levels.volume.max_level = VolumeUiMaxLevel();
+  if (volume_level_initialized_) {
+    levels.volume.available = true;
+    levels.volume.level = ClampVolumeLevel(cached_volume_level_);
+  } else {
+    RefreshVolume(levels.volume);
+    if (!levels.volume.available) return false;
+  }
   const int next_level = ClampVolumeLevel(levels.volume.level + delta_steps);
   return SetVolumeLevel(next_level, levels.volume);
 }
@@ -558,6 +594,15 @@ void SystemControlService::RefreshVolume(SystemControlValue &value) {
     return;
   }
 
+  int shared_volume_level = 0;
+  if (TryLoadSharedVolumeLevel(shared_volume_level)) {
+    value.available = true;
+    value.level = ClampVolumeLevel(shared_volume_level);
+    LogSystemControl("refresh volume success via shared cached level: level=" + std::to_string(value.level) +
+                     " max=" + std::to_string(value.max_level));
+    return;
+  }
+
   int shmvar_level = -1;
   if (TryReadVolumeLevelTrimuiShmvar(shmvar_level)) {
     value.available = true;
@@ -596,6 +641,12 @@ void SystemControlService::RefreshVolume(SystemControlValue &value) {
   }
 
   LogSystemControl("refresh volume failed: no usable mixer control found");
+  if (volume_level_initialized_) {
+    value.available = true;
+    value.level = ClampVolumeLevel(cached_volume_level_);
+    LogSystemControl("refresh volume fallback via cached level: level=" + std::to_string(value.level) +
+                     " max=" + std::to_string(value.max_level));
+  }
 }
 
 void SystemControlService::RefreshBrightness(SystemControlValue &value) {
@@ -606,8 +657,8 @@ void SystemControlService::RefreshBrightness(SystemControlValue &value) {
   int max_brightness = 0;
   if (TryReadBrightnessDisp(raw_brightness)) {
     value.available = true;
-    const int clamped_raw = std::clamp(raw_brightness, kSafeBrightnessMin, kDispBrightnessUsableMax);
-    value.level = ClampBrightnessLevel(RawBrightnessToUiLevel(clamped_raw));
+    const int clamped_raw = std::clamp(raw_brightness, kDispBrightnessUsableMin, kDispBrightnessUsableMax);
+    value.level = ClampBrightnessLevel(DispRawBrightnessToLevel(clamped_raw));
     LogSystemControl("refresh brightness success via disp: raw_brightness=" + std::to_string(raw_brightness) +
                      " clamped_raw=" + std::to_string(clamped_raw) +
                      " usable_max=" + std::to_string(kDispBrightnessUsableMax) +
@@ -624,8 +675,7 @@ void SystemControlService::RefreshBrightness(SystemControlValue &value) {
     return;
   }
   value.available = true;
-  value.level =
-      ClampBrightnessLevel((raw_brightness * kBrightnessUiMaxLevel + max_brightness / 2) / max_brightness);
+  value.level = ClampBrightnessLevel(SysfsRawBrightnessToLevel(raw_brightness, max_brightness));
   LogSystemControl("refresh brightness success: brightness_path=" + brightness_path_.string() +
                    " raw_brightness=" + std::to_string(raw_brightness) +
                    " max_brightness=" + std::to_string(max_brightness) +
@@ -651,6 +701,7 @@ bool SystemControlService::SetVolumeLevel(int level, SystemControlValue &value) 
     if (value.available) {
       cached_volume_level_ = value.level;
       volume_level_initialized_ = true;
+      StoreSharedVolumeLevel(value.level);
       LogSystemControl("set volume success via trimui shmvar: resulting_level=" + std::to_string(value.level));
       return true;
     }
@@ -662,6 +713,7 @@ bool SystemControlService::SetVolumeLevel(int level, SystemControlValue &value) 
     value.level = ClampVolumeLevel(level);
     cached_volume_level_ = value.level;
     volume_level_initialized_ = true;
+    StoreSharedVolumeLevel(value.level);
     LogSystemControl("set volume success via ALSA: resulting_level=" + std::to_string(value.level));
     return true;
   }
@@ -672,6 +724,7 @@ bool SystemControlService::SetVolumeLevel(int level, SystemControlValue &value) 
     value.level = ClampVolumeLevel(level);
     cached_volume_level_ = value.level;
     volume_level_initialized_ = true;
+    StoreSharedVolumeLevel(value.level);
     LogSystemControl("set volume success via cached control: control=" + working_volume_control_ +
                      " resulting_level=" + std::to_string(value.level));
     return true;
@@ -685,6 +738,7 @@ bool SystemControlService::SetVolumeLevel(int level, SystemControlValue &value) 
     value.level = ClampVolumeLevel(level);
     cached_volume_level_ = value.level;
     volume_level_initialized_ = true;
+    StoreSharedVolumeLevel(value.level);
     LogSystemControl("set volume success via discovered control: control=" + working_volume_control_ +
                      " resulting_level=" + std::to_string(value.level));
     return true;
@@ -698,7 +752,7 @@ bool SystemControlService::SetBrightnessLevel(int level, SystemControlValue &val
   value.max_level = kBrightnessUiMaxLevel;
   DiscoverBrightnessPaths();
   const int requested_level = ClampBrightnessLevel(level);
-  const int disp_raw_value = UiLevelToRawBrightness(requested_level);
+  const int disp_raw_value = LevelToDispRawBrightness(requested_level);
   if (TrySetBrightnessDisp(disp_raw_value)) {
     RefreshBrightness(value);
     if (value.available && value.level != requested_level) {
@@ -724,25 +778,19 @@ bool SystemControlService::SetBrightnessLevel(int level, SystemControlValue &val
     return value.available;
   }
 
-  int max_brightness = 0;
-  if (!ReadSmallIntFile(brightness_max_path_, max_brightness) || max_brightness <= 0) {
-    LogSystemControl("set brightness failed: could not read max_brightness path=" + brightness_max_path_.string());
-    return false;
-  }
-  const int raw_value =
-      std::clamp((ClampBrightnessLevel(level) * max_brightness + kBrightnessUiMaxLevel / 2) / kBrightnessUiMaxLevel,
-                 0, max_brightness);
-  LogSystemControl("set brightness request: level=" + std::to_string(level) +
-                   " raw_value=" + std::to_string(raw_value) +
-                   " brightness_path=" + brightness_path_.string() +
-                   " max_brightness=" + std::to_string(max_brightness));
-  if (!WriteSmallIntFile(brightness_path_, raw_value)) {
-    LogSystemControl("set brightness failed: write path=" + brightness_path_.string() +
-                     " raw_value=" + std::to_string(raw_value));
+  int targets_written = 0;
+  int targets_attempted = 0;
+  if (!WriteBrightnessTargets(requested_level, targets_written, targets_attempted)) {
+    LogSystemControl("set brightness failed: requested_level=" + std::to_string(level) +
+                     " targets_attempted=" + std::to_string(targets_attempted) +
+                     " targets_written=" + std::to_string(targets_written));
     return false;
   }
   RefreshBrightness(value);
-  LogSystemControl("set brightness success: resulting_level=" + std::to_string(value.level));
+  LogSystemControl("set brightness success: requested_level=" + std::to_string(level) +
+                   " targets_attempted=" + std::to_string(targets_attempted) +
+                   " targets_written=" + std::to_string(targets_written) +
+                   " resulting_level=" + std::to_string(value.level));
   return value.available;
 }
 
@@ -793,19 +841,55 @@ bool SystemControlService::TrySetVolumePercent(const std::string &control, int p
 }
 
 void SystemControlService::DiscoverBrightnessPaths() {
-  if (!brightness_path_.empty() && !brightness_max_path_.empty()) return;
+  if (!brightness_targets_.empty()) return;
 
   const char *env_brightness = std::getenv("ROCREADER_BRIGHTNESS_PATH");
   const char *env_brightness_max = std::getenv("ROCREADER_BRIGHTNESS_MAX_PATH");
-  if (env_brightness && *env_brightness) brightness_path_ = env_brightness;
-  if (env_brightness_max && *env_brightness_max) brightness_max_path_ = env_brightness_max;
-  if (!brightness_path_.empty() && !brightness_max_path_.empty()) {
-    LogSystemControl("discover brightness paths from env: brightness_path=" + brightness_path_.string() +
-                     " brightness_max_path=" + brightness_max_path_.string());
-    return;
+  if (env_brightness && *env_brightness && env_brightness_max && *env_brightness_max) {
+    int env_max_brightness = 0;
+    if (ReadSmallIntFile(env_brightness_max, env_max_brightness) && env_max_brightness > 0 &&
+        AddBrightnessTarget(env_brightness, env_brightness_max, env_max_brightness, "env")) {
+      LogSystemControl("discover brightness paths from env complete: targets=" +
+                       std::to_string(brightness_targets_.size()));
+      return;
+    }
+    LogSystemControl("discover brightness paths from env failed: brightness_path=" + std::string(env_brightness) +
+                     " brightness_max_path=" + std::string(env_brightness_max) +
+                     " max_brightness=" + std::to_string(env_max_brightness));
+  } else if ((env_brightness && *env_brightness) || (env_brightness_max && *env_brightness_max)) {
+    LogSystemControl("discover brightness env ignored: both ROCREADER_BRIGHTNESS_PATH and "
+                     "ROCREADER_BRIGHTNESS_MAX_PATH are required for explicit override");
   }
 
-  const std::filesystem::path root("/sys/class/backlight");
+  const char *env_targets = std::getenv("ROCREADER_BRIGHTNESS_TARGETS");
+  if (env_targets && *env_targets) {
+    std::stringstream ss(env_targets);
+    std::string item;
+    while (std::getline(ss, item, ':')) {
+      const std::string trimmed = TrimAscii(item);
+      if (trimmed.empty()) continue;
+      const std::filesystem::path brightness = trimmed;
+      const std::filesystem::path max_brightness = brightness.parent_path() / "max_brightness";
+      int target_max = 0;
+      if (!ReadSmallIntFile(max_brightness, target_max) || target_max <= 0) {
+        LogSystemControl("discover brightness target skipped from env list: brightness_path=" +
+                         brightness.string() +
+                         " max_brightness_path=" + max_brightness.string() +
+                         " max_brightness=" + std::to_string(target_max));
+        continue;
+      }
+      AddBrightnessTarget(brightness, max_brightness, target_max, "env-list");
+    }
+    if (!brightness_targets_.empty()) {
+      LogSystemControl("discover brightness paths from env list complete: targets=" +
+                       std::to_string(brightness_targets_.size()));
+      return;
+    }
+  }
+
+  const char *env_root = std::getenv("ROCREADER_BRIGHTNESS_ROOT");
+  const std::filesystem::path root =
+      (env_root && *env_root) ? std::filesystem::path(env_root) : std::filesystem::path("/sys/class/backlight");
   std::error_code ec;
   if (!std::filesystem::exists(root, ec) || ec) {
     LogSystemControl("discover brightness paths failed: root missing path=" + root.string());
@@ -818,22 +902,99 @@ void SystemControlService::DiscoverBrightnessPaths() {
       continue;
     }
     const std::filesystem::path dir = it->path();
+    std::error_code dir_ec;
+    if (!std::filesystem::is_directory(dir, dir_ec) || dir_ec) {
+      continue;
+    }
     const std::filesystem::path brightness = dir / "brightness";
     const std::filesystem::path max_brightness = dir / "max_brightness";
-    if (brightness_path_.empty() && std::filesystem::exists(brightness, ec) && !ec) {
-      brightness_path_ = brightness;
+    std::error_code file_ec;
+    if (!std::filesystem::exists(brightness, file_ec) || file_ec) {
+      LogSystemControl("discover brightness candidate skipped: missing brightness path=" + brightness.string());
+      continue;
     }
-    ec.clear();
-    if (brightness_max_path_.empty() && std::filesystem::exists(max_brightness, ec) && !ec) {
-      brightness_max_path_ = max_brightness;
+    file_ec.clear();
+    if (!std::filesystem::exists(max_brightness, file_ec) || file_ec) {
+      LogSystemControl("discover brightness candidate skipped: missing max_brightness path=" +
+                       max_brightness.string());
+      continue;
     }
-    if (!brightness_path_.empty() && !brightness_max_path_.empty()) {
-      LogSystemControl("discover brightness paths success: brightness_path=" + brightness_path_.string() +
-                       " brightness_max_path=" + brightness_max_path_.string());
-      return;
+    int target_max = 0;
+    if (!ReadSmallIntFile(max_brightness, target_max) || target_max <= 0) {
+      LogSystemControl("discover brightness candidate skipped: invalid max_brightness path=" +
+                       max_brightness.string() +
+                       " max_brightness=" + std::to_string(target_max));
+      continue;
     }
+    AddBrightnessTarget(brightness, max_brightness, target_max, "sysfs");
   }
 
-  LogSystemControl("discover brightness paths incomplete: brightness_path=" + brightness_path_.string() +
-                   " brightness_max_path=" + brightness_max_path_.string());
+  if (!brightness_targets_.empty()) {
+    LogSystemControl("discover brightness paths success: primary_brightness_path=" + brightness_path_.string() +
+                     " primary_brightness_max_path=" + brightness_max_path_.string() +
+                     " targets=" + std::to_string(brightness_targets_.size()));
+    return;
+  }
+
+  LogSystemControl("discover brightness paths incomplete: root=" + root.string() +
+                   " primary_brightness_path=" + brightness_path_.string() +
+                   " primary_brightness_max_path=" + brightness_max_path_.string());
+}
+
+bool SystemControlService::AddBrightnessTarget(const std::filesystem::path &brightness_path,
+                                               const std::filesystem::path &max_brightness_path,
+                                               int max_brightness,
+                                               const std::string &source) {
+  if (brightness_path.empty() || max_brightness_path.empty() || max_brightness <= 0) return false;
+  const std::string brightness_text = brightness_path.string();
+  for (const BrightnessTarget &target : brightness_targets_) {
+    if (target.brightness_path.string() == brightness_text) return false;
+  }
+  brightness_targets_.push_back(BrightnessTarget{brightness_path, max_brightness_path, max_brightness});
+  if (brightness_path_.empty()) brightness_path_ = brightness_path;
+  if (brightness_max_path_.empty()) brightness_max_path_ = max_brightness_path;
+  LogSystemControl("discover brightness target: source=" + source +
+                   " brightness_path=" + brightness_path.string() +
+                   " max_brightness_path=" + max_brightness_path.string() +
+                   " max_brightness=" + std::to_string(max_brightness) +
+                   " index=" + std::to_string(brightness_targets_.size() - 1));
+  return true;
+}
+
+bool SystemControlService::WriteBrightnessTargets(int requested_level,
+                                                  int &targets_written,
+                                                  int &targets_attempted) {
+  targets_written = 0;
+  targets_attempted = 0;
+  if (brightness_targets_.empty()) {
+    LogSystemControl("set brightness failed: no discovered sysfs brightness targets");
+    return false;
+  }
+
+  const int clamped_level = ClampBrightnessLevel(requested_level);
+  for (const BrightnessTarget &target : brightness_targets_) {
+    int max_brightness = target.max_brightness;
+    if (!ReadSmallIntFile(target.max_brightness_path, max_brightness) || max_brightness <= 0) {
+      LogSystemControl("set brightness target skipped: could not read max_brightness path=" +
+                       target.max_brightness_path.string() +
+                       " cached_max_brightness=" + std::to_string(target.max_brightness));
+      continue;
+    }
+    const int raw_value = LevelToSysfsRawBrightness(clamped_level, max_brightness);
+    ++targets_attempted;
+    LogSystemControl("set brightness target request: level=" + std::to_string(clamped_level) +
+                     " raw_value=" + std::to_string(raw_value) +
+                     " brightness_path=" + target.brightness_path.string() +
+                     " max_brightness=" + std::to_string(max_brightness));
+    if (!WriteSmallIntFile(target.brightness_path, raw_value)) {
+      LogSystemControl("set brightness target failed: write path=" + target.brightness_path.string() +
+                       " raw_value=" + std::to_string(raw_value));
+      continue;
+    }
+    ++targets_written;
+    LogSystemControl("set brightness target success: write path=" + target.brightness_path.string() +
+                     " raw_value=" + std::to_string(raw_value));
+  }
+
+  return targets_written > 0;
 }

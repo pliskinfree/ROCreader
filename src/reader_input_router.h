@@ -26,6 +26,7 @@ struct ReaderInputRouterDeps {
   float progress_overlay_hold_speed_min_pct = 0.0f;
   float progress_overlay_hold_speed_max_pct = 0.0f;
   float progress_overlay_hold_accel_pct = 0.0f;
+  bool rgds_mode = false;
   bool &transient_message_dismissed_this_frame;
   std::function<int()> current_reader_progress_pct;
   std::function<void(int)> reader_jump_to_percent;

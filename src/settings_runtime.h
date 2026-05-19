@@ -108,6 +108,7 @@ struct SettingsRuntimeRenderDeps {
   const OnlineSourceState &online_source_state;
   SettingsRuntimeLayout layout;
   SettingsRuntimeRenderServices services;
+  bool show_chrome = true;
 };
 
 void HandleSettingsInput(SettingsRuntimeInputDeps &deps);

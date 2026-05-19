@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-constexpr int kButtonCount = 18;
+constexpr int kButtonCount = 19;
 
 enum class Button {
   Up,
@@ -27,6 +27,7 @@ enum class Button {
   VolUp,
   VolDown,
   Power,
+  Quit,
 };
 
 enum class InputProfile {
@@ -35,6 +36,7 @@ enum class InputProfile {
   H70034xxSp,
   H70035xxH,
   TrimuiBrick,
+  RGDS,
 };
 
 const char *ButtonName(Button b);

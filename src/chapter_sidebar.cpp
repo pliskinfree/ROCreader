@@ -156,17 +156,20 @@ void DrawChapterSidebar(const ChapterSidebarRenderDeps &deps) {
   const int visible_rows = EffectiveVisibleRows(deps.ui, VisibleRowCount(deps, list_y, row_pitch));
   deps.ui.chapter_sidebar_page_rows = visible_rows;
   ClampSidebarWindow(deps.ui, visible_rows);
+  auto draw_rect = [&](int x, int y, int rw, int rh, SDL_Color color, bool filled) {
+    deps.draw_rect(deps.origin_x + x, deps.origin_y + y, rw, rh, color, filled);
+  };
 
-  deps.draw_rect(0, 0, w, deps.screen_h, SDL_Color{24, 34, 46, 255}, true);
-  deps.draw_rect(w - 1, 0, 1, deps.screen_h, SDL_Color{82, 125, 158, 255}, true);
-  deps.draw_rect(Scale(deps, 8), divider_y, w - Scale(deps, 16), 1, SDL_Color{66, 95, 124, 255}, true);
+  draw_rect(0, 0, w, deps.screen_h, SDL_Color{24, 34, 46, 255}, true);
+  draw_rect(w - 1, 0, 1, deps.screen_h, SDL_Color{82, 125, 158, 255}, true);
+  draw_rect(Scale(deps, 8), divider_y, w - Scale(deps, 16), 1, SDL_Color{66, 95, 124, 255}, true);
 
 #ifdef HAVE_SDL2_TTF
   if (deps.get_text_texture) {
     const SDL_Color title_color{240, 246, 255, 255};
     TextCacheEntry *title = deps.get_text_texture(u8"\u7ae0\u8282", title_color);
     if (title && title->texture) {
-      SDL_Rect dst{std::max(0, (w - title->w) / 2), title_y, title->w, title->h};
+      SDL_Rect dst{deps.origin_x + std::max(0, (w - title->w) / 2), deps.origin_y + title_y, title->w, title->h};
       SDL_RenderCopy(deps.renderer, title->texture, nullptr, &dst);
     }
   }
@@ -177,12 +180,12 @@ void DrawChapterSidebar(const ChapterSidebarRenderDeps &deps) {
   int y = list_y;
   for (int i = deps.ui.chapter_sidebar_first_visible; i < end; ++i) {
     const bool selected = i == deps.ui.chapter_sidebar_selected;
-    deps.draw_rect(margin_x, y, w - margin_x * 2, row_h,
-                   selected ? SDL_Color{63, 119, 158, 255} : SDL_Color{42, 56, 74, 192}, true);
+    draw_rect(margin_x, y, w - margin_x * 2, row_h,
+              selected ? SDL_Color{63, 119, 158, 255} : SDL_Color{42, 56, 74, 192}, true);
     if (selected) {
-      deps.draw_rect(margin_x, y, indicator_w, row_h, SDL_Color{139, 214, 255, 255}, true);
-      deps.draw_rect(margin_x - 1, y - 1, w - margin_x * 2 + 2, row_h + 2,
-                     SDL_Color{85, 152, 198, 208}, false);
+      draw_rect(margin_x, y, indicator_w, row_h, SDL_Color{139, 214, 255, 255}, true);
+      draw_rect(margin_x - 1, y - 1, w - margin_x * 2 + 2, row_h + 2,
+                SDL_Color{85, 152, 198, 208}, false);
     }
 #ifdef HAVE_SDL2_TTF
     if (deps.get_text_texture) {
@@ -190,7 +193,7 @@ void DrawChapterSidebar(const ChapterSidebarRenderDeps &deps) {
       TextCacheEntry *label = deps.get_text_texture(deps.ui.chapter_anchors[i].title, item_color);
       if (label && label->texture) {
         const int max_w = std::max(1, w - text_x - margin_x);
-        DrawChapterLabel(deps, label, i, selected, text_x, y, row_h, max_w);
+        DrawChapterLabel(deps, label, i, selected, deps.origin_x + text_x, deps.origin_y + y, row_h, max_w);
       }
     }
 #endif
@@ -198,7 +201,7 @@ void DrawChapterSidebar(const ChapterSidebarRenderDeps &deps) {
   }
 
   if (deps.ui.chapter_loading) {
-    deps.draw_rect(margin_x, y, w - margin_x * 2, row_h, SDL_Color{31, 42, 56, 208}, true);
+    draw_rect(margin_x, y, w - margin_x * 2, row_h, SDL_Color{31, 42, 56, 208}, true);
 #ifdef HAVE_SDL2_TTF
     if (deps.get_text_texture) {
       const SDL_Color loading_color{176, 195, 214, 255};
@@ -209,7 +212,7 @@ void DrawChapterSidebar(const ChapterSidebarRenderDeps &deps) {
       if (label && label->texture) {
         const int max_w = std::max(1, w - text_x - margin_x);
         SDL_Rect src{0, 0, std::min(label->w, max_w), label->h};
-        SDL_Rect dst{text_x, y + std::max(0, (row_h - label->h) / 2), src.w, src.h};
+        SDL_Rect dst{deps.origin_x + text_x, deps.origin_y + y + std::max(0, (row_h - label->h) / 2), src.w, src.h};
         SDL_RenderCopy(deps.renderer, label->texture, &src, &dst);
       }
     }

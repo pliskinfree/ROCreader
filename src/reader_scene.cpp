@@ -331,6 +331,7 @@ void ReaderScene::HandleInput(const ReaderSceneInputDeps &deps) const {
       deps.progress_input.hold_speed_min_pct,
       deps.progress_input.hold_speed_max_pct,
       deps.progress_input.hold_accel_pct,
+      deps.rgds_mode,
       deps.transient_message_dismissed_this_frame,
       deps.services.actions.current_progress_pct,
       deps.services.actions.jump_to_percent,
@@ -381,17 +382,25 @@ void ReaderScene::Draw(const ReaderSceneRenderDeps &deps) const {
     IReaderModule *module = deps.reader_manager->Module(deps.ui.mode);
     if (module && module->IsOpen()) {
       module->UpdateViewport(deps.screen_w, deps.screen_h);
-      module->Tick(deps.dt);
+      if (deps.tick_modules) module->Tick(deps.dt);
       module->Draw(deps.renderer);
     }
   }
+
+  const SDL_Rect overlay_viewport = deps.overlay_viewport_enabled
+                                        ? deps.overlay_viewport
+                                        : SDL_Rect{0, 0, deps.screen_w, deps.screen_h};
+  const int overlay_x = overlay_viewport.x;
+  const int overlay_y = overlay_viewport.y;
+  const int overlay_w = overlay_viewport.w > 0 ? overlay_viewport.w : deps.screen_w;
+  const int overlay_h = overlay_viewport.h > 0 ? overlay_viewport.h : deps.screen_h;
 
   ReaderProgressOverlayRenderDeps progress_overlay_deps{
       deps.renderer,
       deps.progress,
       ReaderProgressOverlayLayout{
-          deps.screen_w,
-          deps.screen_h,
+          overlay_w,
+          overlay_h,
           deps.progress_overlay_metrics.panel_margin_x,
           deps.progress_overlay_metrics.panel_margin_bottom,
           deps.progress_overlay_metrics.bar_margin_x,
@@ -400,15 +409,19 @@ void ReaderScene::Draw(const ReaderSceneRenderDeps &deps) const {
       deps.services.scale_px,
       deps.services.draw_rect,
       deps.services.get_text_texture,
+      overlay_x,
+      overlay_y,
   };
   DrawReaderProgressOverlay(progress_overlay_deps);
 
   ChapterSidebarRenderDeps chapter_sidebar_deps{
       deps.renderer,
       deps.ui,
-      deps.screen_w,
-      deps.screen_h,
-      deps.chapter_sidebar_w,
+      overlay_w,
+      overlay_h,
+      deps.overlay_viewport_enabled ? overlay_w : deps.chapter_sidebar_w,
+      overlay_x,
+      overlay_y,
       deps.services.scale_px,
       deps.services.draw_rect,
       deps.services.get_text_texture,

@@ -139,6 +139,9 @@ void DrawReaderProgressOverlay(ReaderProgressOverlayRenderDeps &deps) {
 #ifdef HAVE_SDL2_TTF
   if (!deps.renderer || !deps.progress.ui.progress_overlay_visible) return;
   auto scale_px = [&](int value) { return deps.scale_px ? deps.scale_px(value) : value; };
+  auto draw_rect = [&](int x, int y, int w, int h, SDL_Color c, bool filled) {
+    if (deps.draw_rect) deps.draw_rect(deps.origin_x + x, deps.origin_y + y, w, h, c, filled);
+  };
 
   ReaderUiState &ui = deps.progress.ui;
   const ReaderMode reader_mode = ui.mode;
@@ -152,8 +155,8 @@ void DrawReaderProgressOverlay(ReaderProgressOverlayRenderDeps &deps) {
                                                    : actual_pct);
   const int panel_h = scale_px(58);
   const int panel_y = deps.layout.screen_h - panel_h - deps.layout.panel_margin_bottom;
-  deps.draw_rect(deps.layout.panel_margin_x,
-                 panel_y,
+  draw_rect(deps.layout.panel_margin_x,
+            panel_y,
                  deps.layout.screen_w - deps.layout.panel_margin_x * 2,
                  panel_h,
                  SDL_Color{0, 0, 0, 178},
@@ -163,17 +166,17 @@ void DrawReaderProgressOverlay(ReaderProgressOverlayRenderDeps &deps) {
   const int bar_y = panel_y + scale_px(30);
   const int bar_w = deps.layout.screen_w - deps.layout.bar_margin_x * 2;
   const int bar_h = scale_px(12);
-  deps.draw_rect(bar_x, bar_y, bar_w, bar_h, SDL_Color{60, 60, 60, 220}, true);
+  draw_rect(bar_x, bar_y, bar_w, bar_h, SDL_Color{60, 60, 60, 220}, true);
   const int actual_fill_source = txt_progress_computing ? txt_layout_pct : actual_pct;
   const int actual_fill_w = std::max(0, std::min(bar_w, (bar_w * actual_fill_source) / 100));
   if (actual_fill_w > 0) {
-    deps.draw_rect(bar_x, bar_y, actual_fill_w, bar_h, SDL_Color{125, 125, 125, 215}, true);
+    draw_rect(bar_x, bar_y, actual_fill_w, bar_h, SDL_Color{125, 125, 125, 215}, true);
   }
   const int fill_w = std::max(0, std::min(bar_w, (bar_w * pct) / 100));
   if (fill_w > 0) {
-    deps.draw_rect(bar_x, bar_y, fill_w, bar_h, SDL_Color{230, 230, 230, 235}, true);
+    draw_rect(bar_x, bar_y, fill_w, bar_h, SDL_Color{230, 230, 230, 235}, true);
   }
-  deps.draw_rect(bar_x, bar_y, bar_w, bar_h, SDL_Color{255, 255, 255, 220}, false);
+  draw_rect(bar_x, bar_y, bar_w, bar_h, SDL_Color{255, 255, 255, 220}, false);
 
   SDL_Color tc{245, 245, 245, 255};
   const std::string pct_text = (pct < 10) ? ("0" + std::to_string(pct)) : std::to_string(pct);
@@ -189,8 +192,8 @@ void DrawReaderProgressOverlay(ReaderProgressOverlayRenderDeps &deps) {
                                                : (std::to_string(pct) + "%"));
   TextCacheEntry *te = deps.get_text_texture ? deps.get_text_texture(percent, tc) : nullptr;
   if (te && te->texture) {
-    SDL_Rect td{deps.layout.screen_w - deps.layout.percent_margin_x - te->w,
-                panel_y + scale_px(8),
+    SDL_Rect td{deps.origin_x + deps.layout.screen_w - deps.layout.percent_margin_x - te->w,
+                deps.origin_y + panel_y + scale_px(8),
                 te->w,
                 te->h};
     SDL_RenderCopy(deps.renderer, te->texture, nullptr, &td);

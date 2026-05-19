@@ -9,6 +9,21 @@
 
 namespace {
 constexpr int kSdlMixMaxVolume = 128;
+constexpr int kBrightnessPercentMax = 100;
+constexpr int kLegacyBrightnessMaxLevel = 8;
+constexpr int kBrightnessSchema = 3;
+
+int LegacyBrightnessLevelToPercent(int level) {
+  const int clamped = std::clamp(level, 0, kLegacyBrightnessMaxLevel);
+  return std::clamp((clamped * kBrightnessPercentMax + kLegacyBrightnessMaxLevel / 2) / kLegacyBrightnessMaxLevel,
+                    0, kBrightnessPercentMax);
+}
+
+int PercentBrightnessToLevel(int percent) {
+  const int clamped = std::clamp(percent, 0, kBrightnessPercentMax);
+  return std::clamp((clamped * kLegacyBrightnessMaxLevel + kBrightnessPercentMax / 2) / kBrightnessPercentMax,
+                    0, kLegacyBrightnessMaxLevel);
+}
 }
 
 ConfigStore::ConfigStore(std::string path) : path_(std::move(path)) {
@@ -42,6 +57,7 @@ void ConfigStore::Save() {
   if (!cfg_.system_language.empty()) out << "system_language=" << cfg_.system_language << "\n";
   out << "system_volume_percent=" << cfg_.system_volume_percent << "\n";
   out << "screen_brightness_level=" << cfg_.screen_brightness_level << "\n";
+  out << "screen_brightness_schema=" << cfg_.screen_brightness_schema << "\n";
   out << "lid_close_screen_off=" << (cfg_.lid_close_screen_off ? 1 : 0) << "\n";
   out << "auto_sleep_interval_schema=" << cfg_.auto_sleep_interval_schema << "\n";
   out << "auto_sleep_interval_index=" << cfg_.auto_sleep_interval_index << "\n";
@@ -60,6 +76,7 @@ void ConfigStore::Load() {
   if (!in) return;
   bool saw_system_volume_percent = false;
   bool saw_screen_brightness_level = false;
+  bool saw_screen_brightness_schema = false;
   bool saw_auto_sleep_interval_schema = false;
   bool saw_auto_sleep_interval_index = false;
   bool saw_txt_background_color = false;
@@ -83,6 +100,9 @@ void ConfigStore::Load() {
     } else if (k == "screen_brightness_level") {
       cfg_.screen_brightness_level = std::stoi(v);
       saw_screen_brightness_level = true;
+    } else if (k == "screen_brightness_schema") {
+      cfg_.screen_brightness_schema = std::stoi(v);
+      saw_screen_brightness_schema = true;
     } else if (k == "lid_close_screen_off") {
       cfg_.lid_close_screen_off = (v == "1");
     } else if (k == "auto_sleep_interval_schema") {
@@ -107,7 +127,18 @@ void ConfigStore::Load() {
   cfg_.sfx_volume = std::clamp(cfg_.sfx_volume, 0, kSdlMixMaxVolume);
   cfg_.system_language = NormalizeSystemLanguageConfigValue(cfg_.system_language);
   cfg_.system_volume_percent = std::clamp(cfg_.system_volume_percent, 0, 100);
-  cfg_.screen_brightness_level = std::clamp(cfg_.screen_brightness_level, 0, 8);
+  if (!saw_screen_brightness_schema || cfg_.screen_brightness_schema < 2) {
+    cfg_.screen_brightness_level = LegacyBrightnessLevelToPercent(cfg_.screen_brightness_level);
+    cfg_.screen_brightness_schema = 2;
+    dirty_ = true;
+  }
+  if (cfg_.screen_brightness_schema < kBrightnessSchema) {
+    cfg_.screen_brightness_level = PercentBrightnessToLevel(cfg_.screen_brightness_level);
+    cfg_.screen_brightness_schema = kBrightnessSchema;
+    dirty_ = true;
+  }
+  cfg_.screen_brightness_level = std::clamp(cfg_.screen_brightness_level, 0, kLegacyBrightnessMaxLevel);
+  cfg_.screen_brightness_schema = kBrightnessSchema;
   if (!saw_auto_sleep_interval_schema && saw_auto_sleep_interval_index && cfg_.auto_sleep_interval_index >= 2) {
     ++cfg_.auto_sleep_interval_index;
   }
@@ -116,9 +147,9 @@ void ConfigStore::Load() {
   cfg_.txt_background_color = std::clamp(cfg_.txt_background_color, 0, 4);
   cfg_.txt_font_color = std::clamp(cfg_.txt_font_color, 0, 4);
   cfg_.txt_font_size_level = std::clamp(cfg_.txt_font_size_level, 0, 4);
-  if (!saw_system_volume_percent || !saw_screen_brightness_level || !saw_auto_sleep_interval_schema ||
-      !saw_auto_sleep_interval_index || !saw_txt_background_color || !saw_txt_font_color ||
-      !saw_txt_font_size_level) {
+  if (!saw_system_volume_percent || !saw_screen_brightness_level || !saw_screen_brightness_schema ||
+      !saw_auto_sleep_interval_schema || !saw_auto_sleep_interval_index || !saw_txt_background_color ||
+      !saw_txt_font_color || !saw_txt_font_size_level) {
     dirty_ = true;
   }
 }

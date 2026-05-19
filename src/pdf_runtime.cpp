@@ -471,6 +471,13 @@ struct PdfRuntime::Impl {
     return target_state.location.x_offset != old_x;
   }
 
+  bool PanVerticalByPixels(int delta_px) {
+    if (!reader.IsOpen() || delta_px == 0) return false;
+    const int old_y = target_state.location.y_offset;
+    target_state.location.y_offset = std::clamp(target_state.location.y_offset + delta_px, 0, MaxYOffset(target_state));
+    return target_state.location.y_offset != old_y;
+  }
+
   bool RenderPixelsForState(const PdfState &state, RenderResult &out, const std::atomic<bool> *cancel) {
     std::vector<unsigned char> rgba;
     int raw_w = 0;
@@ -831,6 +838,22 @@ struct PdfRuntime::Impl {
     SDL_RenderCopy(renderer, source.texture, &layout.src, &layout.dst);
   }
 
+  bool DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) const {
+    if (!renderer || page_index < 0 || page_index >= reader.PageCount()) return false;
+    PdfState page_state = target_state;
+    page_state.location.page_num = page_index;
+    page_state.location.x_offset = 0;
+    page_state.location.y_offset = 0;
+    const VisibleContentSource source = LookupSourceForState(page_state);
+    if (!source.valid || !source.texture) return false;
+    ViewportLayout layout = ComputeViewportLayout(page_state, source.texture_w, source.texture_h);
+    if (!layout.valid) return false;
+    layout.dst.x += dst_rect.x;
+    layout.dst.y += dst_rect.y;
+    SDL_RenderCopy(renderer, source.texture, &layout.src, &layout.dst);
+    return true;
+  }
+
   bool DrawContinuousNextPage(SDL_Renderer *renderer, const PdfState &state) const {
     if (!renderer) return false;
     if (!HasNextPage(state)) return false;
@@ -1106,6 +1129,10 @@ void PdfRuntime::Draw(SDL_Renderer *renderer) const {
   impl_->DrawVisibleSource(renderer, impl_->visible_source, impl_->display_state);
 }
 
+bool PdfRuntime::DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) const {
+  return impl_ ? impl_->DrawPageAt(renderer, page_index, dst_rect) : false;
+}
+
 void PdfRuntime::RotateLeft() {
   if (!impl_ || !impl_->reader.IsOpen()) return;
   impl_->MarkInteraction();
@@ -1186,6 +1213,12 @@ bool PdfRuntime::PanHorizontalByPixels(int delta_px) {
   if (!impl_ || !impl_->reader.IsOpen()) return false;
   impl_->MarkInteraction();
   return impl_->PanHorizontalByPixels(delta_px);
+}
+
+bool PdfRuntime::PanVerticalByPixels(int delta_px) {
+  if (!impl_ || !impl_->reader.IsOpen()) return false;
+  impl_->MarkInteraction();
+  return impl_->PanVerticalByPixels(delta_px);
 }
 
 void PdfRuntime::ScrollByPixels(int delta_px) {

@@ -22,6 +22,7 @@ public:
   void UpdateViewport(int screen_w, int screen_h);
   void Tick();
   void Draw(SDL_Renderer *renderer) const;
+  bool DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) const;
 
   void RotateLeft();
   void RotateRight();
@@ -29,6 +30,7 @@ public:
   void ZoomIn();
   void ResetView();
   bool PanHorizontalByPixels(int delta_px);
+  bool PanVerticalByPixels(int delta_px);
   void ScrollByPixels(int delta_px);
   void JumpByScreen(int direction);
   void SetPage(int page_index);

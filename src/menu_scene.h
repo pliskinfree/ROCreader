@@ -76,6 +76,7 @@ struct MenuSceneRenderContext {
   const OnlineSourceState &online_source_state;
   MenuSceneLayoutMetrics layout;
   SettingsRuntimeRenderServices services;
+  bool show_chrome = true;
 };
 
 struct MenuSceneRenderServiceCallbacks {

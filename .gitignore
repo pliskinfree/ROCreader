@@ -30,6 +30,11 @@ TrimuiBrick/workspace/
 experimental/
 experimental/*.zip
 URL/
+RGDS/Downloads/
+RGDS/dist/
+RGDS/dist_official/
+RGDS/*.log
+RGDS/.rgds_*_files/
 
 !Downloads/
 !Downloads/**

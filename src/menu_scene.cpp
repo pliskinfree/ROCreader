@@ -109,6 +109,10 @@ void MenuScene::HandleInput(const MenuSceneInputContext &context) const {
 }
 
 void MenuScene::Draw(const MenuSceneRenderContext &context) const {
+  MenuSceneLayoutMetrics layout = context.layout;
+  if (context.input_profile == InputProfile::RGDS) {
+    layout.settings_content_offset_y -= 36;
+  }
   SettingsRuntimeRenderDeps deps{
       context.renderer,
       context.ui_assets,
@@ -125,8 +129,9 @@ void MenuScene::Draw(const MenuSceneRenderContext &context) const {
       context.contributor_avatar_state,
       context.version_update_state,
       context.online_source_state,
-      MakeLayout(context.layout),
+      MakeLayout(layout),
       context.services,
+      context.show_chrome,
   };
   DrawSettingsRuntime(deps);
 }

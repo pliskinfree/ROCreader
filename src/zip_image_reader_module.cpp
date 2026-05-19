@@ -34,6 +34,10 @@ void ZipImageReaderModule::Draw(SDL_Renderer *renderer) {
   runtime_.Draw(renderer);
 }
 
+bool ZipImageReaderModule::DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) {
+  return runtime_.DrawPageAt(renderer, page_index, dst_rect);
+}
+
 void ZipImageReaderModule::HandleInput(const InputManager &input, float dt) {
   (void)input;
   (void)dt;
@@ -96,6 +100,10 @@ void ZipImageReaderModule::ResetView() {
 
 bool ZipImageReaderModule::PanHorizontalByPixels(int delta_px) {
   return runtime_.PanHorizontalByPixels(delta_px);
+}
+
+bool ZipImageReaderModule::PanVerticalByPixels(int delta_px) {
+  return runtime_.PanVerticalByPixels(delta_px);
 }
 
 void ZipImageReaderModule::ScrollByPixels(int delta_px) {

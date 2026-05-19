@@ -13,7 +13,27 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
+#endif
+
+#if !defined(_WIN32)
+int AxisDirectionFromValue(int fd, int code, int value) {
+  input_absinfo info{};
+  if (fd >= 0 && ioctl(fd, EVIOCGABS(code), &info) == 0 && info.maximum > info.minimum) {
+    const int center = info.minimum + (info.maximum - info.minimum) / 2;
+    const int range = info.maximum - info.minimum;
+    const int deadzone = std::max(range / 6, info.flat * 2);
+    const int delta = value - center;
+    if (delta < -deadzone) return -1;
+    if (delta > deadzone) return 1;
+    return 0;
+  }
+  constexpr int kFallbackDeadzone = 16000;
+  if (value < -kFallbackDeadzone) return -1;
+  if (value > kFallbackDeadzone) return 1;
+  return 0;
+}
 #endif
 
 const char *ButtonName(Button b) {
@@ -36,6 +56,7 @@ const char *ButtonName(Button b) {
   case Button::VolUp: return "VolUp";
   case Button::VolDown: return "VolDown";
   case Button::Power: return "Power";
+  case Button::Quit: return "Quit";
   default: return "Invalid";
   }
 }
@@ -56,6 +77,7 @@ const char *InputProfileName(InputProfile profile) {
   case InputProfile::H70034xxSp: return "h700-34xxsp";
   case InputProfile::H70035xxH: return "h700-35xxh";
   case InputProfile::TrimuiBrick: return "trimui-brick";
+  case InputProfile::RGDS: return "rgds";
   default: return "unknown";
   }
 }
@@ -106,6 +128,10 @@ void InputManager::BeginFrame(float dt) {
 
 void InputManager::HandleEvent(const SDL_Event &e) {
   if (e.type == SDL_KEYDOWN && !e.key.repeat) {
+    if (input_profile_ == InputProfile::RGDS && e.key.keysym.sym == SDLK_AC_BACK) {
+      SetDown(Button::Menu, true);
+      return;
+    }
     const Button mapped = KeyToButton(e.key.keysym.sym);
     if (ShouldLogProbeKey(e.key.keysym.scancode)) {
       std::cout << "[native_h700] input probe: type=" << SdlEventName(e.type)
@@ -115,9 +141,14 @@ void InputManager::HandleEvent(const SDL_Event &e) {
     }
     SetDown(mapped, true);
   } else if (e.type == SDL_KEYUP) {
+    if (input_profile_ == InputProfile::RGDS && e.key.keysym.sym == SDLK_AC_BACK) {
+      SetDown(Button::Menu, false);
+      return;
+    }
     const Button mapped = KeyToButton(e.key.keysym.sym);
     SetDown(mapped, false);
   } else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
+    if (input_profile_ == InputProfile::RGDS) return;
     const Button mapped = PadToButton(e.cbutton.button);
     if (ShouldLogProbePadButton(e.cbutton.button)) {
       std::cout << "[native_h700] input probe: type=" << SdlEventName(e.type)
@@ -126,8 +157,10 @@ void InputManager::HandleEvent(const SDL_Event &e) {
     }
     SetDown(PadToButton(e.cbutton.button), true);
   } else if (e.type == SDL_CONTROLLERBUTTONUP) {
+    if (input_profile_ == InputProfile::RGDS) return;
     SetDown(PadToButton(e.cbutton.button), false);
   } else if (e.type == SDL_CONTROLLERAXISMOTION) {
+    if (input_profile_ == InputProfile::RGDS) return;
     constexpr int kDeadzone = 16000;
     const int axis = e.caxis.axis;
     const int val = static_cast<int>(e.caxis.value);
@@ -157,6 +190,7 @@ void InputManager::HandleEvent(const SDL_Event &e) {
       SetDown(Button::R2, val > kDeadzone);
     }
   } else if (e.type == SDL_JOYBUTTONDOWN) {
+    if (input_profile_ == InputProfile::RGDS) return;
     const Button mapped = JoyButtonToButton(e.jbutton.button);
     if (ShouldLogProbeJoyButton(e.jbutton.button)) {
       std::cout << "[native_h700] input probe: type=" << SdlEventName(e.type)
@@ -165,8 +199,10 @@ void InputManager::HandleEvent(const SDL_Event &e) {
     }
     SetDown(JoyButtonToButton(e.jbutton.button), true);
   } else if (e.type == SDL_JOYBUTTONUP) {
+    if (input_profile_ == InputProfile::RGDS) return;
     SetDown(JoyButtonToButton(e.jbutton.button), false);
   } else if (e.type == SDL_JOYHATMOTION) {
+    if (input_profile_ == InputProfile::RGDS) return;
     const uint8_t v = e.jhat.value;
     if (ShouldLogProbeHat(e.jhat.hat, v)) {
       std::cout << "[native_h700] input probe: type=" << SdlEventName(e.type)
@@ -178,6 +214,7 @@ void InputManager::HandleEvent(const SDL_Event &e) {
     SetDown(Button::Left, (v & SDL_HAT_LEFT) != 0);
     SetDown(Button::Right, (v & SDL_HAT_RIGHT) != 0);
   } else if (e.type == SDL_JOYAXISMOTION) {
+    if (input_profile_ == InputProfile::RGDS) return;
     constexpr int kDeadzone = 16000;
     const int axis = e.jaxis.axis;
     const int val = static_cast<int>(e.jaxis.value);
@@ -477,6 +514,7 @@ bool InputManager::ParseButtonName(const std::string &raw, Button &out) {
   else if (n == "VOLUP" || n == "VOLUMEUP") out = Button::VolUp;
   else if (n == "VOLDOWN" || n == "VOLUMEDOWN") out = Button::VolDown;
   else if (n == "POWER") out = Button::Power;
+  else if (n == "QUIT" || n == "RG") out = Button::Quit;
   else if (n == "NONE" || n == "DISABLED" || n == "INVALID") out = InvalidButton();
   else return false;
   return true;
@@ -601,17 +639,68 @@ void InputManager::PollLinuxInputDevices() {
       input_event event{};
       const ssize_t n = read(fd, &event, sizeof(event));
       if (n == static_cast<ssize_t>(sizeof(event))) {
-        if (event.type != EV_KEY) continue;
-        const int code = static_cast<int>(event.code);
-        const bool down = event.value != 0;
-        if (full_input_log_enabled_ && down && MarkProbeLogged(probe_linux_key_seen_, code)) {
-          std::cout << "[native_h700] input probe: type=LINUX_EV_KEY"
-                    << " code=" << code
-                    << " value=" << event.value
-                    << " mapped=" << (code == KEY_POWER ? "Power" : "Invalid") << "\n";
+        if (event.type == EV_ABS && input_profile_ == InputProfile::RGDS) {
+          const int code = static_cast<int>(event.code);
+          const int value = static_cast<int>(event.value);
+          if (code == ABS_HAT0X) {
+            SetDown(Button::Left, value < 0);
+            SetDown(Button::Right, value > 0);
+          } else if (code == ABS_HAT0Y) {
+            SetDown(Button::Up, value < 0);
+            SetDown(Button::Down, value > 0);
+          } else if (code == ABS_X) {
+            const int dir = AxisDirectionFromValue(fd, code, value);
+            SetDown(Button::Left, dir < 0);
+            SetDown(Button::Right, dir > 0);
+          } else if (code == ABS_Y) {
+            const int dir = AxisDirectionFromValue(fd, code, value);
+            SetDown(Button::Up, dir < 0);
+            SetDown(Button::Down, dir > 0);
+          } else if (code == ABS_RX) {
+            const int dir = AxisDirectionFromValue(fd, code, value);
+            SetDown(Button::Y, dir < 0);
+            SetDown(Button::A, dir > 0);
+          } else if (code == ABS_RY) {
+            const int dir = AxisDirectionFromValue(fd, code, value);
+            SetDown(Button::X, dir < 0);
+            SetDown(Button::B, dir > 0);
+          }
+          continue;
         }
-        if (code == KEY_POWER) {
-          SetDown(Button::Power, down);
+
+        if (event.type == EV_KEY) {
+          const int code = static_cast<int>(event.code);
+          const bool down = event.value != 0;
+          Button mapped = InvalidButton();
+          if (input_profile_ == InputProfile::RGDS) {
+            switch (code) {
+              case 304: mapped = Button::A; break;
+              case 305: mapped = Button::B; break;
+              case 307: mapped = Button::X; break;
+              case 306: mapped = Button::Y; break;
+              case 308: mapped = Button::L1; break;
+              case 309: mapped = Button::R1; break;
+              case 314: mapped = Button::L2; break;
+              case 315: mapped = Button::R2; break;
+              case 310: mapped = Button::Select; break;
+              case 311: mapped = Button::Start; break;
+              case 312: mapped = Button::Quit; break;
+              case KEY_POWER: mapped = Button::Power; break;
+              case KEY_BACK: mapped = Button::Menu; break;
+              case KEY_VOLUMEUP: mapped = Button::VolUp; break;
+              case KEY_VOLUMEDOWN: mapped = Button::VolDown; break;
+              default: break;
+            }
+          } else if (code == KEY_POWER) {
+            mapped = Button::Power;
+          }
+          if (full_input_log_enabled_ && down && MarkProbeLogged(probe_linux_key_seen_, code)) {
+            std::cout << "[native_h700] input probe: type=LINUX_EV_KEY"
+                      << " code=" << code
+                      << " value=" << event.value
+                      << " mapped=" << ButtonNameOrInvalid(mapped) << "\n";
+          }
+          SetDown(mapped, down);
         }
         continue;
       }

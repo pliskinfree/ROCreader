@@ -34,6 +34,10 @@ void PdfReaderModule::Draw(SDL_Renderer *renderer) {
   runtime_.Draw(renderer);
 }
 
+bool PdfReaderModule::DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) {
+  return runtime_.DrawPageAt(renderer, page_index, dst_rect);
+}
+
 void PdfReaderModule::HandleInput(const InputManager &input, float dt) {
   (void)input;
   (void)dt;
@@ -95,6 +99,10 @@ void PdfReaderModule::ResetView() {
 
 bool PdfReaderModule::PanHorizontalByPixels(int delta_px) {
   return runtime_.PanHorizontalByPixels(delta_px);
+}
+
+bool PdfReaderModule::PanVerticalByPixels(int delta_px) {
+  return runtime_.PanVerticalByPixels(delta_px);
 }
 
 void PdfReaderModule::ScrollByPixels(int delta_px) {

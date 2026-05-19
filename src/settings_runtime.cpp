@@ -224,22 +224,24 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
     SDL_RenderCopy(deps.renderer, tex, nullptr, &dst);
   };
 
-  if (deps.ui_assets.top_status_bar) {
-    draw_native_topmost(deps.ui_assets.top_status_bar, 0, 0);
-  } else {
-    deps.services.draw_rect(0, deps.layout.top_bar_y, deps.layout.screen_w, deps.layout.top_bar_h, SDL_Color{8, 10, 14, 255},
-                   true);
-  }
+  if (deps.show_chrome) {
+    if (deps.ui_assets.top_status_bar) {
+      draw_native_topmost(deps.ui_assets.top_status_bar, 0, 0);
+    } else {
+      deps.services.draw_rect(0, deps.layout.top_bar_y, deps.layout.screen_w, deps.layout.top_bar_h, SDL_Color{8, 10, 14, 255},
+                     true);
+    }
 
-  if (deps.services.draw_volume_overlay) deps.services.draw_volume_overlay();
+    if (deps.services.draw_volume_overlay) deps.services.draw_volume_overlay();
 
-  if (deps.ui_assets.bottom_hint_bar) {
-    int bw = 0;
-    int bh = 0;
-    deps.services.get_texture_size(deps.ui_assets.bottom_hint_bar, bw, bh);
-    draw_native_topmost(deps.ui_assets.bottom_hint_bar, 0, deps.layout.screen_h - bh);
-  } else {
-    deps.services.draw_rect(0, deps.layout.bottom_bar_y, deps.layout.screen_w, deps.layout.bottom_bar_h,
-                   SDL_Color{8, 10, 14, 255}, true);
+    if (deps.ui_assets.bottom_hint_bar) {
+      int bw = 0;
+      int bh = 0;
+      deps.services.get_texture_size(deps.ui_assets.bottom_hint_bar, bw, bh);
+      draw_native_topmost(deps.ui_assets.bottom_hint_bar, 0, deps.layout.screen_h - bh);
+    } else {
+      deps.services.draw_rect(0, deps.layout.bottom_bar_y, deps.layout.screen_w, deps.layout.bottom_bar_h,
+                     SDL_Color{8, 10, 14, 255}, true);
+    }
   }
 }

@@ -195,7 +195,9 @@ void ApplyAction(const rgds::InputAction &action,
                  int &menu_selected,
                  int &reader_menu_selected,
                  int &page_offset,
-                 bool &running) {
+                 bool &running,
+                 uint32_t &menu_toggle_guard_until) {
+  const uint32_t now = SDL_GetTicks();
   if (action.exit_app) {
     running = false;
     return;
@@ -231,9 +233,15 @@ void ApplyAction(const rgds::InputAction &action,
   }
 
   if (action.menu) {
+    if (!SDL_TICKS_PASSED(now, menu_toggle_guard_until)) return;
     if (mode == DemoMode::Reader) {
       mode = DemoMode::ReaderMenu;
       focus = Focus::ReaderMenu;
+      menu_toggle_guard_until = now + 240;
+    } else if (mode == DemoMode::ReaderMenu) {
+      mode = DemoMode::Reader;
+      focus = Focus::ReaderContent;
+      menu_toggle_guard_until = now + 240;
     }
     return;
   }
@@ -304,6 +312,7 @@ int main(int, char **) {
   int page_offset = 0;
   bool boot_phase = true;
   bool running = true;
+  uint32_t menu_toggle_guard_until = 0;
 
   rgds::EvdevInput evdev;
   evdev.OpenAll();
@@ -318,14 +327,14 @@ int main(int, char **) {
                   << " scancode=" << event.key.keysym.scancode << "\n";
         const rgds::InputAction action = ActionFromKey(event.key);
         ApplyAction(action, mode, focus, focus_flash_until, shelf_selected, menu_selected,
-                    reader_menu_selected, page_offset, running);
+                    reader_menu_selected, page_offset, running, menu_toggle_guard_until);
       }
     }
 
     rgds::InputAction evdev_action;
     if (evdev.Poll(evdev_action)) {
       ApplyAction(evdev_action, mode, focus, focus_flash_until, shelf_selected, menu_selected,
-                  reader_menu_selected, page_offset, running);
+                  reader_menu_selected, page_offset, running, menu_toggle_guard_until);
     }
 
     if (boot_phase) {

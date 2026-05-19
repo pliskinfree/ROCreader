@@ -1395,7 +1395,7 @@ with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
             zf.write(full, rel)
 PY
 
-  if [ "$TRIMUI_BRICK_LAYOUT" != "1" ]; then
+  if [ "${LEGACY_DOWNLOADS_MIRROR:-1}" = "1" ] && [ "$TRIMUI_BRICK_LAYOUT" != "1" ]; then
     LEGACY_DOWNLOADS_ROOT="$SELF_DIR/Downloads"
     LEGACY_ZIPFILE="$LEGACY_DOWNLOADS_ROOT/$(basename "$ZIPFILE")"
     if [ "$DOWNLOADS_ROOT" != "$LEGACY_DOWNLOADS_ROOT" ]; then

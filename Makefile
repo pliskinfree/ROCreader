@@ -15,7 +15,11 @@ APP_SRCS := \
   src/app_config_bridge.cpp \
   src/scene_manager.cpp \
   src/app_language.cpp \
-  src/app_stores.cpp
+  src/app_stores.cpp \
+  src/rgds_runtime.cpp \
+  src/rgds_interaction.cpp \
+  src/rgds_reader_layout.cpp \
+  src/rgds_render.cpp
 
 CORE_SRCS := \
   src/storage_paths.cpp \

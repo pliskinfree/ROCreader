@@ -35,6 +35,7 @@ public:
   AppFrameTiming BeginFrame(uint32_t &previous_ticks) const;
   void ResetFrameClock(uint32_t &previous_ticks) const;
   void BeginDraw() const;
+  void BeginTopDraw() const;
   void Present() const;
 
   void StartSceneFlash();

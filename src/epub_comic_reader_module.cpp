@@ -32,6 +32,10 @@ void EpubComicReaderModule::Draw(SDL_Renderer *renderer) {
   runtime_.Draw(renderer);
 }
 
+bool EpubComicReaderModule::DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) {
+  return runtime_.DrawPageAt(renderer, page_index, dst_rect);
+}
+
 void EpubComicReaderModule::HandleInput(const InputManager &input, float dt) {
   (void)input;
   (void)dt;
@@ -93,6 +97,10 @@ void EpubComicReaderModule::ResetView() {
 
 bool EpubComicReaderModule::PanHorizontalByPixels(int delta_px) {
   return runtime_.PanHorizontalByPixels(delta_px);
+}
+
+bool EpubComicReaderModule::PanVerticalByPixels(int delta_px) {
+  return runtime_.PanVerticalByPixels(delta_px);
 }
 
 void EpubComicReaderModule::ScrollByPixels(int delta_px) {

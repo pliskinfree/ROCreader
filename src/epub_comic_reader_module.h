@@ -13,6 +13,7 @@ public:
   void UpdateViewport(int w, int h) override;
   void Tick(float dt) override;
   void Draw(SDL_Renderer *renderer) override;
+  bool DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) override;
   void HandleInput(const InputManager &input, float dt) override;
   ReaderProgress Progress() const override;
   void RestoreProgress(const ReaderProgress &progress) override;
@@ -27,6 +28,7 @@ public:
   void ZoomIn() override;
   void ResetView() override;
   bool PanHorizontalByPixels(int delta_px) override;
+  bool PanVerticalByPixels(int delta_px) override;
   void ScrollByPixels(int delta_px) override;
   void JumpByScreen(int direction) override;
   void SetPage(int page_index) override;

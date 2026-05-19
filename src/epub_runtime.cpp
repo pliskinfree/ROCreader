@@ -137,6 +137,11 @@ void EpubRuntime::Draw(SDL_Renderer *renderer) const {
   else impl_->comic_runtime.Draw(renderer);
 }
 
+bool EpubRuntime::DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) const {
+  if (!impl_ || impl_->flow_mode) return false;
+  return impl_->comic_runtime.DrawPageAt(renderer, page_index, dst_rect);
+}
+
 void EpubRuntime::RotateLeft() {
   if (!impl_) return;
   if (impl_->flow_mode) impl_->flow_reader.RotateLeft();
@@ -183,6 +188,11 @@ void EpubRuntime::SetFlowColors(SDL_Color background_color, SDL_Color font_color
 bool EpubRuntime::PanHorizontalByPixels(int delta_px) {
   if (!impl_ || impl_->flow_mode) return false;
   return impl_->comic_runtime.PanHorizontalByPixels(delta_px);
+}
+
+bool EpubRuntime::PanVerticalByPixels(int delta_px) {
+  if (!impl_ || impl_->flow_mode) return false;
+  return impl_->comic_runtime.PanVerticalByPixels(delta_px);
 }
 
 void EpubRuntime::ScrollByPixels(int delta_px) {

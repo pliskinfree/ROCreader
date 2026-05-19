@@ -34,6 +34,18 @@ int ColorLuma(SDL_Color color) { return color.r * 299 + color.g * 587 + color.b 
 int ScalePx(float scale, int value) {
   return std::max(1, static_cast<int>(std::round(static_cast<float>(value) * std::max(0.1f, scale))));
 }
+
+void SyncSelectedOptionForRow(TxtSettingsState &state) {
+  if (state.selected_row == 0) {
+    state.selected_option = ClampTxtColorIndex(state.background_color);
+  } else if (state.selected_row == 1) {
+    state.selected_option = ClampTxtColorIndex(state.font_color);
+  } else if (state.selected_row == 2) {
+    state.selected_option = std::clamp(state.selected_option, 0, 1);
+  } else {
+    state.selected_option = 0;
+  }
+}
 } // namespace
 
 int ClampTxtColorIndex(int value) { return std::clamp(value, 0, kColorOptionCount - 1); }
@@ -74,35 +86,23 @@ bool HandleTxtSettingsInput(const InputManager &input, TxtSettingsState &state,
 
   if (input.IsJustPressed(Button::Up) || input.IsRepeated(Button::Up)) {
     state.selected_row = (state.selected_row - 1 + kSelectableRowCount) % kSelectableRowCount;
-    if (state.selected_row == kTranscodeRow) state.selected_option = 0;
+    SyncSelectedOptionForRow(state);
     return true;
   }
 
   if (input.IsJustPressed(Button::Down) || input.IsRepeated(Button::Down)) {
     state.selected_row = (state.selected_row + 1) % kSelectableRowCount;
-    if (state.selected_row == kTranscodeRow) state.selected_option = 0;
+    SyncSelectedOptionForRow(state);
     return true;
   }
 
   if (state.selected_row == 0 || state.selected_row == 1) {
     if (input.IsJustPressed(Button::Left) || input.IsRepeated(Button::Left)) {
       state.selected_option = ClampTxtColorIndex(state.selected_option - 1);
-      if (state.selected_row == 0 && callbacks.set_background_color) {
-        return callbacks.set_background_color(state.selected_option, state);
-      }
-      if (state.selected_row == 1 && callbacks.set_font_color) {
-        return callbacks.set_font_color(state.selected_option, state);
-      }
       return true;
     }
     if (input.IsJustPressed(Button::Right) || input.IsRepeated(Button::Right)) {
       state.selected_option = ClampTxtColorIndex(state.selected_option + 1);
-      if (state.selected_row == 0 && callbacks.set_background_color) {
-        return callbacks.set_background_color(state.selected_option, state);
-      }
-      if (state.selected_row == 1 && callbacks.set_font_color) {
-        return callbacks.set_font_color(state.selected_option, state);
-      }
       return true;
     }
     if (input.IsJustPressed(Button::A)) {

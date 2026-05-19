@@ -57,6 +57,10 @@ void EpubReaderModule::Draw(SDL_Renderer *renderer) {
   if (active_module_) active_module_->Draw(renderer);
 }
 
+bool EpubReaderModule::DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) {
+  return active_module_ ? active_module_->DrawPageAt(renderer, page_index, dst_rect) : false;
+}
+
 void EpubReaderModule::HandleInput(const InputManager &input, float dt) {
   if (active_module_) active_module_->HandleInput(input, dt);
 }
@@ -114,6 +118,10 @@ void EpubReaderModule::ResetView() {
 
 bool EpubReaderModule::PanHorizontalByPixels(int delta_px) {
   return active_module_ ? active_module_->PanHorizontalByPixels(delta_px) : false;
+}
+
+bool EpubReaderModule::PanVerticalByPixels(int delta_px) {
+  return active_module_ ? active_module_->PanVerticalByPixels(delta_px) : false;
 }
 
 void EpubReaderModule::ScrollByPixels(int delta_px) {

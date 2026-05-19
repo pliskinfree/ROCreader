@@ -5,7 +5,7 @@ RGDS is a dedicated RK3568 dual-screen target, not an H700 layout variant.
 Hardware facts verified by `roc_matrix_probe.sh`:
 
 - SoC: Rockchip RK3568, 4x Cortex-A55, aarch64.
-- GPU path: Mali/OpenGL ES is present. The preferred RGDS route is SDL2 on
+- GPU path: Mali/OpenGL ES is present. The locked RGDS route is SDL2 on
   Wayland with Weston kept alive; direct DRM remains a diagnostic fallback.
 - Memory: about 3 GB.
 - OS: Buildroot 2024.02, Linux 6.1, glibc 2.41.
@@ -29,10 +29,14 @@ Hardware facts verified by `roc_matrix_probe.sh`:
   - `Select` switches focus between top and bottom.
   - Focus change shows a short full-screen light-blue focus frame.
 - Reader:
-  - Reader modules render into a virtual `640x960` vertical canvas.
-  - Top screen presents the upper half.
-  - Bottom screen presents the lower half.
-  - Rotation and zoom are disabled for RGDS reader mode.
+  - At rotation `0/180`, reader modules render into a virtual `640x960` vertical canvas.
+  - Top screen presents the upper half; bottom screen presents the lower half.
+  - In PDF, ZIP/CBZ, and EPUB comic-image modes, rotation `90/270` switches to a
+    virtual `1280x480` horizontal spread canvas. The two 640x480 panels become
+    left/right pages, and D-pad page movement jumps by spread instead of scrolling.
+  - Pure text and EPUB flow/mixed text keep rotation and zoom disabled on RGDS.
+  - Image reader modes keep zoom enabled; when zoomed in vertical layout, the D-pad
+    pans the image horizontally and vertically.
   - `Menu` opens the reader menu on the bottom screen and locks focus there.
   - Progress and chapter overlays appear on the bottom screen only, and only outside the reader menu.
 
@@ -55,28 +59,38 @@ Hardware facts verified by `roc_matrix_probe.sh`:
 - `src/rgds_dual_screen_runtime.*`: RGDS-specific SDL dual-screen runtime abstraction.
 - `src/rgds_platform_demo.cpp`: standalone RGDS dual-screen platform prototype.
 
-## Current RGDS Runtime Direction
+## Locked RGDS Runtime Direction
 
 The raw DRM route proves that both DSI panels can be driven independently, but
 the current dumb-buffer renderer flickers too visibly for a final reader. The
-preferred route is now:
+official runtime route is locked to:
 
 1. Keep Weston running.
 2. Launch SDL2 with `SDL_VIDEODRIVER=wayland`.
 3. Let Weston own page flips and composition.
-4. Use either two 640x480 SDL windows or one compositor-spanning surface if
-   Weston exposes the two panels as one usable desktop area.
-5. Keep the RGDS reader model as a virtual 640x960 canvas split into top and
-   bottom 640x480 surfaces.
+4. Use one compositor-spanning SDL window on Weston. The final RGDS path is
+   fixed to a single borderless `1280x480` surface, not two windows.
+5. Keep the RGDS reader model layout-driven: `640x960` vertical split for normal
+   holding, and `1280x480` horizontal spread only for image readers rotated to
+   `90/270`.
 6. Read keys through the collected RGDS mapping.
 
-Build the current RGDS reader shell with:
+This route was verified on hardware by `rgds_weston_spanning_probe`: Weston
+reported two `640x480` displays at bounds `0,0` and `640,0`; a single borderless
+`1280x480` SDL/Wayland window stayed visible across both panels with the top
+panel blue and the bottom panel red for the full run. Do not re-open the
+dual-window display route for the official app.
+
+Build the current RGDS official package with:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File RGDS\build_rgds_reader.ps1
+powershell -ExecutionPolicy Bypass -File RGDS\build_rgds_official.ps1
 ```
 
-Run `rgds_reader.sh` on the device.
+Generated artifacts are written under `RGDS\dist_official\` and `RGDS\Downloads\`
+and are not meant to be checked in.
+
+Run `ROCreader_RGDS.sh` on the device.
 
 ## Build Probe
 
@@ -88,7 +102,8 @@ This copies `rgds_sdl_dualscreen_probe` to `E:\Roms\APPS` when the SD card is mo
 
 ## Build Platform Demo
 
-The platform demo is intentionally separate from the main reader while the RGDS architecture is being proven.
+The platform demo is now a historical/diagnostic prototype. The official app
+uses the locked Weston spanning route above.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File RGDS\build_rgds_platform_demo.ps1

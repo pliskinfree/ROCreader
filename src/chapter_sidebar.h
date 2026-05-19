@@ -21,6 +21,8 @@ struct ChapterSidebarRenderDeps {
   int screen_w = 0;
   int screen_h = 0;
   int sidebar_w = 0;
+  int origin_x = 0;
+  int origin_y = 0;
   std::function<int(int)> scale_px;
   std::function<void(int, int, int, int, SDL_Color, bool)> draw_rect;
   std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_text_texture;

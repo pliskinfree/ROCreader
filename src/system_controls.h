@@ -2,6 +2,7 @@
 
 #include "filesystem_compat.h"
 #include <string>
+#include <vector>
 
 struct SystemControlValue {
   bool available = false;
@@ -26,6 +27,12 @@ public:
   bool AdjustBrightness(int delta_steps, SystemControlLevels &levels);
 
 private:
+  struct BrightnessTarget {
+    std::filesystem::path brightness_path;
+    std::filesystem::path max_brightness_path;
+    int max_brightness = 0;
+  };
+
   static int ClampVolumeLevel(int level);
   static int ClampBrightnessLevel(int level);
   static int PercentToVolumeLevel(int percent);
@@ -52,6 +59,11 @@ private:
   bool TryReadVolumePercent(const std::string &control, int &out_percent) const;
   bool TrySetVolumePercent(const std::string &control, int percent);
   void DiscoverBrightnessPaths();
+  bool AddBrightnessTarget(const std::filesystem::path &brightness_path,
+                           const std::filesystem::path &max_brightness_path,
+                           int max_brightness,
+                           const std::string &source);
+  bool WriteBrightnessTargets(int requested_level, int &targets_written, int &targets_attempted);
 
   bool prefer_system_volume_ = false;
   bool volume_level_initialized_ = false;
@@ -61,5 +73,6 @@ private:
   std::string working_mixer_elem_;
   std::filesystem::path brightness_path_;
   std::filesystem::path brightness_max_path_;
+  std::vector<BrightnessTarget> brightness_targets_;
   std::filesystem::path disp_device_path_ = "/dev/disp";
 };

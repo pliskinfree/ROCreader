@@ -52,6 +52,7 @@ struct ReaderSceneInputDeps {
   ZipImageRuntime &zip_image_runtime;
   float dt = 0.0f;
   ReaderSceneProgressInputConfig progress_input;
+  bool rgds_mode = false;
   bool &transient_message_dismissed_this_frame;
   ReaderSceneInputServices services;
 };
@@ -100,7 +101,11 @@ struct ReaderSceneRenderDeps {
   SDL_Color txt_font_color{255, 255, 255, 255};
   int chapter_sidebar_w = 0;
   ReaderSceneProgressOverlayMetrics progress_overlay_metrics;
+  SDL_Rect overlay_viewport{0, 0, 0, 0};
+  bool overlay_viewport_enabled = false;
+  bool rgds_mode = false;
   ReaderSceneRenderServices services;
+  bool tick_modules = true;
 };
 
 class ReaderScene {

@@ -16,6 +16,7 @@ struct NativeConfig {
   std::string system_language = "zh";
   int system_volume_percent = 50;
   int screen_brightness_level = 8;
+  int screen_brightness_schema = 3;
   bool lid_close_screen_off = true;
   int auto_sleep_interval_index = 2;
   int auto_sleep_interval_schema = 2;

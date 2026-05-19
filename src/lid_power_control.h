@@ -13,6 +13,7 @@ public:
   bool ScriptAvailable() const;
   bool TriggerAutoIfEnabled() const;
   bool TriggerPowerKeyScreenOff(InputProfile input_profile) const;
+  bool TriggerScreenOn(InputProfile input_profile) const;
   std::string PowerScriptPath() const;
 
 private:

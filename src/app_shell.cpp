@@ -47,8 +47,28 @@ void AppShell::BeginDraw() const {
   SDL_RenderClear(context_->renderer);
 }
 
+void AppShell::BeginTopDraw() const {
+  if (!context_ || !context_->renderer || !context_->layout) return;
+  if (context_->rgds_dual_screen && context_->rgds_bottom_renderer == context_->renderer) {
+    SDL_Rect top_viewport{0, 0, context_->layout->screen_w, context_->layout->screen_h};
+    SDL_RenderSetViewport(context_->renderer, &top_viewport);
+  } else {
+    SDL_RenderSetViewport(context_->renderer, nullptr);
+  }
+}
+
 void AppShell::Present() const {
   if (!context_ || !context_->renderer) return;
+  SDL_RenderSetViewport(context_->renderer, nullptr);
+  if (context_->rgds_dual_screen && context_->rgds_bottom_renderer) {
+    if (context_->rgds_bottom_renderer == context_->renderer) {
+      SDL_RenderPresent(context_->renderer);
+      return;
+    }
+    if (context_->rgds_bottom_renderer != context_->renderer) SDL_RenderPresent(context_->rgds_bottom_renderer);
+    SDL_RenderPresent(context_->renderer);
+    return;
+  }
   SDL_RenderPresent(context_->renderer);
 }
 

@@ -9,6 +9,7 @@ namespace {
 struct RowSpec {
   const char *label;
   const SystemControlValue *value;
+  bool show_percent;
 };
 
 constexpr int kControlRowCount = 2;
@@ -34,8 +35,8 @@ constexpr std::array<uint32_t, 6> kSleepIntervalValuesMs = {{
 }};
 std::array<RowSpec, kControlRowCount> BuildRows(const SystemSettingsState &state) {
   return {{
-      {LocalizedAppText(state.system_language_index, AppTextId::SystemKeySound), &state.levels.volume},
-      {LocalizedAppText(state.system_language_index, AppTextId::SystemBrightness), &state.levels.brightness},
+      {LocalizedAppText(state.system_language_index, AppTextId::SystemKeySound), &state.levels.volume, true},
+      {LocalizedAppText(state.system_language_index, AppTextId::SystemBrightness), &state.levels.brightness, true},
   }};
 }
 
@@ -356,11 +357,14 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
       SDL_RenderCopy(deps.renderer, plus_entry->texture, nullptr, &dst);
     }
 
+    const bool show_percent = rows[static_cast<size_t>(i)].show_percent;
     const std::string value_text =
-        value.available ? std::to_string((std::clamp(value.level, 0, std::max(1, value.max_level)) * 100 +
-                                          std::max(1, value.max_level) / 2) /
-                                         std::max(1, value.max_level))
-                        : std::string();
+        value.available
+            ? (show_percent ? std::to_string((std::clamp(value.level, 0, std::max(1, value.max_level)) * 100 +
+                                               std::max(1, value.max_level) / 2) /
+                                              std::max(1, value.max_level))
+                            : std::to_string(std::clamp(value.level, 0, std::max(1, value.max_level))))
+            : std::string();
     if (!value_text.empty()) {
       if (TextCacheEntry *value_entry = get_text_entry(value_text, text_color);
         value_entry && value_entry->texture) {
