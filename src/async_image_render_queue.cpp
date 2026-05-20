@@ -1,5 +1,7 @@
 #include "async_image_render_queue.h"
 
+#include "image_runtime_tuning.h"
+
 #include <cmath>
 #include <utility>
 
@@ -47,7 +49,9 @@ bool RequestedDiffersFromJob(const AsyncImageRenderJob &requested,
 
 int AsyncImageRenderQueue::WorkerMain(void *userdata) {
   auto *impl = static_cast<AsyncImageRenderQueue::Impl *>(userdata);
-  SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
+  SDL_SetThreadPriority(image_runtime_tuning::NormalRenderThreadPriority()
+                            ? SDL_THREAD_PRIORITY_NORMAL
+                            : SDL_THREAD_PRIORITY_LOW);
 
   for (;;) {
     SDL_LockMutex(impl->mutex);

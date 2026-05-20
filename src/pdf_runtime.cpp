@@ -1,6 +1,7 @@
 #include "pdf_runtime.h"
 
 #include "async_image_render_queue.h"
+#include "image_runtime_tuning.h"
 #include "pdf_reader.h"
 
 #include <SDL.h>
@@ -20,7 +21,7 @@ namespace {
 constexpr float kMinZoom = 0.25f;
 constexpr float kMaxZoom = 6.0f;
 constexpr float kZoomStep = 0.1f;
-constexpr size_t kTextureCacheSize = 3;
+constexpr size_t kTextureCacheSize = 10;
 constexpr Uint32 kVisualRenderThrottleMs = 75;
 constexpr Uint32 kIdlePrefetchDelayMs = 220;
 constexpr int kDefaultMaxTextureDim = 4096;
@@ -207,6 +208,8 @@ struct PdfRuntime::Impl {
   PdfState requested_state;
   PdfState prefetched_state;
   AsyncImageRenderQueue render_queue;
+  AsyncImageRenderQueue prefetch_queue;
+  bool dedicated_prefetch_queue = false;
   int preferred_prefetch_dir = 1;
   bool visual_render_delay_active = false;
   Uint32 visual_render_due_ms = 0;
@@ -218,6 +221,7 @@ struct PdfRuntime::Impl {
 
   ~Impl() {
     render_queue.Shutdown();
+    prefetch_queue.Shutdown();
     DestroyTexture();
     ClearTextureCache();
     DestroyReusableTexture();
@@ -266,6 +270,11 @@ struct PdfRuntime::Impl {
     for (auto &entry : texture_cache) {
       DestroyCachedTexture(entry);
     }
+  }
+
+  size_t ActiveTextureCacheSlots() const {
+    return static_cast<size_t>(image_runtime_tuning::TextureCacheSlots(
+        3, static_cast<int>(texture_cache.size())));
   }
 
   bool ClampPage(LocationState &location) const {
@@ -541,7 +550,8 @@ struct PdfRuntime::Impl {
   }
 
   int FindCacheEntryForVisual(const PdfState &state) const {
-    for (size_t i = 0; i < texture_cache.size(); ++i) {
+    const size_t active_slots = ActiveTextureCacheSlots();
+    for (size_t i = 0; i < active_slots; ++i) {
       if (texture_cache[i].valid && texture_cache[i].state.SameVisualState(state)) {
         return static_cast<int>(i);
       }
@@ -580,21 +590,25 @@ struct PdfRuntime::Impl {
     if (PdfLowMemoryMode()) return false;
     if (!reader.IsOpen()) return false;
     if (!display_valid || !visible_source.valid) return false;
-    if (!display_state.SameVisualState(target_state)) return false;
-    if (request_active || prefetch_active || visual_render_delay_active) return false;
-    if (!SDL_TICKS_PASSED(now, last_interaction_ticks + kIdlePrefetchDelayMs)) return false;
+    if (prefetch_active) return false;
+    const bool can_prefetch_during_target =
+        dedicated_prefetch_queue && image_runtime_tuning::DedicatedPrefetchThreadEnabled();
+    if (!can_prefetch_during_target && !display_state.SameVisualState(target_state)) return false;
+    if (!can_prefetch_during_target && (request_active || visual_render_delay_active)) return false;
+    if (!can_prefetch_during_target &&
+        !SDL_TICKS_PASSED(now, last_interaction_ticks +
+                                   image_runtime_tuning::IdlePrefetchDelayMs(kIdlePrefetchDelayMs))) {
+      return false;
+    }
 
-    PdfState candidate = target_state;
-    candidate.location.page_num += (preferred_prefetch_dir >= 0) ? 1 : -1;
-    candidate.location.y_offset = 0;
-    if (candidate.location.page_num < 0 || candidate.location.page_num >= reader.PageCount()) return false;
-    return !HasVisualTextureForState(candidate);
+    return FindPrefetchPageOffset(preferred_prefetch_dir) != 0;
   }
 
   int SelectCacheVictim() const {
     int victim = 0;
     uint64_t best_stamp = UINT64_MAX;
-    for (size_t i = 0; i < texture_cache.size(); ++i) {
+    const size_t active_slots = ActiveTextureCacheSlots();
+    for (size_t i = 0; i < active_slots; ++i) {
       if (!texture_cache[i].valid) return static_cast<int>(i);
       if (texture_cache[i].stamp < best_stamp) {
         best_stamp = texture_cache[i].stamp;
@@ -680,25 +694,58 @@ struct PdfRuntime::Impl {
   }
 
   bool ShouldPrimeAdjacentPage(const PdfState &state, int dir) const {
+    const int warmup_extent =
+        ViewportFlowExtent(state) * image_runtime_tuning::PrefetchViewportScreens(1);
     if (dir >= 0) {
       if (!HasNextPage(state)) return false;
-      const int warmup_start = std::max(0, TransitionStartYOffset(state) - ViewportFlowExtent(state));
+      const int warmup_start = std::max(0, TransitionStartYOffset(state) - warmup_extent);
       return state.location.y_offset >= warmup_start;
     }
     if (!HasPrevPage(state)) return false;
-    return state.location.y_offset <= ViewportFlowExtent(state);
+    return state.location.y_offset <= warmup_extent;
+  }
+
+  bool QueuePrefetchPageOffsetLocked(int page_offset) {
+    if (page_offset == 0) return false;
+    PdfState candidate = target_state;
+    candidate.location.page_num += page_offset;
+    candidate.location.y_offset = 0;
+    if (candidate.location.page_num < 0 || candidate.location.page_num >= reader.PageCount()) return false;
+    ClampPage(candidate.location);
+    if (HasVisualTextureForState(candidate)) return false;
+    prefetched_state = candidate;
+    AsyncImageRenderQueue &queue = dedicated_prefetch_queue ? prefetch_queue : render_queue;
+    prefetch_active =
+        queue.Request(MakeAsyncJobForState(path, candidate, RenderScaleForState(candidate), true), true);
+    return prefetch_active;
+  }
+
+  int FindPrefetchPageOffset(int dir) const {
+    const int direction = (dir >= 0) ? 1 : -1;
+    const int ahead_pages = image_runtime_tuning::PrefetchAheadPages(1);
+    for (int step = 1; step <= ahead_pages; ++step) {
+      PdfState candidate = target_state;
+      candidate.location.page_num += direction * step;
+      candidate.location.y_offset = 0;
+      if (candidate.location.page_num >= 0 && candidate.location.page_num < reader.PageCount() &&
+          !HasVisualTextureForState(candidate)) {
+        return direction * step;
+      }
+    }
+    if (image_runtime_tuning::BidirectionalPrefetchEnabled()) {
+      PdfState candidate = target_state;
+      candidate.location.page_num -= direction;
+      candidate.location.y_offset = 0;
+      if (candidate.location.page_num >= 0 && candidate.location.page_num < reader.PageCount() &&
+          !HasVisualTextureForState(candidate)) {
+        return -direction;
+      }
+    }
+    return 0;
   }
 
   void QueueAdjacentPrefetchLocked(int dir) {
-    PdfState candidate = target_state;
-    candidate.location.page_num += (dir >= 0) ? 1 : -1;
-    candidate.location.y_offset = 0;
-    if (candidate.location.page_num < 0 || candidate.location.page_num >= reader.PageCount()) return;
-    ClampPage(candidate.location);
-    if (HasVisualTextureForState(candidate)) return;
-    prefetched_state = candidate;
-    prefetch_active =
-        render_queue.Request(MakeAsyncJobForState(path, candidate, RenderScaleForState(candidate), true), true);
+    QueuePrefetchPageOffsetLocked(FindPrefetchPageOffset(dir));
   }
 
   void MarkInteraction() { last_interaction_ticks = SDL_GetTicks(); }
@@ -710,34 +757,45 @@ struct PdfRuntime::Impl {
     render_queue.CancelTarget();
   }
 
+  void QueueTargetRenderLocked(const PdfState &state) {
+    requested_state = state;
+    request_active =
+        render_queue.Request(MakeAsyncJobForState(path, state, RenderScaleForState(state), false), false);
+    if (dedicated_prefetch_queue) {
+      QueueAdjacentPrefetchLocked(preferred_prefetch_dir);
+    }
+  }
+
   void RequestRenderLocked() {
     if (request_active && requested_state.SameVisualState(target_state)) return;
     if (visual_render_delay_active && delayed_state.SameVisualState(target_state)) return;
     MarkTargetChangedLocked();
-    requested_state = target_state;
-    request_active =
-        render_queue.Request(MakeAsyncJobForState(path, target_state, RenderScaleForState(target_state), false), false);
+    QueueTargetRenderLocked(target_state);
   }
 
   void DelayVisualRenderLocked() {
     if (request_active && requested_state.SameVisualState(target_state)) return;
+    const Uint32 delay_ms = image_runtime_tuning::VisualRenderThrottleMs(kVisualRenderThrottleMs);
+    if (delay_ms == 0) {
+      MarkTargetChangedLocked();
+      QueueTargetRenderLocked(target_state);
+      return;
+    }
     if (visual_render_delay_active && delayed_state.SameVisualState(target_state)) {
-      visual_render_due_ms = SDL_GetTicks() + kVisualRenderThrottleMs;
+      visual_render_due_ms = SDL_GetTicks() + delay_ms;
       return;
     }
     MarkTargetChangedLocked();
     delayed_state = target_state;
     visual_render_delay_active = true;
-    visual_render_due_ms = SDL_GetTicks() + kVisualRenderThrottleMs;
+    visual_render_due_ms = SDL_GetTicks() + delay_ms;
   }
 
   void FlushDelayedRenderLocked(Uint32 now) {
     if (!visual_render_delay_active) return;
     if (SDL_TICKS_PASSED(now, visual_render_due_ms)) {
-      requested_state = delayed_state;
       visual_render_delay_active = false;
-      request_active =
-          render_queue.Request(MakeAsyncJobForState(path, delayed_state, RenderScaleForState(delayed_state), false), false);
+      QueueTargetRenderLocked(delayed_state);
     }
   }
 
@@ -748,21 +806,9 @@ struct PdfRuntime::Impl {
       return;
     }
 
-    PdfState candidate = target_state;
-    candidate.location.page_num += (preferred_prefetch_dir >= 0) ? 1 : -1;
-    candidate.location.y_offset = 0;
-    if (candidate.location.page_num < 0 || candidate.location.page_num >= reader.PageCount()) {
+    if (!QueuePrefetchPageOffsetLocked(FindPrefetchPageOffset(preferred_prefetch_dir))) {
       prefetch_active = false;
-      return;
     }
-    ClampPage(candidate.location);
-    if (HasVisualTextureForState(candidate)) {
-      prefetch_active = false;
-      return;
-    }
-    prefetched_state = candidate;
-    prefetch_active =
-        render_queue.Request(MakeAsyncJobForState(path, candidate, RenderScaleForState(candidate), true), true);
   }
 
   ViewportLayout ComputeViewportLayout(const PdfState &state, int content_w, int content_h) const {
@@ -989,6 +1035,7 @@ bool PdfRuntime::Open(SDL_Renderer *renderer,
   impl_->request_active = false;
   impl_->prefetch_active = false;
   impl_->last_interaction_ticks = SDL_GetTicks();
+  impl_->dedicated_prefetch_queue = false;
   const bool queue_started = impl_->render_queue.Start(
       "pdf_runtime_worker",
       [impl = impl_](const AsyncImageRenderJob &job,
@@ -996,6 +1043,15 @@ bool PdfRuntime::Open(SDL_Renderer *renderer,
                      AsyncImageRenderResult &out) {
         return impl->RenderAsyncJob(job, cancel, out);
       });
+  if (queue_started && image_runtime_tuning::DedicatedPrefetchThreadEnabled()) {
+    impl_->dedicated_prefetch_queue = impl_->prefetch_queue.Start(
+        "pdf_prefetch_worker",
+        [impl = impl_](const AsyncImageRenderJob &job,
+                       std::atomic<bool> &cancel,
+                       AsyncImageRenderResult &out) {
+          return impl->RenderAsyncJob(job, cancel, out);
+        });
+  }
   if (queue_started) {
     SDL_LockMutex(impl_->mutex);
     impl_->SchedulePrefetchLocked();
@@ -1007,6 +1063,7 @@ bool PdfRuntime::Open(SDL_Renderer *renderer,
 void PdfRuntime::Close() {
   if (!impl_) return;
   impl_->render_queue.Shutdown();
+  impl_->prefetch_queue.Shutdown();
   impl_->DestroyTexture();
   impl_->reader.Close();
   impl_->path.clear();
@@ -1017,6 +1074,7 @@ void PdfRuntime::Close() {
   impl_->ready_valid = false;
   impl_->request_active = false;
   impl_->prefetch_active = false;
+  impl_->dedicated_prefetch_queue = false;
   impl_->visual_render_delay_active = false;
   impl_->ClearTextureCache();
   impl_->DestroyReusableTexture();
@@ -1032,7 +1090,8 @@ bool PdfRuntime::IsRenderPending() const {
   if (!impl_->display_state.SameVisualState(impl_->target_state)) return true;
   SDL_LockMutex(impl_->mutex);
   const bool pending = impl_->request_active || impl_->prefetch_active || impl_->visual_render_delay_active ||
-                       impl_->render_queue.IsBusyOrReady() || impl_->WantsIdlePrefetch(SDL_GetTicks());
+                       impl_->render_queue.IsBusyOrReady() || impl_->prefetch_queue.IsBusyOrReady() ||
+                       impl_->WantsIdlePrefetch(SDL_GetTicks());
   SDL_UnlockMutex(impl_->mutex);
   return pending;
 }
@@ -1068,7 +1127,7 @@ void PdfRuntime::Tick() {
   RenderResult ready;
   bool have_ready = false;
   AsyncImageRenderResult async_ready;
-  if (impl_->render_queue.TakeReady(async_ready)) {
+  if (impl_->render_queue.TakeReady(async_ready) || impl_->prefetch_queue.TakeReady(async_ready)) {
     ready.ready = async_ready.ready;
     ready.success = async_ready.success;
     ready.prefetch = async_ready.job.prefetch;
@@ -1091,8 +1150,10 @@ void PdfRuntime::Tick() {
     SDL_Texture *texture = impl_->CreateTextureFromResult(ready);
     ready.rgba.clear();
     ready.rgba.shrink_to_fit();
-    if (texture) {
+    if (texture && impl_->ShouldCacheState(ready.state)) {
       impl_->StoreTextureInCache(texture, ready.texture_w, ready.texture_h, ready.state);
+    } else if (texture) {
+      SDL_DestroyTexture(texture);
     }
     SDL_LockMutex(impl_->mutex);
     impl_->SchedulePrefetchLocked();

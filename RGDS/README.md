@@ -53,8 +53,10 @@ Hardware facts verified by `roc_matrix_probe.sh`:
   runs on top of Weston.
 - `rgds_sdl_reader.sh`: click-friendly SDL2 route launcher for comparing against the direct DRM renderer.
 - `rgds_platform_demo.sh`: click-friendly launcher for the RGDS prototype; writes `rgds_platform_demo_latest.log`.
+- `rgds_joystick_map_probe.sh`: click-friendly dual-stick mapping collector; prompts left/right stick directions one by one and writes `rgds_joystick_map_probe_latest.log`.
 - `src/rgds_drm_runtime.*`: RGDS direct DRM/KMS display runtime.
 - `src/rgds_evdev_input.*`: RGDS evdev input runtime.
+- `src/rgds_joystick_map_probe.cpp`: direct DRM/evdev dual-stick mapping probe used by `rgds_joystick_map_probe.sh`.
 - `src/rgds_reader_app.cpp`: first dedicated RGDS reader shell.
 - `src/rgds_dual_screen_runtime.*`: RGDS-specific SDL dual-screen runtime abstraction.
 - `src/rgds_platform_demo.cpp`: standalone RGDS dual-screen platform prototype.

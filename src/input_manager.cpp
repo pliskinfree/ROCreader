@@ -642,21 +642,22 @@ void InputManager::PollLinuxInputDevices() {
         if (event.type == EV_ABS && input_profile_ == InputProfile::RGDS) {
           const int code = static_cast<int>(event.code);
           const int value = static_cast<int>(event.value);
+          // RGDS analog axes captured from ANBERNIC-rk3568-keys on 2026-05-20.
           if (code == ABS_HAT0X) {
             SetDown(Button::Left, value < 0);
             SetDown(Button::Right, value > 0);
           } else if (code == ABS_HAT0Y) {
             SetDown(Button::Up, value < 0);
             SetDown(Button::Down, value > 0);
-          } else if (code == ABS_X) {
+          } else if (code == ABS_Z) {
             const int dir = AxisDirectionFromValue(fd, code, value);
             SetDown(Button::Left, dir < 0);
             SetDown(Button::Right, dir > 0);
-          } else if (code == ABS_Y) {
+          } else if (code == ABS_RX) {
             const int dir = AxisDirectionFromValue(fd, code, value);
             SetDown(Button::Up, dir < 0);
             SetDown(Button::Down, dir > 0);
-          } else if (code == ABS_RX) {
+          } else if (code == ABS_RZ) {
             const int dir = AxisDirectionFromValue(fd, code, value);
             SetDown(Button::Y, dir < 0);
             SetDown(Button::A, dir > 0);

@@ -43,14 +43,18 @@ class EvdevInput {
     int fd = -1;
     std::string path;
     std::string name;
-    int abs_x = 0;
-    int abs_y = 0;
+    int abs_z = 0;
+    int abs_rx = 0;
+    int abs_ry = 0;
+    int abs_rz = 0;
     int abs_hat_x = 0;
     int abs_hat_y = 0;
     bool abs_hat_x_seen = false;
     bool abs_hat_y_seen = false;
-    bool abs_x_seen = false;
-    bool abs_y_seen = false;
+    bool abs_z_seen = false;
+    bool abs_rx_seen = false;
+    bool abs_ry_seen = false;
+    bool abs_rz_seen = false;
   };
 
   bool ReadDevice(Device &device, InputAction &action);

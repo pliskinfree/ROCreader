@@ -3,10 +3,39 @@ param(
     [string]$OutputDir = (Join-Path $PSScriptRoot "dist_official"),
     [string]$DownloadsDir = (Join-Path $PSScriptRoot "Downloads"),
     [string]$SdAppsDir = "E:\Roms\APPS",
-    [string]$ReleaseVersion = "ver2.00"
+    [string]$ReleaseVersion = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+function Get-NextRgdsReleaseVersion {
+    param(
+        [string]$DownloadsDir
+    )
+
+    $maxVersionValue = $null
+    if (Test-Path $DownloadsDir) {
+        Get-ChildItem -LiteralPath $DownloadsDir -File -Filter "*for RGDS.zip" | ForEach-Object {
+            if ($_.Name -match 'ver(\d+)\.(\d+)\s+for\s+RGDS\.zip$') {
+                $major = [int]$Matches[1]
+                $minor = [int]$Matches[2]
+                $value = ($major * 100) + $minor
+                if ($null -eq $maxVersionValue -or $value -gt $maxVersionValue) {
+                    $maxVersionValue = $value
+                }
+            }
+        }
+    }
+
+    if ($null -eq $maxVersionValue) {
+        return "ver2.00"
+    }
+
+    $nextValue = $maxVersionValue + 1
+    $nextMajor = [int][Math]::Floor($nextValue / 100)
+    $nextMinor = $nextValue % 100
+    return ("ver{0}.{1:D2}" -f $nextMajor, $nextMinor)
+}
 
 $RepoRootAbs = [System.IO.Path]::GetFullPath($RepoRoot)
 $OutputDirAbs = [System.IO.Path]::GetFullPath($OutputDir)
@@ -37,6 +66,11 @@ WORKDIR /work
 New-Item -ItemType Directory -Force -Path $OutputDirAbs | Out-Null
 New-Item -ItemType Directory -Force -Path $DownloadsDirAbs | Out-Null
 
+if ([string]::IsNullOrWhiteSpace($ReleaseVersion)) {
+    $ReleaseVersion = Get-NextRgdsReleaseVersion -DownloadsDir $DownloadsDirAbs
+    Write-Host "Auto RGDS release version: $ReleaseVersion"
+}
+
 $image = "rocreader-rgds-official:latest"
 docker build -t $image -f $Dockerfile (Split-Path $Dockerfile)
 
@@ -60,13 +94,30 @@ REQUIRE_MUPDF=0 \
 MAKE_JOBS=$(nproc 2>/dev/null || echo 2) \
 ./cross_compile_low_glibc.sh
 
+aarch64-linux-gnu-g++ -O2 -std=c++17 -Wall -Wextra \
+  --sysroot=/work/H700/sysroot_device \
+  -I/work/H700/sysroot_device/usr/include \
+  -I/work/H700/sysroot_device/usr/include/libdrm \
+  -I/work/RGDS/src \
+  /work/RGDS/src/rgds_joystick_map_probe.cpp \
+  /work/RGDS/src/rgds_drm_runtime.cpp \
+  -o /work/RGDS/dist_official/rgds_joystick_map_probe \
+  -L/work/H700/sysroot_device/usr/lib/aarch64-linux-gnu \
+  -ldrm
+
 rm -rf /work/RGDS/dist_official/Roms
 mkdir -p /work/RGDS/dist_official/Roms/APPS
 cp -a /work/RGDS/dist_official/base/APPS/ROCreader /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS
 cp /work/RGDS/rgds_official_launcher.sh /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS.sh
 cp /work/RGDS/rgds_power_control.sh /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS/rgds_power_control.sh
+mkdir -p /work/RGDS/dist_official/Roms/APPS/.rgds_joystick_map_probe_files
+cp /work/RGDS/dist_official/rgds_joystick_map_probe /work/RGDS/dist_official/Roms/APPS/.rgds_joystick_map_probe_files/rgds_joystick_map_probe
+cp /work/RGDS/rgds_joystick_map_probe.sh /work/RGDS/dist_official/Roms/APPS/rgds_joystick_map_probe.sh
+find /work/RGDS/dist_official/Roms/APPS -type f -name '*.sh' -exec sed -i 's/\r$//' {} +
 chmod +x /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS.sh
 chmod +x /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS/rgds_power_control.sh
+chmod +x /work/RGDS/dist_official/Roms/APPS/rgds_joystick_map_probe.sh
+chmod +x /work/RGDS/dist_official/Roms/APPS/.rgds_joystick_map_probe_files/rgds_joystick_map_probe
 printf '%s\n' "$RGDS_RELEASE_VERSION" > /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS/version.txt
 cd /work/RGDS/dist_official
 python3 - <<'PY'
@@ -91,6 +142,8 @@ rm -f /work/RGDS/dist_official/ROCreader_RGDS_base.zip
 file /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS/rocreader_sdl
 '@
 
+$cmd = $cmd -replace "`r`n", "`n"
+
 docker run --rm `
     -v "${repoDocker}:/work" `
     -v "${outDocker}:/out" `
@@ -108,6 +161,8 @@ if (-not (Test-Path $ZipPath)) {
 if (Test-Path $SdAppsDir) {
     $RuntimeSrc = Join-Path $OutputDirAbs "Roms\APPS\ROCreader_RGDS"
     $LauncherSrc = Join-Path $OutputDirAbs "Roms\APPS\ROCreader_RGDS.sh"
+    $JoystickProbeScriptSrc = Join-Path $OutputDirAbs "Roms\APPS\rgds_joystick_map_probe.sh"
+    $JoystickProbePayloadSrc = Join-Path $OutputDirAbs "Roms\APPS\.rgds_joystick_map_probe_files"
     $RuntimeDst = Join-Path $SdAppsDir "ROCreader_RGDS"
     $PreserveDirs = @("books", "book_covers", "cache", "Downloads")
     $PreserveFiles = @(
@@ -162,6 +217,12 @@ if (Test-Path $SdAppsDir) {
         }
     }
     Copy-Item -LiteralPath $LauncherSrc -Destination (Join-Path $SdAppsDir "ROCreader_RGDS.sh") -Force
+    Copy-Item -LiteralPath $JoystickProbeScriptSrc -Destination (Join-Path $SdAppsDir "rgds_joystick_map_probe.sh") -Force
+    $JoystickProbePayloadDst = Join-Path $SdAppsDir ".rgds_joystick_map_probe_files"
+    if (Test-Path $JoystickProbePayloadDst) {
+        Remove-Item -LiteralPath $JoystickProbePayloadDst -Recurse -Force
+    }
+    Copy-Item -LiteralPath $JoystickProbePayloadSrc -Destination $JoystickProbePayloadDst -Recurse -Force
     Write-Host "Copied RGDS official package to $SdAppsDir"
 } else {
     Write-Host "SD apps dir not found; package left at $ZipPath"

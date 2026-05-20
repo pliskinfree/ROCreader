@@ -128,6 +128,7 @@ void EvdevInput::ApplyKeyCode(int code, InputAction &action) {
 }
 
 void EvdevInput::ApplyAbsCode(Device &device, int code, int value, InputAction &action) {
+  // RGDS analog axes captured from ANBERNIC-rk3568-keys on 2026-05-20.
   if (code == ABS_HAT0X) {
     if (device.abs_hat_x_seen && value == device.abs_hat_x) {
       return;
@@ -154,24 +155,42 @@ void EvdevInput::ApplyAbsCode(Device &device, int code, int value, InputAction &
     if (value > 0) action.down = true;
     device.abs_hat_y = value;
     device.abs_hat_y_seen = true;
-  } else if (code == ABS_X) {
-    if (!device.abs_x_seen) {
-      device.abs_x = value;
-      device.abs_x_seen = true;
+  } else if (code == ABS_Z) {
+    if (!device.abs_z_seen) {
+      device.abs_z = value;
+      device.abs_z_seen = true;
       return;
     }
-    if (value < device.abs_x) action.left = true;
-    if (value > device.abs_x) action.right = true;
-    device.abs_x = value;
-  } else if (code == ABS_Y) {
-    if (!device.abs_y_seen) {
-      device.abs_y = value;
-      device.abs_y_seen = true;
+    if (value < device.abs_z) action.left = true;
+    if (value > device.abs_z) action.right = true;
+    device.abs_z = value;
+  } else if (code == ABS_RX) {
+    if (!device.abs_rx_seen) {
+      device.abs_rx = value;
+      device.abs_rx_seen = true;
       return;
     }
-    if (value < device.abs_y) action.up = true;
-    if (value > device.abs_y) action.down = true;
-    device.abs_y = value;
+    if (value < device.abs_rx) action.up = true;
+    if (value > device.abs_rx) action.down = true;
+    device.abs_rx = value;
+  } else if (code == ABS_RY) {
+    if (!device.abs_ry_seen) {
+      device.abs_ry = value;
+      device.abs_ry_seen = true;
+      return;
+    }
+    if (value < device.abs_ry) action.left = true;
+    if (value > device.abs_ry) action.right = true;
+    device.abs_ry = value;
+  } else if (code == ABS_RZ) {
+    if (!device.abs_rz_seen) {
+      device.abs_rz = value;
+      device.abs_rz_seen = true;
+      return;
+    }
+    if (value < device.abs_rz) action.up = true;
+    if (value > device.abs_rz) action.down = true;
+    device.abs_rz = value;
   }
 }
 
