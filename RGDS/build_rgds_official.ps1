@@ -94,30 +94,14 @@ REQUIRE_MUPDF=0 \
 MAKE_JOBS=$(nproc 2>/dev/null || echo 2) \
 ./cross_compile_low_glibc.sh
 
-aarch64-linux-gnu-g++ -O2 -std=c++17 -Wall -Wextra \
-  --sysroot=/work/H700/sysroot_device \
-  -I/work/H700/sysroot_device/usr/include \
-  -I/work/H700/sysroot_device/usr/include/libdrm \
-  -I/work/RGDS/src \
-  /work/RGDS/src/rgds_joystick_map_probe.cpp \
-  /work/RGDS/src/rgds_drm_runtime.cpp \
-  -o /work/RGDS/dist_official/rgds_joystick_map_probe \
-  -L/work/H700/sysroot_device/usr/lib/aarch64-linux-gnu \
-  -ldrm
-
 rm -rf /work/RGDS/dist_official/Roms
 mkdir -p /work/RGDS/dist_official/Roms/APPS
 cp -a /work/RGDS/dist_official/base/APPS/ROCreader /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS
 cp /work/RGDS/rgds_official_launcher.sh /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS.sh
 cp /work/RGDS/rgds_power_control.sh /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS/rgds_power_control.sh
-mkdir -p /work/RGDS/dist_official/Roms/APPS/.rgds_joystick_map_probe_files
-cp /work/RGDS/dist_official/rgds_joystick_map_probe /work/RGDS/dist_official/Roms/APPS/.rgds_joystick_map_probe_files/rgds_joystick_map_probe
-cp /work/RGDS/rgds_joystick_map_probe.sh /work/RGDS/dist_official/Roms/APPS/rgds_joystick_map_probe.sh
 find /work/RGDS/dist_official/Roms/APPS -type f -name '*.sh' -exec sed -i 's/\r$//' {} +
 chmod +x /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS.sh
 chmod +x /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS/rgds_power_control.sh
-chmod +x /work/RGDS/dist_official/Roms/APPS/rgds_joystick_map_probe.sh
-chmod +x /work/RGDS/dist_official/Roms/APPS/.rgds_joystick_map_probe_files/rgds_joystick_map_probe
 printf '%s\n' "$RGDS_RELEASE_VERSION" > /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS/version.txt
 cd /work/RGDS/dist_official
 python3 - <<'PY'
@@ -161,8 +145,6 @@ if (-not (Test-Path $ZipPath)) {
 if (Test-Path $SdAppsDir) {
     $RuntimeSrc = Join-Path $OutputDirAbs "Roms\APPS\ROCreader_RGDS"
     $LauncherSrc = Join-Path $OutputDirAbs "Roms\APPS\ROCreader_RGDS.sh"
-    $JoystickProbeScriptSrc = Join-Path $OutputDirAbs "Roms\APPS\rgds_joystick_map_probe.sh"
-    $JoystickProbePayloadSrc = Join-Path $OutputDirAbs "Roms\APPS\.rgds_joystick_map_probe_files"
     $RuntimeDst = Join-Path $SdAppsDir "ROCreader_RGDS"
     $PreserveDirs = @("books", "book_covers", "cache", "Downloads")
     $PreserveFiles = @(
@@ -217,12 +199,6 @@ if (Test-Path $SdAppsDir) {
         }
     }
     Copy-Item -LiteralPath $LauncherSrc -Destination (Join-Path $SdAppsDir "ROCreader_RGDS.sh") -Force
-    Copy-Item -LiteralPath $JoystickProbeScriptSrc -Destination (Join-Path $SdAppsDir "rgds_joystick_map_probe.sh") -Force
-    $JoystickProbePayloadDst = Join-Path $SdAppsDir ".rgds_joystick_map_probe_files"
-    if (Test-Path $JoystickProbePayloadDst) {
-        Remove-Item -LiteralPath $JoystickProbePayloadDst -Recurse -Force
-    }
-    Copy-Item -LiteralPath $JoystickProbePayloadSrc -Destination $JoystickProbePayloadDst -Recurse -Force
     Write-Host "Copied RGDS official package to $SdAppsDir"
 } else {
     Write-Host "SD apps dir not found; package left at $ZipPath"
