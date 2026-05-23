@@ -32,6 +32,9 @@ struct Runtime {
   SDL_Renderer *bottom_renderer = nullptr;
   SDL_Texture *reader_canvas = nullptr;
   SDL_Texture *bottom_reader_canvas = nullptr;
+  int reader_canvas_content_w = 0;
+  int reader_canvas_content_h = 0;
+  bool reader_canvas_content_valid = false;
   bool dual_screen_active = false;
   bool stacked_preview = false;
   bool spanning = false;

@@ -30,6 +30,8 @@ bool SameJobVisualTarget(const AsyncImageRenderJob &a, const AsyncImageRenderJob
          std::abs(a.zoom - b.zoom) < 0.0005f &&
          a.scroll_x == b.scroll_x &&
          a.scroll_y == b.scroll_y &&
+         a.viewport_w == b.viewport_w &&
+         a.viewport_h == b.viewport_h &&
          std::abs(a.scale - b.scale) < 0.0005f;
 }
 
@@ -42,6 +44,8 @@ bool RequestedDiffersFromJob(const AsyncImageRenderJob &requested,
           std::abs(requested.zoom - job.zoom) >= 0.0005f ||
           requested.scroll_x != job.scroll_x ||
           requested.scroll_y != job.scroll_y ||
+          requested.viewport_w != job.viewport_w ||
+          requested.viewport_h != job.viewport_h ||
           std::abs(requested.scale - job.scale) >= 0.0005f);
 }
 
@@ -66,7 +70,7 @@ int AsyncImageRenderQueue::WorkerMain(void *userdata) {
     AsyncImageRenderJob job = impl->requested;
     impl->requested = AsyncImageRenderJob{};
     impl->inflight = job;
-    if (!job.prefetch) impl->cancel_requested.store(false);
+    impl->cancel_requested.store(false);
     SDL_UnlockMutex(impl->mutex);
 
     AsyncImageRenderResult rendered;
@@ -209,6 +213,17 @@ bool AsyncImageRenderQueue::IsBusyOrReady() const {
   const bool busy = impl_->requested.active || impl_->inflight.active || impl_->result.ready;
   SDL_UnlockMutex(impl_->mutex);
   return busy;
+}
+
+bool AsyncImageRenderQueue::HasVisualTarget(const AsyncImageRenderJob &job) const {
+  if (!impl_ || !impl_->mutex) return false;
+  SDL_LockMutex(impl_->mutex);
+  const bool found =
+      SameJobVisualTarget(impl_->requested, job) ||
+      SameJobVisualTarget(impl_->inflight, job) ||
+      (impl_->result.ready && SameJobVisualTarget(impl_->result.job, job));
+  SDL_UnlockMutex(impl_->mutex);
+  return found;
 }
 
 void AsyncImageRenderQueue::CancelTarget() {

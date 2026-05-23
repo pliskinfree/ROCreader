@@ -149,7 +149,7 @@ constexpr uint32_t kTransientMessageDurationMs = 1800;
 constexpr uint32_t kReaderFastFlipThresholdMs = 200;
 constexpr uint32_t kReaderPageFlipDebounceMs = 150;
 constexpr int kTxtLineSpacing = 8;
-constexpr int kTxtLayoutCacheVersion = 5;
+constexpr int kTxtLayoutCacheVersion = 6;
 constexpr size_t kTxtMaxBytes = 64 * 1024 * 1024;
 constexpr size_t kTxtMaxWrappedLines = 250000;
 constexpr size_t kTxtLayoutCacheMaxEntries = 4;
@@ -2835,6 +2835,18 @@ int main(int, char **argv) {
       if (state == AppScene::Reader) {
         if (is_rgds_runtime && rgds_runtime.reader_canvas) {
           IReaderModule *rgds_active_reader_module = reader_manager.Module(reader_mode);
+          if (rgds_active_reader_module && rgds_active_reader_module->IsOpen()) {
+            const ReaderProgress pre_tick_progress = rgds_active_reader_module->Progress();
+            const rgds::ReaderLayout pre_tick_layout =
+                rgds::ResolveReaderLayout(reader_mode, rgds_active_reader_module, pre_tick_progress.rotation);
+            rgds_active_reader_module->UpdateViewport(pre_tick_layout.mode == rgds::ReaderLayoutMode::HorizontalSpread
+                                                          ? rgds::kScreenW
+                                                          : pre_tick_layout.canvas_w,
+                                                      pre_tick_layout.mode == rgds::ReaderLayoutMode::HorizontalSpread
+                                                          ? rgds::kScreenH
+                                                          : pre_tick_layout.canvas_h);
+            rgds_active_reader_module->Tick(dt);
+          }
           const ReaderProgress rgds_active_progress =
               rgds_active_reader_module && rgds_active_reader_module->IsOpen()
                   ? rgds_active_reader_module->Progress()
@@ -2842,7 +2854,7 @@ int main(int, char **argv) {
           const rgds::ReaderLayout rgds_reader_layout =
               rgds::ResolveReaderLayout(reader_mode, rgds_active_reader_module, rgds_active_progress.rotation);
           rgds::DrawTopReaderSlice(rgds_runtime, renderer, reader_scene,
-                                   make_rgds_reader_render_deps(renderer, dt, true, rgds_reader_layout),
+                                   make_rgds_reader_render_deps(renderer, dt, false, rgds_reader_layout),
                                    rgds_reader_layout);
         } else {
           ReaderSceneRenderDeps reader_render_deps{

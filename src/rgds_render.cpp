@@ -1,5 +1,6 @@
 #include "rgds_render.h"
 
+#include "image_runtime_tuning.h"
 #include "runtime_log.h"
 #include "sdl_utils.h"
 
@@ -84,6 +85,7 @@ void StrokeFocusFrame(SDL_Renderer *renderer, float alpha) {
 
 void SyncReaderCanvasToBottom(Runtime &runtime, SDL_Renderer *top_renderer, const ReaderLayout &reader_layout) {
   if (!runtime.reader_canvas || !runtime.bottom_reader_canvas || runtime.stacked_preview) return;
+  if (runtime.spanning) return;
   if (!top_renderer || runtime.bottom_reader_canvas == runtime.reader_canvas) return;
 
   const SDL_Rect rect{0, 0, reader_layout.canvas_w, reader_layout.canvas_h};
@@ -99,6 +101,34 @@ void SyncReaderCanvasToBottom(Runtime &runtime, SDL_Renderer *top_renderer, cons
   if (SDL_UpdateTexture(runtime.bottom_reader_canvas, &rect, pixels.data(), pitch) != 0) {
     runtime_log::Line(std::string("main: RGDS bottom reader sync update failed: ") + SDL_GetError());
   }
+}
+
+void CopyTopReaderCanvas(SDL_Renderer *renderer, SDL_Texture *reader_canvas, const ReaderLayout &reader_layout) {
+  if (!renderer || !reader_canvas) return;
+  SDL_SetRenderTarget(renderer, nullptr);
+  SDL_Rect top_dst{0, 0, kScreenW, kScreenH};
+  SDL_RenderCopy(renderer, reader_canvas, &reader_layout.top_src, &top_dst);
+}
+
+bool HasCompatibleReaderCanvasFrame(const Runtime &runtime, const ReaderLayout &reader_layout) {
+  return runtime.reader_canvas_content_valid &&
+         runtime.reader_canvas_content_w == reader_layout.canvas_w &&
+         runtime.reader_canvas_content_h == reader_layout.canvas_h;
+}
+
+void MarkReaderCanvasFrame(Runtime &runtime, const ReaderLayout &reader_layout) {
+  runtime.reader_canvas_content_w = reader_layout.canvas_w;
+  runtime.reader_canvas_content_h = reader_layout.canvas_h;
+  runtime.reader_canvas_content_valid = true;
+}
+
+void ClearReaderCanvasForLayout(Runtime &runtime, SDL_Renderer *renderer, const ReaderLayout &reader_layout) {
+  if (!runtime.reader_canvas || !renderer) return;
+  SDL_SetRenderTarget(renderer, runtime.reader_canvas);
+  SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+  SDL_Rect rect{0, 0, reader_layout.canvas_w, reader_layout.canvas_h};
+  SDL_RenderFillRect(renderer, &rect);
+  MarkReaderCanvasFrame(runtime, reader_layout);
 }
 
 } // namespace
@@ -155,20 +185,43 @@ void DrawTopReaderSlice(Runtime &runtime, SDL_Renderer *renderer, const ReaderSc
     if (module && module->IsOpen() && IsImageReaderMode(reader_render_deps.ui.mode, module) && module->PageCount() > 0) {
       module->UpdateViewport(kScreenW, kScreenH);
       if (reader_render_deps.tick_modules) module->Tick(reader_render_deps.dt);
-      SDL_SetRenderTarget(renderer, runtime.reader_canvas);
-      SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-      SDL_RenderClear(renderer);
       const SDL_Rect left_dst{0, 0, kScreenW, kScreenH};
       const SDL_Rect right_dst{kScreenW, 0, kScreenW, kScreenH};
       const int page = std::clamp(module->CurrentPage(), 0, std::max(0, module->PageCount() - 1));
-      module->DrawPageAt(renderer, page, left_dst);
-      if (page + 1 < module->PageCount()) {
-        module->DrawPageAt(renderer, page + 1, right_dst);
+      const bool right_exists = page + 1 < module->PageCount();
+      const int prefetch_pages = image_runtime_tuning::HorizontalSpreadPrefetchPages(2);
+      for (int ahead = 1; ahead <= prefetch_pages; ++ahead) {
+        const int next_page = page + ahead;
+        if (next_page >= module->PageCount()) break;
+        module->PrefetchPageAt(next_page);
       }
+
+      const bool left_ready = module->CanDrawPageAt(page);
+      const bool right_ready = !right_exists || module->CanDrawPageAt(page + 1);
+      if (!left_ready) {
+        if (!HasCompatibleReaderCanvasFrame(runtime, reader_layout)) {
+          ClearReaderCanvasForLayout(runtime, renderer, reader_layout);
+        }
+        SyncReaderCanvasToBottom(runtime, renderer, reader_layout);
+        CopyTopReaderCanvas(renderer, runtime.reader_canvas, reader_layout);
+        return;
+      }
+
+      SDL_SetRenderTarget(renderer, runtime.reader_canvas);
+      SDL_Rect clear_left{0, 0, kScreenW, kScreenH};
+      SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+      SDL_RenderFillRect(renderer, &clear_left);
+      module->DrawPageAt(renderer, page, left_dst);
+      if (right_exists) {
+        if (right_ready) {
+          SDL_Rect clear_right{kScreenW, 0, kScreenW, kScreenH};
+          SDL_RenderFillRect(renderer, &clear_right);
+          module->DrawPageAt(renderer, page + 1, right_dst);
+        }
+      }
+      MarkReaderCanvasFrame(runtime, reader_layout);
       SyncReaderCanvasToBottom(runtime, renderer, reader_layout);
-      SDL_SetRenderTarget(renderer, nullptr);
-      SDL_Rect top_dst{0, 0, kScreenW, kScreenH};
-      SDL_RenderCopy(renderer, runtime.reader_canvas, &reader_layout.top_src, &top_dst);
+      CopyTopReaderCanvas(renderer, runtime.reader_canvas, reader_layout);
       return;
     }
   }
@@ -176,12 +229,10 @@ void DrawTopReaderSlice(Runtime &runtime, SDL_Renderer *renderer, const ReaderSc
   reader_render_deps.renderer = renderer;
   reader_render_deps.screen_w = reader_layout.canvas_w;
   reader_render_deps.screen_h = reader_layout.canvas_h;
-  reader_render_deps.tick_modules = true;
   reader_scene.Draw(reader_render_deps);
+  MarkReaderCanvasFrame(runtime, reader_layout);
   SyncReaderCanvasToBottom(runtime, renderer, reader_layout);
-  SDL_SetRenderTarget(renderer, nullptr);
-  SDL_Rect top_dst{0, 0, kScreenW, kScreenH};
-  SDL_RenderCopy(renderer, runtime.reader_canvas, &reader_layout.top_src, &top_dst);
+  CopyTopReaderCanvas(renderer, runtime.reader_canvas, reader_layout);
 }
 
 void DrawBottomScreen(const BottomRenderDeps &deps) {

@@ -50,6 +50,7 @@ public:
   bool Request(AsyncImageRenderJob job, bool allow_prefetch);
   bool TakeReady(AsyncImageRenderResult &out_result);
   bool IsBusyOrReady() const;
+  bool HasVisualTarget(const AsyncImageRenderJob &job) const;
   void CancelTarget();
 
 private:

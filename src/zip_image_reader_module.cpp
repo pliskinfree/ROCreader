@@ -34,8 +34,16 @@ void ZipImageReaderModule::Draw(SDL_Renderer *renderer) {
   runtime_.Draw(renderer);
 }
 
+void ZipImageReaderModule::PrefetchPageAt(int page_index) {
+  runtime_.PrefetchPageAt(page_index);
+}
+
 bool ZipImageReaderModule::DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) {
   return runtime_.DrawPageAt(renderer, page_index, dst_rect);
+}
+
+bool ZipImageReaderModule::CanDrawPageAt(int page_index) const {
+  return runtime_.CanDrawPageAt(page_index);
 }
 
 void ZipImageReaderModule::HandleInput(const InputManager &input, float dt) {

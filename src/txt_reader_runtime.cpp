@@ -162,7 +162,7 @@ void DrawTxtReaderRuntime(TxtReaderRenderDeps &deps) {
       deps.ui.Txt().viewport_h,
   };
   deps.set_clip_rect(clip);
-  const int text_x = deps.ui.Txt().viewport_x + 2;
+  const int text_x = deps.ui.Txt().viewport_x + 4;
   const int start_line = std::max(0, deps.ui.Txt().scroll_px / std::max(1, deps.ui.Txt().line_h));
   int y = deps.ui.Txt().viewport_y - (deps.ui.Txt().scroll_px % std::max(1, deps.ui.Txt().line_h));
   for (int i = start_line; i < static_cast<int>(deps.ui.Txt().lines.size()); ++i) {

@@ -38,7 +38,7 @@ inline int ReadEnvInt(const char *name, int fallback, int min_value, int max_val
 
 inline int TextureCacheSlots(int default_slots, int max_slots) {
   static const int slots =
-      ReadEnvInt("ROCREADER_IMAGE_TEXTURE_CACHE", RgdsFastMode() ? 8 : default_slots, 1, 10);
+      ReadEnvInt("ROCREADER_IMAGE_TEXTURE_CACHE", RgdsFastMode() ? 10 : default_slots, 1, 12);
   return std::clamp(slots, 1, max_slots);
 }
 
@@ -50,7 +50,13 @@ inline int PrefetchViewportScreens(int default_screens) {
 
 inline int PrefetchAheadPages(int default_pages) {
   static const int pages =
-      ReadEnvInt("ROCREADER_IMAGE_PREFETCH_AHEAD", RgdsFastMode() ? 4 : default_pages, 1, 6);
+      ReadEnvInt("ROCREADER_IMAGE_PREFETCH_AHEAD", RgdsFastMode() ? 6 : default_pages, 1, 8);
+  return pages;
+}
+
+inline int HorizontalSpreadPrefetchPages(int default_pages) {
+  static const int pages =
+      ReadEnvInt("ROCREADER_IMAGE_SPREAD_PREFETCH_PAGES", RgdsFastMode() ? 5 : default_pages, 1, 8);
   return pages;
 }
 
@@ -87,6 +93,18 @@ inline bool DedicatedPrefetchThreadEnabled() {
   static const bool enabled =
       ReadEnvInt("ROCREADER_IMAGE_PREFETCH_DEDICATED_THREAD", RgdsFastMode() ? 1 : 0, 0, 1) != 0;
   return enabled;
+}
+
+inline int ReadyResultQueueDepth(int default_depth) {
+  static const int depth =
+      ReadEnvInt("ROCREADER_IMAGE_READY_QUEUE_DEPTH", RgdsFastMode() ? 3 : default_depth, 1, 4);
+  return depth;
+}
+
+inline int DedicatedPrefetchLaneCount(int default_lanes) {
+  static const int lanes =
+      ReadEnvInt("ROCREADER_IMAGE_PREFETCH_LANES", RgdsFastMode() ? 3 : default_lanes, 1, 4);
+  return lanes;
 }
 
 }  // namespace image_runtime_tuning

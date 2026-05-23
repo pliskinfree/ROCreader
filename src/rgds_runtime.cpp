@@ -215,6 +215,9 @@ void AttachStackedPreviewSurface(Runtime &runtime, const PlatformConfig &config,
 
 void CreateReaderCanvas(Runtime &runtime, SDL_Renderer *top_renderer, bool top_renderer_supports_target_textures) {
   if (!runtime.dual_screen_active || !top_renderer_supports_target_textures || !top_renderer) return;
+  runtime.reader_canvas_content_w = 0;
+  runtime.reader_canvas_content_h = 0;
+  runtime.reader_canvas_content_valid = false;
   runtime.reader_canvas = SDL_CreateTexture(top_renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET,
                                             kReaderCanvasMaxW, kReaderCanvasMaxH);
   if (runtime.reader_canvas) {

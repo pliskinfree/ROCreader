@@ -13,7 +13,9 @@ public:
   void UpdateViewport(int w, int h) override;
   void Tick(float dt) override;
   void Draw(SDL_Renderer *renderer) override;
+  void PrefetchPageAt(int page_index) override;
   bool DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) override;
+  bool CanDrawPageAt(int page_index) const override;
   void HandleInput(const InputManager &input, float dt) override;
   ReaderProgress Progress() const override;
   void RestoreProgress(const ReaderProgress &progress) override;

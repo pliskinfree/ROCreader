@@ -57,8 +57,16 @@ void EpubReaderModule::Draw(SDL_Renderer *renderer) {
   if (active_module_) active_module_->Draw(renderer);
 }
 
+void EpubReaderModule::PrefetchPageAt(int page_index) {
+  if (active_module_) active_module_->PrefetchPageAt(page_index);
+}
+
 bool EpubReaderModule::DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) {
   return active_module_ ? active_module_->DrawPageAt(renderer, page_index, dst_rect) : false;
+}
+
+bool EpubReaderModule::CanDrawPageAt(int page_index) const {
+  return active_module_ ? active_module_->CanDrawPageAt(page_index) : false;
 }
 
 void EpubReaderModule::HandleInput(const InputManager &input, float dt) {

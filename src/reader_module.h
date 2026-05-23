@@ -43,10 +43,17 @@ public:
   virtual void UpdateViewport(int w, int h) = 0;
   virtual void Tick(float dt) = 0;
   virtual void Draw(SDL_Renderer *renderer) = 0;
+  virtual void PrefetchPageAt(int page_index) {
+    (void)page_index;
+  }
   virtual bool DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) {
     (void)renderer;
     (void)page_index;
     (void)dst_rect;
+    return false;
+  }
+  virtual bool CanDrawPageAt(int page_index) const {
+    (void)page_index;
     return false;
   }
   virtual void HandleInput(const InputManager &input, float dt) = 0;

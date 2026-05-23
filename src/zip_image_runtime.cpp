@@ -21,7 +21,8 @@ namespace {
 constexpr float kMinZoom = 0.25f;
 constexpr float kMaxZoom = 6.0f;
 constexpr float kZoomStep = 0.1f;
-constexpr size_t kTextureCacheSize = 10;
+constexpr size_t kTextureCacheSize = 12;
+constexpr size_t kMaxPrefetchLanes = 4;
 constexpr Uint32 kVisualRenderThrottleMs = 75;
 constexpr Uint32 kIdlePrefetchDelayMs = 220;
 constexpr int64_t kSafeTexturePixelBudget = 5600000;
@@ -48,6 +49,8 @@ void ApplyImageTextureFiltering(SDL_Texture *texture) {
 struct ViewState {
   float zoom = 1.0f;
   int rotation = 0;
+  int viewport_w = 0;
+  int viewport_h = 0;
 };
 
 struct LocationState {
@@ -63,7 +66,9 @@ struct ZipImageState {
   bool SameVisualState(const ZipImageState &other) const {
     return location.page_num == other.location.page_num &&
            view.rotation == other.view.rotation &&
-           std::abs(view.zoom - other.view.zoom) < 0.0005f;
+           std::abs(view.zoom - other.view.zoom) < 0.0005f &&
+           view.viewport_w == other.view.viewport_w &&
+           view.viewport_h == other.view.viewport_h;
   }
 };
 
@@ -81,6 +86,8 @@ AsyncImageRenderJob MakeAsyncJobForState(const std::string &path,
   job.zoom = state.view.zoom;
   job.scroll_x = state.location.x_offset;
   job.scroll_y = state.location.y_offset;
+  job.viewport_w = state.view.viewport_w;
+  job.viewport_h = state.view.viewport_h;
   return job;
 }
 
@@ -91,6 +98,8 @@ ZipImageState StateFromAsyncJob(const AsyncImageRenderJob &job) {
   state.location.y_offset = job.scroll_y;
   state.view.rotation = job.rotation;
   state.view.zoom = job.zoom;
+  state.view.viewport_w = job.viewport_w;
+  state.view.viewport_h = job.viewport_h;
   return state;
 }
 
@@ -212,7 +221,8 @@ struct ZipImageRuntime::Impl {
   ZipImageState requested_state;
   ZipImageState prefetched_state;
   AsyncImageRenderQueue render_queue;
-  AsyncImageRenderQueue prefetch_queue;
+  std::array<AsyncImageRenderQueue, kMaxPrefetchLanes> prefetch_queues{};
+  int active_prefetch_lanes = 0;
   bool dedicated_prefetch_queue = false;
   int preferred_prefetch_dir = 1;
   bool visual_render_delay_active = false;
@@ -225,7 +235,7 @@ struct ZipImageRuntime::Impl {
 
   ~Impl() {
     render_queue.Shutdown();
-    prefetch_queue.Shutdown();
+    ShutdownPrefetchQueues();
     DestroyTexture();
     ClearTextureCache();
     DestroyReusableTexture();
@@ -279,6 +289,63 @@ struct ZipImageRuntime::Impl {
   size_t ActiveTextureCacheSlots() const {
     return static_cast<size_t>(image_runtime_tuning::TextureCacheSlots(
         3, static_cast<int>(texture_cache.size())));
+  }
+
+  void ShutdownPrefetchQueues() {
+    for (int i = 0; i < active_prefetch_lanes; ++i) {
+      prefetch_queues[static_cast<size_t>(i)].Shutdown();
+    }
+    active_prefetch_lanes = 0;
+    dedicated_prefetch_queue = false;
+  }
+
+  bool AnyPrefetchQueueBusyOrReady() const {
+    for (int i = 0; i < active_prefetch_lanes; ++i) {
+      if (prefetch_queues[static_cast<size_t>(i)].IsBusyOrReady()) return true;
+    }
+    return false;
+  }
+
+  bool HasIdlePrefetchLane() const {
+    for (int i = 0; i < active_prefetch_lanes; ++i) {
+      if (!prefetch_queues[static_cast<size_t>(i)].IsBusyOrReady()) return true;
+    }
+    return false;
+  }
+
+  bool HasQueuedPrefetchTarget(const AsyncImageRenderJob &job) const {
+    for (int i = 0; i < active_prefetch_lanes; ++i) {
+      if (prefetch_queues[static_cast<size_t>(i)].HasVisualTarget(job)) return true;
+    }
+    return false;
+  }
+
+  bool TakePrefetchReady(AsyncImageRenderResult &out_result) {
+    for (int i = 0; i < active_prefetch_lanes; ++i) {
+      if (prefetch_queues[static_cast<size_t>(i)].TakeReady(out_result)) return true;
+    }
+    return false;
+  }
+
+  void StartPrefetchQueues() {
+    ShutdownPrefetchQueues();
+    if (!image_runtime_tuning::DedicatedPrefetchThreadEnabled()) return;
+    const int requested_lanes = std::min(
+        static_cast<int>(kMaxPrefetchLanes),
+        std::max(1, image_runtime_tuning::DedicatedPrefetchLaneCount(1)));
+    for (int i = 0; i < requested_lanes; ++i) {
+      const std::string thread_name = "zip_image_prefetch_worker_" + std::to_string(i + 1);
+      const bool started = prefetch_queues[static_cast<size_t>(i)].Start(
+          thread_name,
+          [impl = this](const AsyncImageRenderJob &job,
+                        std::atomic<bool> &cancel,
+                        AsyncImageRenderResult &out) {
+            return impl->RenderAsyncJob(job, cancel, out);
+          });
+      if (!started) break;
+      ++active_prefetch_lanes;
+    }
+    dedicated_prefetch_queue = active_prefetch_lanes > 0;
   }
 
   bool ClampPage(LocationState &location) const {
@@ -605,9 +672,13 @@ struct ZipImageRuntime::Impl {
     if (ZipLowMemoryMode()) return false;
     if (!reader.IsOpen()) return false;
     if (!display_valid || !visible_source.valid) return false;
-    if (prefetch_active) return false;
     const bool can_prefetch_during_target =
         dedicated_prefetch_queue && image_runtime_tuning::DedicatedPrefetchThreadEnabled();
+    if (can_prefetch_during_target) {
+      if (!HasIdlePrefetchLane()) return false;
+    } else if (prefetch_active) {
+      return false;
+    }
     if (!can_prefetch_during_target && !display_state.SameVisualState(target_state)) return false;
     if (!can_prefetch_during_target && (request_active || visual_render_delay_active)) return false;
     if (!can_prefetch_during_target &&
@@ -677,6 +748,32 @@ struct ZipImageRuntime::Impl {
     return true;
   }
 
+  void InstallReadyPrefetchResults() {
+    const int prefetch_install_budget = image_runtime_tuning::ReadyResultQueueDepth(1);
+    for (int i = 0; i < prefetch_install_budget; ++i) {
+      AsyncImageRenderResult prefetch_ready;
+      if (!TakePrefetchReady(prefetch_ready)) break;
+      if (!prefetch_ready.ready || !prefetch_ready.success || !prefetch_ready.job.prefetch) continue;
+
+      RenderResult ready;
+      ready.ready = prefetch_ready.ready;
+      ready.success = prefetch_ready.success;
+      ready.prefetch = true;
+      ready.serial = prefetch_ready.job.serial;
+      ready.state = StateFromAsyncJob(prefetch_ready.job);
+      ready.texture_w = prefetch_ready.width;
+      ready.texture_h = prefetch_ready.height;
+      ready.rgba = std::move(prefetch_ready.rgba);
+
+      SDL_Texture *texture = CreateTextureFromResult(ready);
+      if (texture && ShouldCacheState(ready.state)) {
+        StoreTextureInCache(texture, ready.texture_w, ready.texture_h, ready.state);
+      } else if (texture) {
+        SDL_DestroyTexture(texture);
+      }
+    }
+  }
+
   bool ActivateCachedTexture(const ZipImageState &state) {
     const int cache_index = FindCacheEntryForVisual(state);
     if (cache_index < 0) return false;
@@ -729,10 +826,21 @@ struct ZipImageRuntime::Impl {
     ClampPage(candidate.location);
     if (HasVisualTextureForState(candidate)) return false;
     prefetched_state = candidate;
-    AsyncImageRenderQueue &queue = dedicated_prefetch_queue ? prefetch_queue : render_queue;
-    prefetch_active =
-        queue.Request(MakeAsyncJobForState(path, candidate, RenderScaleForState(candidate), true), true);
-    return prefetch_active;
+    AsyncImageRenderJob job = MakeAsyncJobForState(path, candidate, RenderScaleForState(candidate), true);
+    bool accepted = false;
+    if (dedicated_prefetch_queue) {
+      if (render_queue.HasVisualTarget(job) || HasQueuedPrefetchTarget(job)) return false;
+      for (int i = 0; i < active_prefetch_lanes; ++i) {
+        AsyncImageRenderQueue &queue = prefetch_queues[static_cast<size_t>(i)];
+        if (queue.IsBusyOrReady()) continue;
+        accepted = queue.Request(job, true);
+        break;
+      }
+    } else {
+      accepted = render_queue.Request(job, true);
+    }
+    prefetch_active = prefetch_active || accepted || AnyPrefetchQueueBusyOrReady();
+    return accepted;
   }
 
   int FindPrefetchPageOffset(int dir) const {
@@ -770,6 +878,9 @@ struct ZipImageRuntime::Impl {
     prefetch_active = false;
     visual_render_delay_active = false;
     render_queue.CancelTarget();
+    for (int i = 0; i < active_prefetch_lanes; ++i) {
+      prefetch_queues[static_cast<size_t>(i)].CancelTarget();
+    }
   }
 
   void QueueTargetRenderLocked(const ZipImageState &state) {
@@ -817,13 +928,29 @@ struct ZipImageRuntime::Impl {
   void SchedulePrefetchLocked() {
     const Uint32 now = SDL_GetTicks();
     if (!WantsIdlePrefetch(now)) {
-      prefetch_active = false;
+      prefetch_active = AnyPrefetchQueueBusyOrReady();
       return;
     }
 
-    if (!QueuePrefetchPageOffsetLocked(FindPrefetchPageOffset(preferred_prefetch_dir))) {
-      prefetch_active = false;
+    if (!dedicated_prefetch_queue) {
+      if (!QueuePrefetchPageOffsetLocked(FindPrefetchPageOffset(preferred_prefetch_dir))) {
+        prefetch_active = false;
+      }
+      return;
     }
+
+    bool queued_any = false;
+    const int direction = (preferred_prefetch_dir >= 0) ? 1 : -1;
+    const int ahead_pages = image_runtime_tuning::PrefetchAheadPages(1);
+    for (int step = 1; step <= ahead_pages && HasIdlePrefetchLane(); ++step) {
+      if (QueuePrefetchPageOffsetLocked(direction * step)) queued_any = true;
+    }
+    if (image_runtime_tuning::BidirectionalPrefetchEnabled()) {
+      for (int step = 1; step <= 1 && HasIdlePrefetchLane(); ++step) {
+        if (QueuePrefetchPageOffsetLocked(-direction * step)) queued_any = true;
+      }
+    }
+    prefetch_active = queued_any || AnyPrefetchQueueBusyOrReady();
   }
 
   ViewportLayout ComputeViewportLayout(const ZipImageState &state, int content_w, int content_h) const {
@@ -913,6 +1040,25 @@ struct ZipImageRuntime::Impl {
     layout.dst.y += dst_rect.y;
     SDL_RenderCopy(renderer, source.texture, &layout.src, &layout.dst);
     return true;
+  }
+
+  bool CanDrawPageAt(int page_index) const {
+    if (page_index < 0 || page_index >= reader.PageCount()) return false;
+    ZipImageState page_state = target_state;
+    page_state.location.page_num = page_index;
+    page_state.location.x_offset = 0;
+    page_state.location.y_offset = 0;
+    const VisibleContentSource source = LookupSourceForState(page_state);
+    return source.valid && source.texture;
+  }
+
+  void PrefetchPageAt(int page_index) {
+    if (page_index < 0 || page_index >= reader.PageCount()) return;
+    const int page_offset = page_index - target_state.location.page_num;
+    if (page_offset == 0) return;
+    SDL_LockMutex(mutex);
+    QueuePrefetchPageOffsetLocked(page_offset);
+    SDL_UnlockMutex(mutex);
   }
 
   bool DrawContinuousNextPage(SDL_Renderer *renderer, const ZipImageState &state) const {
@@ -1032,6 +1178,8 @@ bool ZipImageRuntime::Open(SDL_Renderer *renderer,
 
   impl_->target_state.view.zoom = std::max(kMinZoom, std::min(kMaxZoom, initial_progress.zoom));
   impl_->target_state.view.rotation = NormalizeRotation(initial_progress.rotation);
+  impl_->target_state.view.viewport_w = impl_->screen_w;
+  impl_->target_state.view.viewport_h = impl_->screen_h;
   impl_->target_state.location.page_num = std::max(0, initial_progress.page);
   impl_->target_state.location.x_offset = std::max(0, initial_progress.scroll_x);
   impl_->target_state.location.y_offset = std::max(0, initial_progress.scroll_y);
@@ -1059,7 +1207,6 @@ bool ZipImageRuntime::Open(SDL_Renderer *renderer,
   impl_->request_active = false;
   impl_->prefetch_active = false;
   impl_->last_interaction_ticks = SDL_GetTicks();
-  impl_->dedicated_prefetch_queue = false;
   const bool queue_started = impl_->render_queue.Start(
       "zip_image_runtime_worker",
       [impl = impl_](const AsyncImageRenderJob &job,
@@ -1067,15 +1214,7 @@ bool ZipImageRuntime::Open(SDL_Renderer *renderer,
                      AsyncImageRenderResult &out) {
         return impl->RenderAsyncJob(job, cancel, out);
       });
-  if (queue_started && image_runtime_tuning::DedicatedPrefetchThreadEnabled()) {
-    impl_->dedicated_prefetch_queue = impl_->prefetch_queue.Start(
-        "zip_image_prefetch_worker",
-        [impl = impl_](const AsyncImageRenderJob &job,
-                       std::atomic<bool> &cancel,
-                       AsyncImageRenderResult &out) {
-          return impl->RenderAsyncJob(job, cancel, out);
-        });
-  }
+  if (queue_started) impl_->StartPrefetchQueues();
   if (queue_started) {
     SDL_LockMutex(impl_->mutex);
     impl_->SchedulePrefetchLocked();
@@ -1087,7 +1226,7 @@ bool ZipImageRuntime::Open(SDL_Renderer *renderer,
 void ZipImageRuntime::Close() {
   if (!impl_) return;
   impl_->render_queue.Shutdown();
-  impl_->prefetch_queue.Shutdown();
+  impl_->ShutdownPrefetchQueues();
   impl_->DestroyTexture();
   impl_->reader.Close();
   impl_->path.clear();
@@ -1098,7 +1237,6 @@ void ZipImageRuntime::Close() {
   impl_->ready_valid = false;
   impl_->request_active = false;
   impl_->prefetch_active = false;
-  impl_->dedicated_prefetch_queue = false;
   impl_->visual_render_delay_active = false;
   impl_->ClearTextureCache();
   impl_->DestroyReusableTexture();
@@ -1125,7 +1263,7 @@ bool ZipImageRuntime::IsRenderPending() const {
   if (!impl_->display_state.SameVisualState(impl_->target_state)) return true;
   SDL_LockMutex(impl_->mutex);
   const bool pending = impl_->request_active || impl_->prefetch_active || impl_->visual_render_delay_active ||
-                       impl_->render_queue.IsBusyOrReady() || impl_->prefetch_queue.IsBusyOrReady() ||
+                       impl_->render_queue.IsBusyOrReady() || impl_->AnyPrefetchQueueBusyOrReady() ||
                        impl_->WantsIdlePrefetch(SDL_GetTicks());
   SDL_UnlockMutex(impl_->mutex);
   return pending;
@@ -1139,6 +1277,8 @@ void ZipImageRuntime::UpdateViewport(int screen_w, int screen_h) {
   impl_->screen_w = screen_w;
   impl_->screen_h = screen_h;
   impl_->MarkInteraction();
+  impl_->target_state.view.viewport_w = impl_->screen_w;
+  impl_->target_state.view.viewport_h = impl_->screen_h;
   impl_->NormalizeState(impl_->target_state);
   if (impl_->display_valid) {
     impl_->NormalizeState(impl_->display_state);
@@ -1162,7 +1302,7 @@ void ZipImageRuntime::Tick() {
   RenderResult ready;
   bool have_ready = false;
   AsyncImageRenderResult async_ready;
-  if (impl_->render_queue.TakeReady(async_ready) || impl_->prefetch_queue.TakeReady(async_ready)) {
+  if (impl_->render_queue.TakeReady(async_ready) || impl_->TakePrefetchReady(async_ready)) {
     ready.ready = async_ready.ready;
     ready.success = async_ready.success;
     ready.prefetch = async_ready.job.prefetch;
@@ -1173,7 +1313,7 @@ void ZipImageRuntime::Tick() {
     ready.rgba = std::move(async_ready.rgba);
     have_ready = true;
     if (ready.prefetch) {
-      impl_->prefetch_active = false;
+      impl_->prefetch_active = impl_->AnyPrefetchQueueBusyOrReady();
     } else {
       impl_->request_active = false;
     }
@@ -1200,6 +1340,11 @@ void ZipImageRuntime::Tick() {
     impl_->display_state = impl_->ready_state;
     impl_->display_valid = true;
   }
+
+  if (!impl_->request_active) {
+    impl_->InstallReadyPrefetchResults();
+  }
+
   SDL_LockMutex(impl_->mutex);
   impl_->SchedulePrefetchLocked();
   SDL_UnlockMutex(impl_->mutex);
@@ -1207,6 +1352,10 @@ void ZipImageRuntime::Tick() {
 
 void ZipImageRuntime::Draw(SDL_Renderer *renderer) const {
   if (!impl_ || !renderer || !impl_->visible_source.texture || !impl_->display_valid || !impl_->visible_source.valid) return;
+  if (impl_->visible_source.state.view.viewport_w != impl_->screen_w ||
+      impl_->visible_source.state.view.viewport_h != impl_->screen_h) {
+    return;
+  }
 
   const bool exact = impl_->display_state.SameVisualState(impl_->target_state);
   if (exact) {
@@ -1223,6 +1372,14 @@ void ZipImageRuntime::Draw(SDL_Renderer *renderer) const {
 
 bool ZipImageRuntime::DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) const {
   return impl_ ? impl_->DrawPageAt(renderer, page_index, dst_rect) : false;
+}
+
+bool ZipImageRuntime::CanDrawPageAt(int page_index) const {
+  return impl_ ? impl_->CanDrawPageAt(page_index) : false;
+}
+
+void ZipImageRuntime::PrefetchPageAt(int page_index) {
+  if (impl_) impl_->PrefetchPageAt(page_index);
 }
 
 void ZipImageRuntime::RotateLeft() {

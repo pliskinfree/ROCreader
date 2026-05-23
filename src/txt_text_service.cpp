@@ -477,7 +477,7 @@ bool AppendWrappedTextLine(TxtReaderState &state, const std::string &line, TTF_F
     }
     return true;
   }
-  const int wrap_width_px = std::max(40, state.viewport_w - 2);
+  const int wrap_width_px = std::max(40, state.viewport_w - 8);
   std::vector<TxtWrappedLine> wrapped =
       WrapTextLine(paragraph, wrap_width_px, source_line_offset, font);
   if (state.paragraph_spacing_pending && !state.last_raw_line_blank && !state.lines.empty()) {

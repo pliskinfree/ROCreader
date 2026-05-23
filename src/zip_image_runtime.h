@@ -28,7 +28,9 @@ public:
   void UpdateViewport(int screen_w, int screen_h);
   void Tick();
   void Draw(SDL_Renderer *renderer) const;
+  void PrefetchPageAt(int page_index);
   bool DrawPageAt(SDL_Renderer *renderer, int page_index, const SDL_Rect &dst_rect) const;
+  bool CanDrawPageAt(int page_index) const;
 
   void RotateLeft();
   void RotateRight();
