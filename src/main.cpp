@@ -2422,6 +2422,17 @@ int main(int, char **argv) {
       show_transient_message(online_tick.download_success ? u8"\u4e0b\u8f7d\u6210\u529f"
                                                           : u8"\u4e0b\u8f7d\u5931\u8d25");
     }
+    if (is_rgds_runtime && online_tick.refresh_roots_after_disconnect) {
+      online_shelf_controller.HandleDeferredDisconnect(books_roots, cover_roots);
+      books_roots = storage_paths::DetectBooksRoots();
+      cover_roots = storage_paths::DetectCoverRoots();
+      shelf_state.nav_selected_index = 0;
+      shelf_scene.ResetToCategoryRoot(shelf_state);
+      clear_cover_cache();
+      rebuild_shelf_items();
+      reset_shelf_cover_stream_preload();
+      app_shell.Scenes().EnterShelf();
+    }
 
     if (reader_mode == ReaderMode::Txt && reader_ui.Txt().open && reader_ui.Txt().loading) {
       const bool txt_scroll_input_active =
@@ -2991,6 +3002,26 @@ int main(int, char **argv) {
         Utf8Ellipsize,
     });
     app_shell.Present();
+    if (is_rgds_runtime && online_shelf_controller.HasDeferredConnect()) {
+      if (online_shelf_controller.HandleDeferredConnect()) {
+        const OnlineShelfControllerTickResult online_after_connect =
+            online_shelf_controller.TickAfterInput(shelf_runtime);
+        if (online_after_connect.online_shelf_needs_reset) {
+          shelf_scene.ResetToCategoryRoot(shelf_state);
+        }
+        if (online_after_connect.cover_cache_changed) {
+          clear_cover_cache();
+        }
+        if (online_after_connect.shelf_items_changed) {
+          rebuild_shelf_items();
+        }
+        if (online_after_connect.online_shelf_needs_reset || online_after_connect.shelf_items_changed) {
+          reset_shelf_cover_stream_preload();
+          app_shell.Scenes().EnterShelf();
+        }
+      }
+      continue;
+    }
     if (state == AppScene::Shelf) {
       const OnlineShelfControllerTickResult online_after_present =
           online_shelf_controller.TickAfterPresent(shelf_state.nav_selected_index, shelf_state.focus_index,

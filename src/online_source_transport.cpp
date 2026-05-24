@@ -569,6 +569,20 @@ std::string ExtractManualWebBackupDownloadUrl(const std::string &html, const std
   return {};
 }
 
+std::string NormalizeZipDownloadUrl(std::string url) {
+  const size_t zip = url.find(".zip");
+  if (zip == std::string::npos) return url;
+  const size_t after_zip = zip + 4;
+  const size_t query = url.find('?', after_zip);
+  if (query == std::string::npos) return url;
+  const std::string query_text = url.substr(query + 1);
+  if (url.find("wn01.download") != std::string::npos &&
+      (query_text.rfind("n=", 0) == 0 || query_text.find_first_of(" \t\r\n") != std::string::npos)) {
+    return url.substr(0, after_zip);
+  }
+  return url;
+}
+
 std::string SafeFilename(std::string name) {
   name = Trim(name);
   if (name.empty()) name = "online_book";
@@ -1016,8 +1030,10 @@ std::string ManualWebResolveDownload(const std::string &detail_url, const std::s
   }
   if (const std::string backup_url = ExtractManualWebBackupDownloadUrl(landing_html, landing_url);
       !backup_url.empty()) {
-    runtime_log::Line("online: manual web resolve backup download url title=" + title + " url=" + backup_url);
-    return backup_url;
+    const std::string normalized_url = NormalizeZipDownloadUrl(backup_url);
+    runtime_log::Line("online: manual web resolve backup download url title=" + title +
+                      " url=" + normalized_url);
+    return normalized_url;
   }
   if (!std::regex_search(landing_html, match, std::regex(R"(['"]((?:down/)[^'"]+\.zip)['"])", std::regex::icase))) {
     runtime_log::Line("online: manual web resolve download key missing title=" + title +
@@ -1036,7 +1052,7 @@ std::string ManualWebResolveDownload(const std::string &detail_url, const std::s
                       " key=" + key + " landing_url=" + landing_url +
                       " response=" + CompactLogSnippet(json));
   }
-  return real_url;
+  return NormalizeZipDownloadUrl(real_url);
 }
 
 bool ManualWebDownload(const std::string &url, const std::filesystem::path &output_path,
