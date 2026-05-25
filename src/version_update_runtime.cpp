@@ -185,6 +185,29 @@ std::string DetectInstalledVersionLabel() {
   return {};
 }
 
+std::string DetectCurrentVersionLabel(const std::filesystem::path &runtime_root) {
+  std::vector<std::filesystem::path> candidates;
+  for (const std::string &root : storage_paths::DetectRocreaderRoots()) {
+    if (!root.empty()) candidates.push_back(std::filesystem::path(root) / kInstalledVersionFilename);
+  }
+  if (!runtime_root.empty()) {
+    candidates.push_back(runtime_root / kInstalledVersionFilename);
+    candidates.push_back(runtime_root.parent_path() / kInstalledVersionFilename);
+  }
+  std::error_code ec;
+  const std::filesystem::path cwd = std::filesystem::current_path(ec);
+  if (!ec) {
+    candidates.push_back(cwd / kInstalledVersionFilename);
+    candidates.push_back(cwd.parent_path() / kInstalledVersionFilename);
+  }
+
+  for (const auto &candidate : candidates) {
+    const std::string version = ReadInstalledVersionFromFile(candidate);
+    if (!version.empty()) return version;
+  }
+  return "v0.0.0-ui";
+}
+
 std::string FormatDownloadSpeed(double bytes_per_sec) {
   if (bytes_per_sec <= 0.0) return std::string(u8"下载速度 0 KB/s");
   constexpr double kKiB = 1024.0;
@@ -859,7 +882,8 @@ bool HandleVersionUpdateInput(const InputManager &input, VersionUpdateState &sta
   return false;
 }
 
-void InitializeVersionUpdateState(VersionUpdateState &state) {
+void InitializeVersionUpdateState(VersionUpdateState &state, const std::filesystem::path &runtime_root) {
+  state.current_version = DetectCurrentVersionLabel(runtime_root);
   const std::string installed_version = DetectInstalledVersionLabel();
   if (!installed_version.empty()) {
     state.current_version = installed_version;

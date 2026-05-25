@@ -15,6 +15,7 @@
 #if !defined(_WIN32)
 #include <chrono>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <sys/select.h>
 #include <sys/wait.h>
@@ -338,6 +339,47 @@ int RunCommand(const std::string &command) {
 }
 
 #ifdef HAVE_LIBCURL
+bool RunningOnRgdsRuntime() {
+  const char *device = std::getenv("ROCREADER_DEVICE_MODEL");
+  if (!device || !*device) return false;
+  std::string model = device;
+  std::transform(model.begin(), model.end(), model.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return model == "rgds";
+}
+
+#if !defined(_WIN32)
+class ScopedSigpipeBlock {
+public:
+  explicit ScopedSigpipeBlock(bool enabled) {
+    if (!enabled) return;
+    sigemptyset(&sigpipe_set_);
+    sigaddset(&sigpipe_set_, SIGPIPE);
+    blocked_ = pthread_sigmask(SIG_BLOCK, &sigpipe_set_, &previous_set_) == 0;
+  }
+
+  ~ScopedSigpipeBlock() {
+    if (!blocked_) return;
+    ConsumePendingSigpipe();
+    pthread_sigmask(SIG_SETMASK, &previous_set_, nullptr);
+  }
+
+private:
+  void ConsumePendingSigpipe() {
+    sigset_t pending;
+    if (sigpending(&pending) != 0 || sigismember(&pending, SIGPIPE) != 1) return;
+    timespec timeout{};
+    siginfo_t info{};
+    while (sigtimedwait(&sigpipe_set_, &info, &timeout) == SIGPIPE) {
+    }
+  }
+
+  bool blocked_ = false;
+  sigset_t sigpipe_set_{};
+  sigset_t previous_set_{};
+};
+#endif
+
 struct CurlGlobalInit {
   CurlGlobalInit() { curl_global_init(CURL_GLOBAL_DEFAULT); }
   ~CurlGlobalInit() { curl_global_cleanup(); }
@@ -390,6 +432,33 @@ int CurlCancelProgress(void *, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
   return g_transfer_cancelled.load() ? 1 : 0;
 }
 
+CURLcode PerformCurl(CURL *curl) {
+#if !defined(_WIN32)
+  const bool rgds_runtime = RunningOnRgdsRuntime();
+  static bool logged = false;
+  if (rgds_runtime && !logged) {
+    logged = true;
+    runtime_log::Line("online: RGDS libcurl SIGPIPE guard enabled");
+  }
+  ScopedSigpipeBlock sigpipe_block(rgds_runtime);
+#endif
+  return curl_easy_perform(curl);
+}
+
+bool RgdsShouldRetryCurl(CURLcode code) {
+  switch (code) {
+  case CURLE_SSL_CONNECT_ERROR:
+  case CURLE_SEND_ERROR:
+  case CURLE_RECV_ERROR:
+  case CURLE_GOT_NOTHING:
+  case CURLE_COULDNT_CONNECT:
+  case CURLE_OPERATION_TIMEDOUT:
+    return true;
+  default:
+    return false;
+  }
+}
+
 void ConfigureCurlCommon(CURL *curl, const std::string &url, const std::string &referer) {
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -409,27 +478,38 @@ std::string HttpGetTextViaLibcurl(const std::string &url, const std::string &ref
   if (url.empty()) return {};
   EnsureCurlGlobalInit();
   runtime_log::Line("online: libcurl GET begin url=" + url);
-  CURL *curl = curl_easy_init();
-  if (!curl) {
-    runtime_log::Line("online: libcurl GET init failed url=" + url);
-    return {};
-  }
   std::string body;
-  ConfigureCurlCommon(curl, url, referer);
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteString);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-  const CURLcode code = curl_easy_perform(curl);
-  runtime_log::Line("online: libcurl GET performed code=" + std::to_string(static_cast<int>(code)) +
-                    " url=" + url + " bytes=" + std::to_string(body.size()));
+  CURLcode code = CURLE_OK;
   long response_code = 0;
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+  const int max_attempts = RunningOnRgdsRuntime() ? 2 : 1;
+  for (int attempt = 1; attempt <= max_attempts; ++attempt) {
+    body.clear();
+    response_code = 0;
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+      runtime_log::Line("online: libcurl GET init failed url=" + url);
+      return {};
+    }
+    ConfigureCurlCommon(curl, url, referer);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteString);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    code = PerformCurl(curl);
+    runtime_log::Line("online: libcurl GET performed code=" + std::to_string(static_cast<int>(code)) +
+                      " attempt=" + std::to_string(attempt) +
+                      " url=" + url + " bytes=" + std::to_string(body.size()));
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+    curl_easy_cleanup(curl);
+    if (code == CURLE_OK) break;
+    if (attempt >= max_attempts || !RgdsShouldRetryCurl(code)) break;
+    runtime_log::Line("online: RGDS libcurl GET retry code=" + std::to_string(static_cast<int>(code)) +
+                      " url=" + url + " err=" + curl_easy_strerror(code));
+  }
   if (code != CURLE_OK) {
     runtime_log::Line("online: libcurl GET failed code=" + std::to_string(static_cast<int>(code)) +
                       " http=" + std::to_string(response_code) +
                       " url=" + url + " err=" + curl_easy_strerror(code));
     body.clear();
   }
-  curl_easy_cleanup(curl);
   return body;
 }
 
@@ -454,7 +534,7 @@ std::string HttpPostJsonTextViaLibcurl(const std::string &url, const std::string
   curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(json.size()));
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteString);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-  const CURLcode code = curl_easy_perform(curl);
+  const CURLcode code = PerformCurl(curl);
   runtime_log::Line("online: libcurl POST performed code=" + std::to_string(static_cast<int>(code)) +
                     " url=" + url + " bytes=" + std::to_string(body.size()));
   long response_code = 0;
@@ -489,7 +569,7 @@ bool DownloadFileViaLibcurl(const std::string &url, const std::filesystem::path 
   ConfigureCurlCommon(curl, url, referer);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteFile);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
-  const CURLcode code = curl_easy_perform(curl);
+  const CURLcode code = PerformCurl(curl);
   runtime_log::Line("online: libcurl download performed code=" + std::to_string(static_cast<int>(code)) +
                     " url=" + url + " output=" + output_path.string());
   long response_code = 0;

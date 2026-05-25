@@ -52,6 +52,7 @@ public:
   const OnlineSourceState &State() const;
 
   void Initialize(const std::filesystem::path &config_path, const std::filesystem::path &download_root);
+  void InitializeFromRuntimeRoot(const std::filesystem::path &runtime_root = {});
   void Shutdown();
 
   bool IsActive() const;

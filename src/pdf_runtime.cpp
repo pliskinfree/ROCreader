@@ -801,6 +801,23 @@ struct PdfRuntime::Impl {
     return state.location.y_offset <= warmup_extent;
   }
 
+  bool ShouldHoldForwardScrollForNextPage(const PdfState &before, const PdfState &candidate) const {
+    if (!image_runtime_tuning::RgdsFastMode()) return false;
+    if (!HasNextPage(before)) return false;
+    if (candidate.location.page_num < before.location.page_num) return false;
+    const int transition_start = TransitionStartYOffset(before);
+    const bool entering_next_page =
+        candidate.location.page_num > before.location.page_num ||
+        candidate.location.y_offset > transition_start;
+    if (!entering_next_page) return false;
+
+    PdfState next = before;
+    ++next.location.page_num;
+    next.location.x_offset = 0;
+    next.location.y_offset = 0;
+    return !HasVisualTextureForState(next);
+  }
+
   bool QueuePrefetchPageOffsetLocked(int page_offset) {
     if (page_offset == 0) return false;
     PdfState candidate = target_state;
@@ -1335,6 +1352,21 @@ void PdfRuntime::Draw(SDL_Renderer *renderer) const {
     return;
   }
 
+  if (image_runtime_tuning::RgdsFastMode() &&
+      impl_->display_state.location.page_num != impl_->target_state.location.page_num) {
+    PdfState draw_state = impl_->display_state;
+    draw_state.location.x_offset = impl_->target_state.location.x_offset;
+    const int rotation = NormalizeRotation(draw_state.view.rotation);
+    const int flow_extent =
+        (rotation == 90 || rotation == 270) ? impl_->visible_source.texture_w : impl_->visible_source.texture_h;
+    const int viewport_extent = (rotation == 90 || rotation == 270) ? impl_->screen_w : impl_->screen_h;
+    const int max_y = std::max(0, flow_extent - viewport_extent);
+    draw_state.location.y_offset =
+        (impl_->target_state.location.page_num > impl_->display_state.location.page_num) ? max_y : 0;
+    impl_->DrawVisibleSource(renderer, impl_->visible_source, draw_state);
+    return;
+  }
+
   impl_->DrawVisibleSource(renderer, impl_->visible_source, impl_->display_state);
 }
 
@@ -1441,11 +1473,23 @@ bool PdfRuntime::PanVerticalByPixels(int delta_px) {
 void PdfRuntime::ScrollByPixels(int delta_px) {
   if (!impl_ || !impl_->reader.IsOpen()) return;
   impl_->MarkInteraction();
+  if (image_runtime_tuning::RgdsFastMode()) {
+    impl_->InstallReadyPrefetchResults();
+  }
   const int old_page = impl_->target_state.location.page_num;
   if (delta_px > 0) impl_->preferred_prefetch_dir = 1;
   if (delta_px < 0) impl_->preferred_prefetch_dir = -1;
-  impl_->target_state.location.y_offset += delta_px;
-  impl_->NormalizeState(impl_->target_state);
+  PdfState next_state = impl_->target_state;
+  next_state.location.y_offset += delta_px;
+  impl_->NormalizeState(next_state);
+  if (delta_px > 0 && impl_->ShouldHoldForwardScrollForNextPage(impl_->target_state, next_state)) {
+    impl_->target_state.location.y_offset = impl_->TransitionStartYOffset(impl_->target_state);
+    SDL_LockMutex(impl_->mutex);
+    impl_->QueuePrefetchPageOffsetLocked(1);
+    SDL_UnlockMutex(impl_->mutex);
+    return;
+  }
+  impl_->target_state = next_state;
   if (impl_->target_state.location.page_num != old_page) {
     impl_->target_state.location.x_offset = 0;
     if (impl_->TryUseCachedTarget()) return;

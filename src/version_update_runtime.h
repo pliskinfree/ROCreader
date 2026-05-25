@@ -72,7 +72,8 @@ struct VersionUpdateRenderDeps {
 bool HandleVersionUpdateInput(const InputManager &input, VersionUpdateState &state,
                               const VersionUpdateCallbacks &callbacks);
 bool BeginVersionUpdateDownload(VersionUpdateState &state);
-void InitializeVersionUpdateState(VersionUpdateState &state);
+void InitializeVersionUpdateState(VersionUpdateState &state,
+                                  const std::filesystem::path &runtime_root = {});
 void TickVersionUpdateState(VersionUpdateState &state, float dt);
 void ShutdownVersionUpdateState(VersionUpdateState &state);
 void DrawVersionUpdatePreview(const VersionUpdateRenderDeps &deps);

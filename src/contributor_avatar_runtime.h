@@ -40,6 +40,7 @@ struct ContributorAvatarRenderDeps {
 
 void DestroyContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entries,
                                      const std::function<void(SDL_Texture *)> &before_destroy = {});
+ContributorAvatarState InitializeContributorAvatarState(int selected_index);
 void LoadContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entries, const std::filesystem::path &ui_root,
                                   const std::filesystem::path &exe_path, SDL_Renderer *renderer, int language_index,
                                   int avatar_texture_size,

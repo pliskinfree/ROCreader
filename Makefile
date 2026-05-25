@@ -8,8 +8,12 @@ WN04_FETCH_TARGET ?= bin/wn04_fetch
 RGDS_DUALSCREEN_PROBE_TARGET ?= build/rgds_sdl_dualscreen_probe
 APP_SRCS := \
   src/main.cpp \
+  src/app_loop.cpp \
+  src/app_bootstrap.cpp \
+  src/app_composition.cpp \
   src/app_runtime.cpp \
   src/app_context.cpp \
+  src/app_services.cpp \
   src/app_shell.cpp \
   src/app_layout.cpp \
   src/app_config_bridge.cpp \

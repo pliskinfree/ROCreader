@@ -37,6 +37,14 @@ appropriate.
 
 See [LEGAL.md](LEGAL.md) for the full legal disclaimer and contributor rules.
 
+## Architecture
+
+The current cleanup splits process/bootstrap code, app composition, service
+wiring, and the main loop into dedicated app-layer files while preserving the
+existing reader, shelf, menu, online shelf, and platform behavior. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for the module boundaries and protected
+behaviors that future changes should keep.
+
 ## Features
 
 - Native SDL2 fullscreen reader optimized for low-power handheld devices.

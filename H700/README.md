@@ -15,3 +15,9 @@ H700 packaging copies each newly built release zip there automatically.
 Packaging note:
 - Online upgrade extraction must not replace `online_sources.ini`.
 - Treat `online_sources.ini` as user/device configuration, not packaged content.
+
+Refactor status:
+- The cleanup keeps the H700 build entry at `H700/build_h700_low_glibc_docker.ps1`.
+- The repository-root `Downloads/` mirror remains intentional legacy behavior.
+- App-layer file moves such as `app_loop`, `app_bootstrap`, `app_composition`,
+  and `app_services` must not change the package layout above.

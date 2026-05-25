@@ -18,9 +18,9 @@ bool ReaderLaunchService::OpenFromShelfItem(const BookItem &item) const {
     deps_.open_deps.ui.current_book = open_path;
     final_opened = deps_.open_epub_text_book && deps_.open_epub_text_book(open_path);
     if (final_opened) {
-      if (deps_.open_deps.epub_runtime) deps_.open_deps.epub_runtime->Close();
-      if (deps_.open_deps.pdf_runtime) deps_.open_deps.pdf_runtime->Close();
-      if (deps_.open_deps.zip_image_runtime) deps_.open_deps.zip_image_runtime->Close();
+      if (deps_.open_deps.runtimes.epub_runtime) deps_.open_deps.runtimes.epub_runtime->Close();
+      if (deps_.open_deps.runtimes.pdf_runtime) deps_.open_deps.runtimes.pdf_runtime->Close();
+      if (deps_.open_deps.runtimes.zip_image_runtime) deps_.open_deps.runtimes.zip_image_runtime->Close();
       deps_.open_deps.ui.mode = ReaderMode::Txt;
     }
   }
@@ -41,20 +41,28 @@ bool ReaderLaunchService::OpenFromShelfItem(const BookItem &item) const {
 std::function<bool(const BookItem &)> MakeShelfReaderLaunchHandler(ShelfReaderLaunchHandlerDeps deps) {
   return [deps](const BookItem &item) mutable {
     ReaderOpenDeps open_deps{
-        deps.renderer,
-        deps.screen_w ? deps.screen_w() : 0,
-        deps.screen_h ? deps.screen_h() : 0,
+        ReaderRenderEnv{
+            deps.renderer,
+            deps.screen_w ? deps.screen_w() : 0,
+            deps.screen_h ? deps.screen_h() : 0,
+        },
         deps.ui,
-        deps.reader_manager,
-        deps.pdf_runtime,
-        deps.epub_runtime,
-        deps.zip_image_runtime,
-        deps.epub_flow_base_font_pt,
-        deps.epub_flow_background_color,
-        deps.epub_flow_font_color,
-        deps.open_text_book,
-        deps.close_text_reader,
-        deps.file_exists,
+        ReaderFormatRuntimes{
+            deps.reader_manager,
+            deps.pdf_runtime,
+            deps.epub_runtime,
+            deps.zip_image_runtime,
+        },
+        ReaderFlowStyle{
+            deps.epub_flow_base_font_pt,
+            deps.epub_flow_background_color,
+            deps.epub_flow_font_color,
+        },
+        ReaderSessionCallbacks{
+            deps.open_text_book,
+            deps.close_text_reader,
+            deps.file_exists,
+        },
     };
     ReaderLaunchService reader_launch{
         ReaderLaunchServiceDeps{

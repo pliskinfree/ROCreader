@@ -60,6 +60,8 @@ rsync -a --delete \
   --exclude='build/' \
   --exclude='dist_lowglibc/' \
   --exclude='dist_h700/' \
+  --exclude='RGDS/dist*/' \
+  --exclude='tmp_rgds_compare/' \
   --exclude='Downloads/' \
   --exclude='logs/' \
   --exclude='cache/' \

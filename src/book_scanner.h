@@ -4,6 +4,12 @@
 #include <string>
 #include <vector>
 
+enum class BookOrigin {
+  Local,
+  OnlineRemote,
+  OnlineDownloaded,
+};
+
 struct BookItem {
   std::string name;
   std::string path;
@@ -11,6 +17,7 @@ struct BookItem {
   std::filesystem::path native_fs_path;
   bool is_dir = false;
   int preload_category = -1;
+  BookOrigin origin = BookOrigin::Local;
   bool is_remote = false;
   std::string remote_id;
   std::string remote_source_id;

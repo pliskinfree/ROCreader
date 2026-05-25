@@ -246,6 +246,14 @@ void DestroyContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entrie
   entries.clear();
 }
 
+ContributorAvatarState InitializeContributorAvatarState(int selected_index) {
+  ContributorAvatarState state{};
+  if (selected_index >= 0) {
+    state.focus_index = selected_index;
+  }
+  return state;
+}
+
 void LoadContributorAvatarEntries(std::vector<ContributorAvatarEntry> &entries, const std::filesystem::path &ui_root,
                                   const std::filesystem::path &exe_path, SDL_Renderer *renderer, int language_index,
                                   int avatar_texture_size,

@@ -7,12 +7,12 @@
 #include <iostream>
 #include <string>
 
-namespace {
-bool SystemVolumeSfxFollowsHardware() {
+bool SystemVolumeSfxFollowsHardwareEnabled() {
   const char *env = std::getenv("ROCREADER_SYSTEM_VOLUME_SFX_FOLLOWS_HARDWARE");
   return env && (*env == '1' || *env == 'y' || *env == 'Y' || *env == 't' || *env == 'T');
 }
 
+namespace {
 bool VerboseLogEnabled() {
   const char *debug = std::getenv("ROCREADER_DEBUG_LOG");
   const char *verbose = std::getenv("ROCREADER_VERBOSE_LOG");
@@ -22,6 +22,24 @@ bool VerboseLogEnabled() {
   return enabled(debug) || enabled(verbose);
 }
 } // namespace
+
+AppUiState InitializeAppUiState(const ConfigStore &config, const SystemControlLevels &system_levels,
+                                VolumeController &volume_controller) {
+  AppUiState state{};
+  state.volume_display_percent =
+      std::clamp((config.Get().sfx_volume * 100) / std::max(1, SDL_MIX_MAXVOLUME), 0, 100);
+  if (system_levels.volume.available) {
+    state.volume_display_percent = std::clamp(
+        (system_levels.volume.level * 100) / std::max(1, system_levels.volume.max_level),
+        0, 100);
+  } else {
+    int initial_system_volume_percent = 0;
+    if (volume_controller.RefreshPercent(initial_system_volume_percent)) {
+      state.volume_display_percent = initial_system_volume_percent;
+    }
+  }
+  return state;
+}
 
 VolumeController::VolumeController(bool prefer_system) : prefer_system_(prefer_system), service_(prefer_system) {}
 
@@ -105,14 +123,14 @@ void HandleVolumeControls(AppUiState &state, const InputManager &input, uint32_t
       }
       state.volume_display_percent = system_percent;
       if (apply_sfx_volume) {
-        const int sfx_volume = SystemVolumeSfxFollowsHardware()
+        const int sfx_volume = SystemVolumeSfxFollowsHardwareEnabled()
                                    ? SDL_MIX_MAXVOLUME
                                    : std::clamp((clamped_percent * SDL_MIX_MAXVOLUME + 50) / 100, 0,
                                                 SDL_MIX_MAXVOLUME);
         apply_sfx_volume(sfx_volume);
       }
       if (cfg.audio) {
-        if (schedule_change_sfx && SystemVolumeSfxFollowsHardware()) {
+        if (schedule_change_sfx && SystemVolumeSfxFollowsHardwareEnabled()) {
           schedule_change_sfx(now + 90);
         } else if (play_change_sfx) {
           play_change_sfx();

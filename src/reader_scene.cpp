@@ -302,12 +302,16 @@ void ReaderScene::HandleInput(const ReaderSceneInputDeps &deps) const {
     ReaderCloseDeps close_deps{
         deps.ui,
         deps.progress,
-        deps.reader_manager,
-        &deps.pdf_runtime,
-        &deps.epub_runtime,
-        &deps.zip_image_runtime,
-        deps.services.close_text_reader,
-        deps.services.persist_current_txt_resume_snapshot,
+        ReaderFormatRuntimes{
+            deps.reader_manager,
+            &deps.pdf_runtime,
+            &deps.epub_runtime,
+            &deps.zip_image_runtime,
+        },
+        ReaderCloseCallbacks{
+            deps.services.close_text_reader,
+            deps.services.persist_current_txt_resume_snapshot,
+        },
     };
     CloseReaderSession(close_deps);
     deps.ui.chapter_sidebar_visible = false;

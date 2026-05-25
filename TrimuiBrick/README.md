@@ -45,3 +45,13 @@ Packaging/update notes:
 - Brick online updates must preserve the device's local `online_sources.ini`.
   The boot-time update installer should not replace that file while extracting
   and applying a downloaded package.
+
+Refactor status:
+
+- The cleanup keeps the Brick build entry at
+  `TrimuiBrick\build_low_glibc_docker.ps1`.
+- Both `-RequireMupdf 1` and `-RequireMupdf 0` remain supported validation
+  routes.
+- App-layer file moves such as `app_loop`, `app_bootstrap`, `app_composition`,
+  and `app_services` must not change this packaging workspace or update
+  preservation behavior.

@@ -527,6 +527,7 @@ std::vector<BookItem> BuildOnlineShelfItems(const OnlineSourceState &state, bool
     item.real_path = item.path;
     if (!remote.local_path.empty()) item.native_fs_path = std::filesystem::path(remote.local_path);
     item.is_dir = false;
+    item.origin = remote.local_path.empty() ? BookOrigin::OnlineRemote : BookOrigin::OnlineDownloaded;
     item.is_remote = true;
     item.remote_id = remote.id;
     item.remote_source_id = source.id;
@@ -588,6 +589,7 @@ bool OnlineCatalogCoverExists(const OnlineSourceState &state, const OnlineCatalo
   if (catalog_item.cover_url.empty()) return true;
   BookItem item;
   item.name = catalog_item.title;
+  item.origin = BookOrigin::OnlineRemote;
   item.is_remote = true;
   item.remote_id = catalog_item.id;
   item.remote_cover_url = catalog_item.cover_url;
@@ -605,6 +607,7 @@ bool DownloadOnlineCoverForCatalogItem(const OnlineSourceState &state, const Onl
   if (catalog_item.cover_url.empty()) return false;
   BookItem item;
   item.name = catalog_item.title;
+  item.origin = BookOrigin::OnlineRemote;
   item.is_remote = true;
   item.remote_id = catalog_item.id;
   item.remote_cover_url = catalog_item.cover_url;
@@ -652,6 +655,7 @@ bool DownloadOnlineBookForItem(OnlineSourceState &state, const BookItem &item, B
   if (std::filesystem::exists(final_path, ec) && !ec) {
     out_local_item = item;
     out_local_item.is_remote = false;
+    out_local_item.origin = BookOrigin::OnlineDownloaded;
     out_local_item.path = final_path.string();
     out_local_item.real_path = final_path.string();
     out_local_item.native_fs_path = final_path;
@@ -699,6 +703,7 @@ bool DownloadOnlineBookForItem(OnlineSourceState &state, const BookItem &item, B
   std::filesystem::remove(size_path, ec);
   out_local_item = item;
   out_local_item.is_remote = false;
+  out_local_item.origin = BookOrigin::OnlineDownloaded;
   out_local_item.path = final_path.string();
   out_local_item.real_path = final_path.string();
   out_local_item.native_fs_path = final_path;

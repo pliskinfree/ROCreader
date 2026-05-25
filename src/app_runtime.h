@@ -42,6 +42,9 @@ enum class MenuToggleAction {
   OpenFromReader,
 };
 
+bool SystemVolumeSfxFollowsHardwareEnabled();
+AppUiState InitializeAppUiState(const ConfigStore &config, const SystemControlLevels &system_levels,
+                                VolumeController &volume_controller);
 void TickAppUiState(AppUiState &state, float dt);
 void HandleVolumeControls(AppUiState &state, const InputManager &input, uint32_t now,
                           VolumeController &volume_controller, ConfigStore &config,

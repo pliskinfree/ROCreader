@@ -7,7 +7,20 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <fstream>
+#include <system_error>
+
+namespace {
+constexpr const char *kOnlineSourcesPathEnv = "ROCREADER_ONLINE_SOURCES";
+
+std::filesystem::path ResolveOnlineRuntimeRoot(const std::filesystem::path &runtime_root) {
+  if (!runtime_root.empty()) return runtime_root;
+  std::error_code ec;
+  const std::filesystem::path cwd = std::filesystem::current_path(ec);
+  return ec ? std::filesystem::path(".") : cwd;
+}
+} // namespace
 
 OnlineShelfController::OnlineShelfController() = default;
 
@@ -27,6 +40,15 @@ void OnlineShelfController::Initialize(const std::filesystem::path &config_path,
                                        const std::filesystem::path &download_root) {
   InitializeOnlineSourceState(state_, config_path, download_root);
   last_connected_ = state_.connected;
+}
+
+void OnlineShelfController::InitializeFromRuntimeRoot(const std::filesystem::path &runtime_root) {
+  const std::filesystem::path resolved_root = ResolveOnlineRuntimeRoot(runtime_root);
+  std::filesystem::path online_sources_path = resolved_root / "online_sources.ini";
+  if (const char *override_path = std::getenv(kOnlineSourcesPathEnv); override_path && *override_path) {
+    online_sources_path = std::filesystem::path(override_path);
+  }
+  Initialize(online_sources_path, resolved_root / "Downloads");
 }
 
 void OnlineShelfController::Shutdown() {

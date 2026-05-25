@@ -94,6 +94,15 @@ and are not meant to be checked in.
 
 Run `ROCreader_RGDS.sh` on the device.
 
+Refactor status:
+
+- The cleanup keeps the official RGDS build entry at
+  `RGDS\build_rgds_official.ps1`.
+- The official runtime direction remains the Weston/Wayland single spanning
+  `1280x480` SDL window route.
+- App-layer file moves such as `app_loop`, `app_bootstrap`, `app_composition`,
+  and `app_services` must not revive the historical dual-window route.
+
 ## Build Probe
 
 ```powershell
