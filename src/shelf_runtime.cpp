@@ -589,6 +589,7 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
     const int nav_slot_w = std::max(1, base_total_w / nav_count);
     const bool online = deps.online_shelf_active && deps.online_shelf_active();
     const int nav_pill_h = 32;
+    int nav_text_center_h = nav_pill_h;
     SDL_Color nav_text{238, 242, 250, 255};
     std::vector<int> text_widths(static_cast<size_t>(nav_count), 0);
     std::vector<int> text_heights(static_cast<size_t>(nav_count), 0);
@@ -623,16 +624,19 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
       int pw = 0;
       int ph = 0;
       deps.get_texture_size(deps.ui_assets.nav_selected_pill, pw, ph);
+      if (ph > 0) nav_text_center_h = ph;
       const int slot_center_x =
           deps.layout.nav_start_x + deps.nav_selected_index * deps.layout.nav_slot_w + deps.layout.nav_slot_w / 2;
       draw_native(deps.ui_assets.nav_selected_pill, slot_center_x - pw / 2, deps.layout.nav_y);
     }
+    const int nav_text_y_offset = (deps.layout.screen_w == 1024 && deps.layout.screen_h == 768) ? 1 : 0;
     for (int i = 0; i < nav_count; ++i) {
       SDL_Texture *tex = text_textures[static_cast<size_t>(i)];
       if (!tex) continue;
       const int slot_x = deps.layout.nav_start_x + i * nav_slot_w;
       const int tx = slot_x + std::max(0, (nav_slot_w - text_widths[static_cast<size_t>(i)]) / 2);
-      const int ty = deps.layout.nav_y + std::max(0, (nav_pill_h - text_heights[static_cast<size_t>(i)]) / 2);
+      const int ty = deps.layout.nav_y + std::max(0, (nav_text_center_h - text_heights[static_cast<size_t>(i)]) / 2) +
+                     nav_text_y_offset;
       SDL_Rect td{tx, ty, text_widths[static_cast<size_t>(i)], text_heights[static_cast<size_t>(i)]};
       SDL_RenderCopy(deps.renderer, tex, nullptr, &td);
     }
