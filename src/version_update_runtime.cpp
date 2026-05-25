@@ -1,5 +1,6 @@
 #include "version_update_runtime.h"
 #include "app_language.h"
+#include "online_source_transport.h"
 
 #include <algorithm>
 #include <array>
@@ -334,6 +335,11 @@ std::string HttpGetText(const std::string &url) {
       "-Uri '" + escaped_url + "').Content\"";
   return RunCommandCapture(command);
 #else
+  if (std::string output = ::HttpGetText(url); !output.empty()) {
+    AppendUpdateLog("HttpGetText online transport success url=" + url + " bytes=" + std::to_string(output.size()));
+    return output;
+  }
+  AppendUpdateLog("HttpGetText online transport returned empty; falling back to command transports url=" + url);
   const std::string curl_command =
       "curl -LfsS -H " + EscapeForPosix(std::string("User-Agent: ") + kUserAgent) + " "
       + EscapeForPosix(url) + " 2>/dev/null";
@@ -360,6 +366,11 @@ bool DownloadFile(const std::string &url, const std::filesystem::path &output_pa
   AppendUpdateLog(std::string("PowerShell download result: ") + (ok ? "success" : "failed"));
   return ok;
 #else
+  if (::DownloadFile(url, output_path)) {
+    AppendUpdateLog("DownloadFile online transport success url=" + url);
+    return true;
+  }
+  AppendUpdateLog("DownloadFile online transport failed; falling back to command transports url=" + url);
   const std::string quoted_output = EscapeForPosix(output_path.string());
   const std::string header = EscapeForPosix(std::string("User-Agent: ") + kUserAgent);
   const std::string raw_header = EscapeForPosix("Accept: application/vnd.github.raw");

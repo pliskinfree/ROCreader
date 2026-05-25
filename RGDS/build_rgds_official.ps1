@@ -99,6 +99,7 @@ mkdir -p /work/RGDS/dist_official/Roms/APPS
 cp -a /work/RGDS/dist_official/base/APPS/ROCreader /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS
 cp /work/RGDS/rgds_official_launcher.sh /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS.sh
 cp /work/RGDS/rgds_power_control.sh /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS/rgds_power_control.sh
+rm -rf /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS/URL
 find /work/RGDS/dist_official/Roms/APPS -type f -name '*.sh' -exec sed -i 's/\r$//' {} +
 chmod +x /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS.sh
 chmod +x /work/RGDS/dist_official/Roms/APPS/ROCreader_RGDS/rgds_power_control.sh
