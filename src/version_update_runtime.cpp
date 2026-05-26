@@ -906,15 +906,20 @@ void InitializeVersionUpdateState(VersionUpdateState &state, const std::filesyst
   ReadPendingMarker(state.pending_marker_path, state);
 }
 
-void TickVersionUpdateState(VersionUpdateState &state, float dt) {
+VersionUpdateTickResult TickVersionUpdateState(VersionUpdateState &state, float dt) {
+  VersionUpdateTickResult result{};
   if (state.download_in_progress && !state.temp_package_path.empty()) {
     std::error_code ec;
     const uint64_t size = std::filesystem::exists(state.temp_package_path, ec)
                               ? std::filesystem::file_size(state.temp_package_path, ec)
                               : 0;
     if (!ec && state.expected_download_bytes > 0) {
-      state.download_progress_pct = std::clamp(
+      const int next_progress = std::clamp(
           static_cast<int>((size * 100ull) / state.expected_download_bytes), 0, 99);
+      if (next_progress != state.download_progress_pct) {
+        state.download_progress_pct = next_progress;
+        result.state_changed = true;
+      }
     }
     if (!ec) {
       if (dt > 0.0001f) {
@@ -936,10 +941,11 @@ void TickVersionUpdateState(VersionUpdateState &state, float dt) {
     state.download_thread_done = state.download_thread_state->done.load();
     state.download_thread_success = state.download_thread_state->success.load();
   }
-  if (!state.download_thread_done) return;
+  if (!state.download_thread_done) return result;
 
   JoinDownloadThread(state);
   state.download_in_progress = false;
+  result.state_changed = true;
   if (state.download_thread_success) {
     state.has_pending_package = true;
     state.status = VersionUpdateStatus::Downloaded;
@@ -959,6 +965,7 @@ void TickVersionUpdateState(VersionUpdateState &state, float dt) {
     AppendUpdateLog("Update package download failed.");
   }
   state.download_thread_done = false;
+  return result;
 }
 
 void ShutdownVersionUpdateState(VersionUpdateState &state) {

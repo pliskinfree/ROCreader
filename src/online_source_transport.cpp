@@ -425,7 +425,9 @@ size_t CurlWriteString(char *ptr, size_t size, size_t nmemb, void *userdata) {
 size_t CurlWriteFile(char *ptr, size_t size, size_t nmemb, void *userdata) {
   if (!userdata) return 0;
   FILE *file = static_cast<FILE *>(userdata);
-  return std::fwrite(ptr, size, nmemb, file) * size;
+  const size_t written = std::fwrite(ptr, size, nmemb, file);
+  std::fflush(file);
+  return written * size;
 }
 
 int CurlCancelProgress(void *, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {

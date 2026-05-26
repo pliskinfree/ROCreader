@@ -2126,7 +2126,7 @@ int RunApp(int argc, char **argv) {
     hold_cooldown = std::max(0.0f, hold_cooldown - dt);
     menu_scene.Tick(menu_state, dt);
     TickAppUiState(app_ui, dt);
-    TickVersionUpdateState(version_update_state, dt);
+    const VersionUpdateTickResult version_update_tick = TickVersionUpdateState(version_update_state, dt);
 
     input.BeginFrame(dt);
     const bool animate_enabled = config.Get().animations;
@@ -2151,7 +2151,9 @@ int RunApp(int argc, char **argv) {
           shelf_state.any_grid_animating));
     const bool needs_periodic_tick =
         (state == AppScene::Shelf && shelf_state.title_marquee_active) ||
-        (state == AppScene::Reader && reader_scene.IsRenderPending(reader_ui, &reader_manager));
+        (state == AppScene::Reader && reader_scene.IsRenderPending(reader_ui, &reader_manager)) ||
+        (state == AppScene::Settings && menu_scene.IsSelected(menu_state, SettingId::VersionUpdate) &&
+         version_update_tick.state_changed);
     const uint32_t loop_now = SDL_GetTicks();
     const bool has_pending_flush =
         config.ShouldFlush(loop_now, kDeferredSaveDelayMs) ||

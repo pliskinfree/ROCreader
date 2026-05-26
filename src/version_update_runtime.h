@@ -28,6 +28,10 @@ struct VersionUpdateDownloadThreadState {
   std::atomic<bool> success = false;
 };
 
+struct VersionUpdateTickResult {
+  bool state_changed = false;
+};
+
 struct VersionUpdateState {
   bool panel_active = false;
   int selected_button = 0;
@@ -74,6 +78,6 @@ bool HandleVersionUpdateInput(const InputManager &input, VersionUpdateState &sta
 bool BeginVersionUpdateDownload(VersionUpdateState &state);
 void InitializeVersionUpdateState(VersionUpdateState &state,
                                   const std::filesystem::path &runtime_root = {});
-void TickVersionUpdateState(VersionUpdateState &state, float dt);
+VersionUpdateTickResult TickVersionUpdateState(VersionUpdateState &state, float dt);
 void ShutdownVersionUpdateState(VersionUpdateState &state);
 void DrawVersionUpdatePreview(const VersionUpdateRenderDeps &deps);
