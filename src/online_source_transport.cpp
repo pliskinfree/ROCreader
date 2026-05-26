@@ -459,6 +459,11 @@ bool RgdsShouldRetryCurl(CURLcode code) {
   }
 }
 
+bool IsGithubContentsApiUrl(const std::string &url) {
+  return url.find("://api.github.com/repos/") != std::string::npos &&
+         url.find("/contents/") != std::string::npos;
+}
+
 void ConfigureCurlCommon(CURL *curl, const std::string &url, const std::string &referer) {
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -567,6 +572,12 @@ bool DownloadFileViaLibcurl(const std::string &url, const std::filesystem::path 
     return false;
   }
   ConfigureCurlCommon(curl, url, referer);
+  struct curl_slist *headers = nullptr;
+  if (IsGithubContentsApiUrl(url)) {
+    headers = curl_slist_append(headers, "Accept: application/vnd.github.raw");
+    runtime_log::Line("online: libcurl download using GitHub raw contents accept header url=" + url);
+  }
+  if (headers) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteFile);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
   const CURLcode code = PerformCurl(curl);
@@ -574,6 +585,7 @@ bool DownloadFileViaLibcurl(const std::string &url, const std::filesystem::path 
                     " url=" + url + " output=" + output_path.string());
   long response_code = 0;
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+  if (headers) curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
   std::fclose(file);
   if (code == CURLE_OK) return true;
