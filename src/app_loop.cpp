@@ -114,8 +114,8 @@ constexpr float kCoverAspect = 2.0f / 3.0f;
 constexpr Uint8 kUnfocusedAlpha = 255;
 constexpr float kTitleMarqueePauseSec = 0.75f;
 constexpr float kTitleMarqueeSpeedPx = 48.0f;
-constexpr size_t kCoverCacheMaxEntries = 96;
-constexpr size_t kCoverCacheMaxBytes = 32u * 1024u * 1024u;
+constexpr size_t kCoverCacheMaxEntries = 320;
+constexpr size_t kCoverCacheMaxBytes = 96u * 1024u * 1024u;
 constexpr Uint8 kSidebarMaskMaxAlpha = 84;
 constexpr int kIdleWaitMs = 100;
 constexpr float kCardLerpSpeed = 18.0f;
@@ -1115,10 +1115,6 @@ int RunApp(int argc, char **argv) {
     const std::vector<BookItem> items = build_shelf_cover_preload_items(boot_preload_item_limit);
     pending_shelf_cover_preload_fingerprint =
         BuildShelfPreloadFingerprint(items, books_roots, cover_roots, cover_texture_w(), cover_texture_h());
-    if (shelf_cover_preload_manifest_loaded &&
-        pending_shelf_cover_preload_fingerprint == saved_shelf_cover_preload_fingerprint) {
-      return {};
-    }
     return items;
   };
 
