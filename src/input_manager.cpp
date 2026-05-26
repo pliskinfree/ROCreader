@@ -671,7 +671,14 @@ void InputManager::PollLinuxInputDevices() {
 
         if (event.type == EV_KEY) {
           const int code = static_cast<int>(event.code);
-          const bool down = event.value != 0;
+          // Linux input EV_KEY uses:
+          //   0 = release
+          //   1 = press
+          //   2 = auto-repeat while held
+          // Treating 2 as a fresh press causes power-key wake to retrigger
+          // screen-off immediately on H700, creating a wake/sleep loop.
+          if (event.value == 2) continue;
+          const bool down = event.value == 1;
           Button mapped = InvalidButton();
           if (input_profile_ == InputProfile::RGDS) {
             switch (code) {
