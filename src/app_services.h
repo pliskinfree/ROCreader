@@ -154,4 +154,5 @@ void PrepareMenuSceneInputState(SystemSettingsState &system_settings_state,
                                 size_t contributor_avatar_count);
 AppInputDevices OpenAppInputDevices(bool verbose_log);
 void CloseAppInputDevices(AppInputDevices &devices);
+void RefreshAppInputDevices(AppInputDevices &devices, bool verbose_log);
 AppStoragePaths InitializeAppStoragePaths(bool verbose_log);

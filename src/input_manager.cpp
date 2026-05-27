@@ -299,8 +299,15 @@ void InputManager::ResetAll() {
   }
 }
 
+void InputManager::RefreshDevices() {
+  CloseLinuxInputDevices();
+  OpenLinuxInputDevices();
+  ResetAll();
+}
+
 void InputManager::SuppressPowerUntilRelease() {
   power_suppressed_until_release_ = true;
+  power_suppressed_until_tick_ = SDL_GetTicks() + 900;
   states_[static_cast<int>(Button::Power)] = BtnState{};
 }
 
@@ -551,9 +558,18 @@ void InputManager::LoadOverrides(const std::string &mapping_path) {
 void InputManager::SetDown(Button b, bool down) {
   if (!IsValid(b)) return;
   if (b == Button::Power && power_suppressed_until_release_) {
-    states_[static_cast<int>(Button::Power)] = BtnState{};
-    if (!down) power_suppressed_until_release_ = false;
-    return;
+    const bool suppress_expired = SDL_TICKS_PASSED(SDL_GetTicks(), power_suppressed_until_tick_);
+    if (!down || suppress_expired) {
+      power_suppressed_until_release_ = false;
+      power_suppressed_until_tick_ = 0;
+      if (!down) {
+        states_[static_cast<int>(Button::Power)] = BtnState{};
+        return;
+      }
+    } else {
+      states_[static_cast<int>(Button::Power)] = BtnState{};
+      return;
+    }
   }
   BtnState &s = states_[static_cast<int>(b)];
   if (down && !s.down) {

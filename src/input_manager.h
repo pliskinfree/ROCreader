@@ -71,6 +71,7 @@ public:
   float HoldTime(Button b) const;
   bool AnyPressed() const;
   void ResetAll();
+  void RefreshDevices();
   void SuppressPowerUntilRelease();
   std::string DescribeJoyMap() const;
   std::string DescribePadMap() const;
@@ -122,5 +123,6 @@ private:
   std::vector<int> linux_input_fds_;
   bool full_input_log_enabled_ = false;
   bool power_suppressed_until_release_ = false;
+  Uint32 power_suppressed_until_tick_ = 0;
   float dt_ = 1.0f / 60.0f;
 };

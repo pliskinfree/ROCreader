@@ -818,6 +818,13 @@ int RunApp(int argc, char **argv) {
   ScreenOffMode screen_off_mode = ScreenOffMode::Awake;
   bool rgds_display_sleep_active = false;
   uint32_t power_key_ignore_until_tick = 0;
+  auto resync_input_after_screen_wake = [&]() {
+    runtime_log::Line("main: input resync after screen wake");
+    SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
+    RefreshAppInputDevices(input_devices, verbose_log);
+    input.RefreshDevices();
+    input.SuppressPowerUntilRelease();
+  };
   TxtTranscodeJob txt_transcode_job{};
   ReaderUiState reader_ui{};
   std::string &current_book = reader_ui.current_book;
@@ -2250,7 +2257,7 @@ int RunApp(int argc, char **argv) {
         rgds_display_sleep_active = false;
         last_user_input_tick = SDL_GetTicks();
         power_key_ignore_until_tick = last_user_input_tick + 450;
-        input.SuppressPowerUntilRelease();
+        resync_input_after_screen_wake();
         if (wake_ok) {
           runtime_log::Line("main: RGDS wake completed");
         } else {
@@ -2268,7 +2275,7 @@ int RunApp(int argc, char **argv) {
         screen_off_mode = ScreenOffMode::Awake;
         last_user_input_tick = SDL_GetTicks();
         power_key_ignore_until_tick = last_user_input_tick + 450;
-        input.SuppressPowerUntilRelease();
+        resync_input_after_screen_wake();
       }
       input.ResetAll();
       app_shell.ResetFrameClock(prev_ticks);

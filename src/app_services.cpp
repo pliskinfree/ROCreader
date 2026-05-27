@@ -361,6 +361,13 @@ void CloseAppInputDevices(AppInputDevices &devices) {
   devices.opened_joysticks.clear();
 }
 
+void RefreshAppInputDevices(AppInputDevices &devices, bool verbose_log) {
+  CloseAppInputDevices(devices);
+  SDL_GameControllerUpdate();
+  SDL_JoystickUpdate();
+  devices = OpenAppInputDevices(verbose_log);
+}
+
 AppStoragePaths InitializeAppStoragePaths(bool verbose_log) {
   AppStoragePaths paths;
   paths.books_roots = storage_paths::DetectBooksRoots();
