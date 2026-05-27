@@ -362,10 +362,12 @@ void CloseAppInputDevices(AppInputDevices &devices) {
 }
 
 void RefreshAppInputDevices(AppInputDevices &devices, bool verbose_log) {
-  CloseAppInputDevices(devices);
+  (void)devices;
   SDL_GameControllerUpdate();
   SDL_JoystickUpdate();
-  devices = OpenAppInputDevices(verbose_log);
+  if (verbose_log) {
+    std::cout << "[native_h700] refreshed SDL input state without reopening handles\n";
+  }
 }
 
 AppStoragePaths InitializeAppStoragePaths(bool verbose_log) {

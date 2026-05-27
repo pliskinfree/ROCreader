@@ -18,6 +18,12 @@
 #endif
 
 #if !defined(_WIN32)
+bool IsH700Profile(InputProfile profile) {
+  return profile == InputProfile::H700Default ||
+         profile == InputProfile::H70034xxSp ||
+         profile == InputProfile::H70035xxH;
+}
+
 int AxisDirectionFromValue(int fd, int code, int value) {
   input_absinfo info{};
   if (fd >= 0 && ioctl(fd, EVIOCGABS(code), &info) == 0 && info.maximum > info.minimum) {
@@ -665,16 +671,17 @@ void InputManager::PollLinuxInputDevices() {
       input_event event{};
       const ssize_t n = read(fd, &event, sizeof(event));
       if (n == static_cast<ssize_t>(sizeof(event))) {
-        if (event.type == EV_ABS && input_profile_ == InputProfile::RGDS) {
+        if (event.type == EV_ABS && (input_profile_ == InputProfile::RGDS || IsH700Profile(input_profile_))) {
           const int code = static_cast<int>(event.code);
           const int value = static_cast<int>(event.value);
-          // RGDS analog axes captured from ANBERNIC-rk3568-keys on 2026-05-20.
           if (code == ABS_HAT0X) {
             SetDown(Button::Left, value < 0);
             SetDown(Button::Right, value > 0);
           } else if (code == ABS_HAT0Y) {
             SetDown(Button::Up, value < 0);
             SetDown(Button::Down, value > 0);
+          } else if (input_profile_ != InputProfile::RGDS) {
+            continue;
           } else if (code == ABS_Z) {
             const int dir = AxisDirectionFromValue(fd, code, value);
             SetDown(Button::Left, dir < 0);
@@ -724,6 +731,70 @@ void InputManager::PollLinuxInputDevices() {
               case KEY_VOLUMEUP: mapped = Button::VolUp; break;
               case KEY_VOLUMEDOWN: mapped = Button::VolDown; break;
               default: break;
+            }
+          } else if (IsH700Profile(input_profile_)) {
+            switch (code) {
+              case KEY_UP:
+              case BTN_DPAD_UP:
+                mapped = Button::Up;
+                break;
+              case KEY_DOWN:
+              case BTN_DPAD_DOWN:
+                mapped = Button::Down;
+                break;
+              case KEY_LEFT:
+              case BTN_DPAD_LEFT:
+                mapped = Button::Left;
+                break;
+              case KEY_RIGHT:
+              case BTN_DPAD_RIGHT:
+                mapped = Button::Right;
+                break;
+              case BTN_SOUTH:
+                mapped = Button::A;
+                break;
+              case BTN_EAST:
+                mapped = Button::B;
+                break;
+              case BTN_NORTH:
+                mapped = Button::X;
+                break;
+              case BTN_WEST:
+                mapped = Button::Y;
+                break;
+              case BTN_TL:
+                mapped = Button::L1;
+                break;
+              case BTN_TR:
+                mapped = Button::R1;
+                break;
+              case BTN_TL2:
+                mapped = Button::L2;
+                break;
+              case BTN_TR2:
+                mapped = Button::R2;
+                break;
+              case BTN_SELECT:
+                mapped = Button::Select;
+                break;
+              case BTN_START:
+                mapped = Button::Start;
+                break;
+              case BTN_MODE:
+              case KEY_BACK:
+                mapped = Button::Menu;
+                break;
+              case KEY_POWER:
+                mapped = Button::Power;
+                break;
+              case KEY_VOLUMEUP:
+                mapped = Button::VolUp;
+                break;
+              case KEY_VOLUMEDOWN:
+                mapped = Button::VolDown;
+                break;
+              default:
+                break;
             }
           } else if (code == KEY_POWER) {
             mapped = Button::Power;

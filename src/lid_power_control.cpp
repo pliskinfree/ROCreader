@@ -110,6 +110,12 @@ bool RgdsPowerStateMatches(const std::filesystem::path &script, const std::strin
   return match;
 }
 
+bool IsH700InputProfile(InputProfile input_profile) {
+  return input_profile == InputProfile::H700Default ||
+         input_profile == InputProfile::H70034xxSp ||
+         input_profile == InputProfile::H70035xxH;
+}
+
 LidPowerController::LidPowerController(std::filesystem::path power_script_path)
     : power_script_path_(std::move(power_script_path)) {}
 
@@ -151,12 +157,13 @@ bool LidPowerController::TriggerPowerKeyScreenOff(InputProfile input_profile) co
   }
 
   if (!ScriptAvailable()) return false;
-  const char *env_name =
-      (input_profile == InputProfile::H700Default || input_profile == InputProfile::H70034xxSp)
-          ? "ROCREADER_H700_POWER_KEY_ARG"
-          : "ROCREADER_POWER_KEY_ARG";
+  const bool h700_profile = IsH700InputProfile(input_profile);
+  const char *env_name = h700_profile ? "ROCREADER_H700_POWER_KEY_ARG" : "ROCREADER_POWER_KEY_ARG";
   if (const char *arg = std::getenv(env_name); arg && *arg) {
     return RunPowerScriptArg(power_script_path_, arg);
+  }
+  if (h700_profile) {
+    return RunPowerScriptArgList(power_script_path_, {"off", "manual", "powerkey"});
   }
   return RunPowerScriptArgList(power_script_path_, {"powerkey", "manual", "off"});
 }
