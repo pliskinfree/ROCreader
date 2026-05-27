@@ -299,6 +299,11 @@ void InputManager::ResetAll() {
   }
 }
 
+void InputManager::SuppressPowerUntilRelease() {
+  power_suppressed_until_release_ = true;
+  states_[static_cast<int>(Button::Power)] = BtnState{};
+}
+
 std::string InputManager::DescribeJoyMap() const { return DescribeMap(joy_map_, "joy"); }
 
 std::string InputManager::DescribePadMap() const { return DescribeMap(pad_map_, "pad"); }
@@ -545,6 +550,11 @@ void InputManager::LoadOverrides(const std::string &mapping_path) {
 
 void InputManager::SetDown(Button b, bool down) {
   if (!IsValid(b)) return;
+  if (b == Button::Power && power_suppressed_until_release_) {
+    states_[static_cast<int>(Button::Power)] = BtnState{};
+    if (!down) power_suppressed_until_release_ = false;
+    return;
+  }
   BtnState &s = states_[static_cast<int>(b)];
   if (down && !s.down) {
     s.down = true;

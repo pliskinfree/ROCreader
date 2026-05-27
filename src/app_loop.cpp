@@ -817,6 +817,7 @@ int RunApp(int argc, char **argv) {
   enum class ScreenOffMode { Awake, Manual, Auto };
   ScreenOffMode screen_off_mode = ScreenOffMode::Awake;
   bool rgds_display_sleep_active = false;
+  uint32_t power_key_ignore_until_tick = 0;
   TxtTranscodeJob txt_transcode_job{};
   ReaderUiState reader_ui{};
   std::string &current_book = reader_ui.current_book;
@@ -2239,12 +2240,17 @@ int RunApp(int argc, char **argv) {
       if (observed_input_this_frame && screen_off_mode == ScreenOffMode::Awake) last_user_input_tick = SDL_GetTicks();
     }
 
+    const uint32_t power_now = SDL_GetTicks();
+    const bool power_input_allowed = SDL_TICKS_PASSED(power_now, power_key_ignore_until_tick);
+
     if (is_rgds_runtime && rgds_display_sleep_active) {
-      if (input.IsJustPressed(Button::Power)) {
+      if (power_input_allowed && input.IsJustPressed(Button::Power)) {
         runtime_log::Line("main: RGDS wake requested");
         const bool wake_ok = lid_power_controller.TriggerScreenOn(input_profile);
         rgds_display_sleep_active = false;
         last_user_input_tick = SDL_GetTicks();
+        power_key_ignore_until_tick = last_user_input_tick + 450;
+        input.SuppressPowerUntilRelease();
         if (wake_ok) {
           runtime_log::Line("main: RGDS wake completed");
         } else {
@@ -2257,17 +2263,19 @@ int RunApp(int argc, char **argv) {
     }
 
     if (screen_off_mode != ScreenOffMode::Awake) {
-      if (input.IsJustPressed(Button::Power)) {
+      if (power_input_allowed && input.IsJustPressed(Button::Power)) {
         lid_power_controller.TriggerScreenOn(input_profile);
         screen_off_mode = ScreenOffMode::Awake;
         last_user_input_tick = SDL_GetTicks();
+        power_key_ignore_until_tick = last_user_input_tick + 450;
+        input.SuppressPowerUntilRelease();
       }
       input.ResetAll();
       app_shell.ResetFrameClock(prev_ticks);
       continue;
     }
 
-    if (input.IsJustPressed(Button::Power)) {
+    if (power_input_allowed && input.IsJustPressed(Button::Power)) {
       if (lid_power_controller.TriggerPowerKeyScreenOff(input_profile)) {
         if (input_profile == InputProfile::RGDS) {
           rgds_display_sleep_active = true;
@@ -2276,6 +2284,8 @@ int RunApp(int argc, char **argv) {
           screen_off_mode = ScreenOffMode::Manual;
         }
         last_user_input_tick = SDL_GetTicks();
+        power_key_ignore_until_tick = last_user_input_tick + 450;
+        input.SuppressPowerUntilRelease();
         input.ResetAll();
         app_shell.ResetFrameClock(prev_ticks);
         continue;
