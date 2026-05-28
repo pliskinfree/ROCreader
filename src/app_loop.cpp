@@ -818,7 +818,6 @@ int RunApp(int argc, char **argv) {
   ScreenOffMode screen_off_mode = ScreenOffMode::Awake;
   bool rgds_display_sleep_active = false;
   uint32_t power_key_ignore_until_tick = 0;
-  uint32_t input_wake_resync_until_tick = 0;
   uint32_t input_wake_next_resync_tick = 0;
   auto resync_input_after_screen_wake = [&]() {
     runtime_log::Line("main: input resync after screen wake");
@@ -829,8 +828,7 @@ int RunApp(int argc, char **argv) {
         input_profile == InputProfile::H70035xxH) {
       ReopenAppInputDevices(input_devices, verbose_log);
       const uint32_t now = SDL_GetTicks();
-      input_wake_next_resync_tick = now + 180;
-      input_wake_resync_until_tick = now + 1100;
+      input_wake_next_resync_tick = now + 220;
     }
     input.RefreshDevices();
     input.SuppressPowerUntilRelease();
@@ -2266,19 +2264,15 @@ int RunApp(int argc, char **argv) {
     }
 
     const uint32_t power_now = SDL_GetTicks();
-    if (input_wake_resync_until_tick != 0 &&
-        SDL_TICKS_PASSED(power_now, input_wake_next_resync_tick)) {
+    if (input_wake_next_resync_tick != 0 && observed_input_this_frame) {
+      input_wake_next_resync_tick = 0;
+    } else if (input_wake_next_resync_tick != 0 &&
+               SDL_TICKS_PASSED(power_now, input_wake_next_resync_tick)) {
       runtime_log::Line("main: deferred H700 input resync after wake");
-      SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
       ReopenAppInputDevices(input_devices, verbose_log);
       input.RefreshDevices();
       input.SuppressPowerUntilRelease();
-      if (SDL_TICKS_PASSED(power_now, input_wake_resync_until_tick)) {
-        input_wake_resync_until_tick = 0;
-        input_wake_next_resync_tick = 0;
-      } else {
-        input_wake_next_resync_tick = power_now + 180;
-      }
+      input_wake_next_resync_tick = 0;
     }
     const bool power_input_allowed = SDL_TICKS_PASSED(power_now, power_key_ignore_until_tick);
 

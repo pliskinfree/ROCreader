@@ -733,54 +733,23 @@ void InputManager::PollLinuxInputDevices() {
               default: break;
             }
           } else if (IsH700Profile(input_profile_)) {
+            // H700 firmwares also report the same physical buttons through SDL.
+            // The evdev BTN_* names are not stable across these devices, so do
+            // not map shoulders/face/start/select here or they override the
+            // per-profile SDL joy maps with scrambled buttons.
             switch (code) {
               case KEY_UP:
-              case BTN_DPAD_UP:
                 mapped = Button::Up;
                 break;
               case KEY_DOWN:
-              case BTN_DPAD_DOWN:
                 mapped = Button::Down;
                 break;
               case KEY_LEFT:
-              case BTN_DPAD_LEFT:
                 mapped = Button::Left;
                 break;
               case KEY_RIGHT:
-              case BTN_DPAD_RIGHT:
                 mapped = Button::Right;
                 break;
-              case BTN_SOUTH:
-                mapped = Button::A;
-                break;
-              case BTN_EAST:
-                mapped = Button::B;
-                break;
-              case BTN_NORTH:
-                mapped = Button::X;
-                break;
-              case BTN_WEST:
-                mapped = Button::Y;
-                break;
-              case BTN_TL:
-                mapped = Button::L1;
-                break;
-              case BTN_TR:
-                mapped = Button::R1;
-                break;
-              case BTN_TL2:
-                mapped = Button::L2;
-                break;
-              case BTN_TR2:
-                mapped = Button::R2;
-                break;
-              case BTN_SELECT:
-                mapped = Button::Select;
-                break;
-              case BTN_START:
-                mapped = Button::Start;
-                break;
-              case BTN_MODE:
               case KEY_BACK:
                 mapped = Button::Menu;
                 break;
