@@ -818,10 +818,20 @@ int RunApp(int argc, char **argv) {
   ScreenOffMode screen_off_mode = ScreenOffMode::Awake;
   bool rgds_display_sleep_active = false;
   uint32_t power_key_ignore_until_tick = 0;
+  uint32_t input_wake_resync_until_tick = 0;
+  uint32_t input_wake_next_resync_tick = 0;
   auto resync_input_after_screen_wake = [&]() {
     runtime_log::Line("main: input resync after screen wake");
     SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
     RefreshAppInputDevices(input_devices, verbose_log);
+    if (input_profile == InputProfile::H700Default ||
+        input_profile == InputProfile::H70034xxSp ||
+        input_profile == InputProfile::H70035xxH) {
+      ReopenAppInputDevices(input_devices, verbose_log);
+      const uint32_t now = SDL_GetTicks();
+      input_wake_next_resync_tick = now + 180;
+      input_wake_resync_until_tick = now + 1100;
+    }
     input.RefreshDevices();
     input.SuppressPowerUntilRelease();
   };
@@ -886,6 +896,14 @@ int RunApp(int argc, char **argv) {
   auto any_button_just_pressed = [&]() {
     for (int i = 0; i < kButtonCount; ++i) {
       if (input.IsJustPressed(static_cast<Button>(i))) return true;
+    }
+    return false;
+  };
+  auto any_non_power_button_just_pressed = [&]() {
+    for (int i = 0; i < kButtonCount; ++i) {
+      const Button button = static_cast<Button>(i);
+      if (button == Button::Power || !input.IsJustPressed(button)) continue;
+      return true;
     }
     return false;
   };
@@ -2248,6 +2266,20 @@ int RunApp(int argc, char **argv) {
     }
 
     const uint32_t power_now = SDL_GetTicks();
+    if (input_wake_resync_until_tick != 0 &&
+        SDL_TICKS_PASSED(power_now, input_wake_next_resync_tick)) {
+      runtime_log::Line("main: deferred H700 input resync after wake");
+      SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
+      ReopenAppInputDevices(input_devices, verbose_log);
+      input.RefreshDevices();
+      input.SuppressPowerUntilRelease();
+      if (SDL_TICKS_PASSED(power_now, input_wake_resync_until_tick)) {
+        input_wake_resync_until_tick = 0;
+        input_wake_next_resync_tick = 0;
+      } else {
+        input_wake_next_resync_tick = power_now + 180;
+      }
+    }
     const bool power_input_allowed = SDL_TICKS_PASSED(power_now, power_key_ignore_until_tick);
 
     if (is_rgds_runtime && rgds_display_sleep_active) {
@@ -2270,7 +2302,12 @@ int RunApp(int argc, char **argv) {
     }
 
     if (screen_off_mode != ScreenOffMode::Awake) {
-      if (power_input_allowed && input.IsJustPressed(Button::Power)) {
+      const bool h700_hardware_wake_seen =
+          (input_profile == InputProfile::H700Default ||
+           input_profile == InputProfile::H70034xxSp ||
+           input_profile == InputProfile::H70035xxH) &&
+          any_non_power_button_just_pressed();
+      if ((power_input_allowed && input.IsJustPressed(Button::Power)) || h700_hardware_wake_seen) {
         lid_power_controller.TriggerScreenOn(input_profile);
         screen_off_mode = ScreenOffMode::Awake;
         last_user_input_tick = SDL_GetTicks();

@@ -155,4 +155,5 @@ void PrepareMenuSceneInputState(SystemSettingsState &system_settings_state,
 AppInputDevices OpenAppInputDevices(bool verbose_log);
 void CloseAppInputDevices(AppInputDevices &devices);
 void RefreshAppInputDevices(AppInputDevices &devices, bool verbose_log);
+void ReopenAppInputDevices(AppInputDevices &devices, bool verbose_log);
 AppStoragePaths InitializeAppStoragePaths(bool verbose_log);

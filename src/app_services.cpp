@@ -370,6 +370,16 @@ void RefreshAppInputDevices(AppInputDevices &devices, bool verbose_log) {
   }
 }
 
+void ReopenAppInputDevices(AppInputDevices &devices, bool verbose_log) {
+  CloseAppInputDevices(devices);
+  SDL_GameControllerUpdate();
+  SDL_JoystickUpdate();
+  devices = OpenAppInputDevices(verbose_log);
+  if (verbose_log) {
+    std::cout << "[native_h700] reopened SDL input devices after wake\n";
+  }
+}
+
 AppStoragePaths InitializeAppStoragePaths(bool verbose_log) {
   AppStoragePaths paths;
   paths.books_roots = storage_paths::DetectBooksRoots();

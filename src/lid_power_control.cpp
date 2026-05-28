@@ -179,6 +179,21 @@ bool LidPowerController::TriggerScreenOn(InputProfile input_profile) const {
     return RunCommandQuiet("sh -c 'echo 0 > /sys/class/graphics/fb0/blank'");
   }
 
+  if (IsH700InputProfile(input_profile)) {
+    if (const char *command = std::getenv("ROCREADER_H700_SCREEN_ON_COMMAND"); command && *command) {
+      return RunCommandQuiet(command);
+    }
+    if (const char *arg = std::getenv("ROCREADER_H700_SCREEN_ON_ARG"); arg && *arg) {
+      if (!ScriptAvailable()) return false;
+      return RunPowerScriptArg(power_script_path_, arg);
+    }
+    // H700 stock pwr_new.sh treats unknown args like a power-key sleep request.
+    // Physical power-key wake already turns the display back on, so skip the
+    // script here and only let the app resync input state.
+    runtime_log::Line("lid_power: h700 screen-on handled by hardware power key; skip pwr script");
+    return true;
+  }
+
   if (!ScriptAvailable()) return false;
   if (const char *arg = std::getenv("ROCREADER_SCREEN_ON_ARG"); arg && *arg) {
     if (!RunPowerScriptArg(power_script_path_, arg)) return false;
