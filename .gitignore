@@ -29,6 +29,8 @@ TrimuiBrick/sysroot_overlay/
 TrimuiBrick/workspace/
 experimental/
 experimental/*.zip
+docs/
+tools/wn04_fetch*
 URL/
 RGDS/Downloads/
 RGDS/dist/
