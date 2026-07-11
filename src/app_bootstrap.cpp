@@ -149,11 +149,18 @@ AppBootstrapResult BootstrapSdlApp() {
     return result;
   }
   SDL_RendererInfo renderer_info{};
-  if (SDL_GetRendererInfo(result.renderer, &renderer_info) == 0 && result.verbose_log) {
-    std::cout << "[native_h700] renderer: " << (renderer_info.name ? renderer_info.name : "unknown")
-              << " flags=0x" << std::hex << renderer_info.flags << std::dec
-              << " accelerated=" << ((renderer_info.flags & SDL_RENDERER_ACCELERATED) ? "yes" : "no")
-              << " vsync=" << ((renderer_info.flags & SDL_RENDERER_PRESENTVSYNC) ? "yes" : "no") << "\n";
+  if (SDL_GetRendererInfo(result.renderer, &renderer_info) == 0) {
+    runtime_log::Line(std::string("main: renderer name=") + (renderer_info.name ? renderer_info.name : "unknown") +
+                      " flags=" + std::to_string(renderer_info.flags) +
+                      " accelerated=" + ((renderer_info.flags & SDL_RENDERER_ACCELERATED) ? "yes" : "no") +
+                      " vsync=" + ((renderer_info.flags & SDL_RENDERER_PRESENTVSYNC) ? "yes" : "no") +
+                      " target=" + ((renderer_info.flags & SDL_RENDERER_TARGETTEXTURE) ? "yes" : "no"));
+    if (result.verbose_log) {
+      std::cout << "[native_h700] renderer: " << (renderer_info.name ? renderer_info.name : "unknown")
+                << " flags=0x" << std::hex << renderer_info.flags << std::dec
+                << " accelerated=" << ((renderer_info.flags & SDL_RENDERER_ACCELERATED) ? "yes" : "no")
+                << " vsync=" << ((renderer_info.flags & SDL_RENDERER_PRESENTVSYNC) ? "yes" : "no") << "\n";
+    }
   }
   runtime_log::Line("main: SDL_CreateRenderer ok");
   result.renderer_supports_target_textures =

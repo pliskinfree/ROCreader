@@ -19,6 +19,20 @@
 #include <unistd.h>
 #endif
 
+bool IsGKD350HUltraProfile(InputProfile profile) {
+  return profile == InputProfile::GKD350HUltra;
+}
+
+bool IsGKD350HUltraJoypadName(const std::string &name) {
+  std::string lower;
+  lower.reserve(name.size());
+  for (unsigned char ch : name) {
+    lower.push_back(static_cast<char>(std::tolower(ch)));
+  }
+  return lower.find("gkd_atom_joypad") != std::string::npos ||
+         lower.find("gamekiddy") != std::string::npos;
+}
+
 #if !defined(_WIN32)
 bool IsH700Profile(InputProfile profile) {
   return profile == InputProfile::H700Default ||
@@ -85,6 +99,7 @@ const char *InputProfileName(InputProfile profile) {
   case InputProfile::H70034xxSp: return "h700-34xxsp";
   case InputProfile::H70035xxH: return "h700-35xxh";
   case InputProfile::TrimuiBrick: return "trimui-brick";
+  case InputProfile::GKD350HUltra: return "gkd350h-ultra";
   case InputProfile::RGDS: return "rgds";
   default: return "unknown";
   }
@@ -315,7 +330,7 @@ void InputManager::HandleEvent(const SDL_Event &e) {
                                             false});
     SetDown(mapped, false);
   } else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
-    if (input_profile_ == InputProfile::RGDS) return;
+    if (input_profile_ == InputProfile::RGDS || IsGKD350HUltraProfile(input_profile_)) return;
     RecordCalibrationSample(RawInputBinding{RawInputSource::GameControllerButton,
                                             static_cast<int>(e.cbutton.button),
                                             0,
@@ -329,7 +344,7 @@ void InputManager::HandleEvent(const SDL_Event &e) {
     }
     SetDown(PadToButton(e.cbutton.button), true);
   } else if (e.type == SDL_CONTROLLERBUTTONUP) {
-    if (input_profile_ == InputProfile::RGDS) return;
+    if (input_profile_ == InputProfile::RGDS || IsGKD350HUltraProfile(input_profile_)) return;
     RecordCalibrationSample(RawInputBinding{RawInputSource::GameControllerButton,
                                             static_cast<int>(e.cbutton.button),
                                             0,
@@ -337,7 +352,7 @@ void InputManager::HandleEvent(const SDL_Event &e) {
                                             false});
     SetDown(PadToButton(e.cbutton.button), false);
   } else if (e.type == SDL_CONTROLLERAXISMOTION) {
-    if (input_profile_ == InputProfile::RGDS) return;
+    if (input_profile_ == InputProfile::RGDS || IsGKD350HUltraProfile(input_profile_)) return;
     constexpr int kDeadzone = 16000;
     const int axis = e.caxis.axis;
     const int val = static_cast<int>(e.caxis.value);
@@ -373,7 +388,7 @@ void InputManager::HandleEvent(const SDL_Event &e) {
       SetDown(Button::R2, val > kDeadzone);
     }
   } else if (e.type == SDL_JOYBUTTONDOWN) {
-    if (input_profile_ == InputProfile::RGDS) return;
+    if (input_profile_ == InputProfile::RGDS || IsGKD350HUltraProfile(input_profile_)) return;
     RecordCalibrationSample(RawInputBinding{RawInputSource::JoystickButton,
                                             static_cast<int>(e.jbutton.button),
                                             0,
@@ -387,7 +402,7 @@ void InputManager::HandleEvent(const SDL_Event &e) {
     }
     SetDown(JoyButtonToButton(e.jbutton.button), true);
   } else if (e.type == SDL_JOYBUTTONUP) {
-    if (input_profile_ == InputProfile::RGDS) return;
+    if (input_profile_ == InputProfile::RGDS || IsGKD350HUltraProfile(input_profile_)) return;
     RecordCalibrationSample(RawInputBinding{RawInputSource::JoystickButton,
                                             static_cast<int>(e.jbutton.button),
                                             0,
@@ -395,7 +410,7 @@ void InputManager::HandleEvent(const SDL_Event &e) {
                                             false});
     SetDown(JoyButtonToButton(e.jbutton.button), false);
   } else if (e.type == SDL_JOYHATMOTION) {
-    if (input_profile_ == InputProfile::RGDS) return;
+    if (input_profile_ == InputProfile::RGDS || IsGKD350HUltraProfile(input_profile_)) return;
     const uint8_t v = e.jhat.value;
     if (ShouldLogProbeHat(e.jhat.hat, v)) {
       std::cout << "[native_h700] input probe: type=" << SdlEventName(e.type)
@@ -420,7 +435,7 @@ void InputManager::HandleEvent(const SDL_Event &e) {
     if (!HasCalibratedButton(Button::Left)) SetDown(Button::Left, (v & SDL_HAT_LEFT) != 0);
     if (!HasCalibratedButton(Button::Right)) SetDown(Button::Right, (v & SDL_HAT_RIGHT) != 0);
   } else if (e.type == SDL_JOYAXISMOTION) {
-    if (input_profile_ == InputProfile::RGDS) return;
+    if (input_profile_ == InputProfile::RGDS || IsGKD350HUltraProfile(input_profile_)) return;
     constexpr int kDeadzone = 16000;
     const int axis = e.jaxis.axis;
     const int val = static_cast<int>(e.jaxis.value);
@@ -713,7 +728,8 @@ void InputManager::LoadDefaultPadMap(InputProfile input_profile) {
   pad_map_[SDL_CONTROLLER_BUTTON_DPAD_DOWN] = Button::Down;
   pad_map_[SDL_CONTROLLER_BUTTON_DPAD_LEFT] = Button::Left;
   pad_map_[SDL_CONTROLLER_BUTTON_DPAD_RIGHT] = Button::Right;
-  if (input_profile == InputProfile::TrimuiBrick) {
+  if (input_profile == InputProfile::TrimuiBrick ||
+      input_profile == InputProfile::GKD350HUltra) {
     pad_map_[SDL_CONTROLLER_BUTTON_A] = Button::B;
     pad_map_[SDL_CONTROLLER_BUTTON_B] = Button::A;
     pad_map_[SDL_CONTROLLER_BUTTON_X] = Button::Y;
@@ -737,7 +753,21 @@ void InputManager::LoadDefaultJoyMap(InputProfile input_profile) {
   joy_map_[1] = Button::B;
   joy_map_[4] = Button::L1;
   joy_map_[5] = Button::R1;
-  if (input_profile == InputProfile::H70034xxSp) {
+  if (input_profile == InputProfile::GKD350HUltra) {
+    joy_map_[0] = Button::B;
+    joy_map_[1] = Button::A;
+    joy_map_[2] = Button::X;
+    joy_map_[3] = Button::Y;
+    joy_map_[6] = Button::L2;
+    joy_map_[7] = Button::R2;
+    joy_map_[8] = Button::Menu;
+    joy_map_[9] = Button::Start;
+    joy_map_[10] = Button::Select;
+    joy_map_[12] = Button::Up;
+    joy_map_[13] = Button::Down;
+    joy_map_[14] = Button::Left;
+    joy_map_[15] = Button::Right;
+  } else if (input_profile == InputProfile::H70034xxSp) {
     joy_map_[2] = Button::Y;
     joy_map_[3] = Button::X;
     joy_map_[6] = Button::Select;
@@ -1122,9 +1152,15 @@ void InputManager::OpenLinuxInputDevices() {
     const std::string path = std::string("/dev/input/") + entry->d_name;
     const int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) continue;
+    char device_name[256] = {};
+    if (ioctl(fd, EVIOCGNAME(sizeof(device_name)), device_name) < 0) {
+      device_name[0] = '\0';
+    }
     linux_input_fds_.push_back(fd);
+    linux_input_names_[fd] = device_name;
     if (full_input_log_enabled_) {
-      std::cout << "[native_h700] input probe: opened linux_input=" << path << "\n";
+      std::cout << "[native_h700] input probe: opened linux_input=" << path
+                << " name=" << device_name << "\n";
     }
   }
   closedir(dir);
@@ -1138,22 +1174,41 @@ void InputManager::CloseLinuxInputDevices() {
   }
 #endif
   linux_input_fds_.clear();
+  linux_input_names_.clear();
 }
 
 void InputManager::PollLinuxInputDevices() {
 #if !defined(_WIN32)
   for (int fd : linux_input_fds_) {
+    const auto name_it = linux_input_names_.find(fd);
+    const std::string linux_device_name =
+        name_it == linux_input_names_.end() ? std::string{} : name_it->second;
+    const bool gkd_profile = IsGKD350HUltraProfile(input_profile_);
+    const bool gkd_joypad = gkd_profile && IsGKD350HUltraJoypadName(linux_device_name);
     while (true) {
       input_event event{};
       const ssize_t n = read(fd, &event, sizeof(event));
       if (n == static_cast<ssize_t>(sizeof(event))) {
-        if (event.type == EV_ABS && (input_profile_ == InputProfile::RGDS || IsH700Profile(input_profile_))) {
+        if (event.type == EV_ABS && (input_profile_ == InputProfile::RGDS ||
+                                     IsH700Profile(input_profile_) ||
+                                     gkd_profile)) {
+          if (gkd_profile && !gkd_joypad) continue;
           const int code = static_cast<int>(event.code);
           const int value = static_cast<int>(event.value);
           const int dir = AxisDirectionFromValue(fd, code, value);
-          RecordCalibrationSample(RawInputBinding{RawInputSource::LinuxAbs, code, dir, {}, dir != 0});
+          RecordCalibrationSample(RawInputBinding{RawInputSource::LinuxAbs,
+                                                  code,
+                                                  dir,
+                                                  linux_device_name,
+                                                  dir != 0});
           if (ApplyCustomLinuxAbsMap(code, dir)) continue;
-          if (code == ABS_HAT0X) {
+          if (IsGKD350HUltraProfile(input_profile_) && code == ABS_X) {
+            SetDown(Button::Left, dir < 0);
+            SetDown(Button::Right, dir > 0);
+          } else if (IsGKD350HUltraProfile(input_profile_) && code == ABS_Y) {
+            SetDown(Button::Up, dir < 0);
+            SetDown(Button::Down, dir > 0);
+          } else if (code == ABS_HAT0X) {
             SetDown(Button::Left, value < 0);
             SetDown(Button::Right, value > 0);
           } else if (code == ABS_HAT0Y) {
@@ -1210,6 +1265,36 @@ void InputManager::PollLinuxInputDevices() {
               case KEY_VOLUMEDOWN: mapped = Button::VolDown; break;
               default: break;
             }
+          } else if (gkd_profile) {
+            if (gkd_joypad) {
+              switch (code) {
+                case BTN_SOUTH: mapped = Button::B; break;
+                case BTN_EAST: mapped = Button::A; break;
+                case BTN_NORTH: mapped = Button::X; break;
+                case BTN_WEST: mapped = Button::Y; break;
+                case BTN_TL: mapped = Button::L1; break;
+                case BTN_TR: mapped = Button::R1; break;
+                case BTN_TL2: mapped = Button::L2; break;
+                case BTN_TR2: mapped = Button::R2; break;
+                case BTN_SELECT: mapped = Button::Select; break;
+                case BTN_START: mapped = Button::Start; break;
+                case BTN_MODE: mapped = Button::Menu; break;
+                case BTN_DPAD_UP: mapped = Button::Up; break;
+                case BTN_DPAD_DOWN: mapped = Button::Down; break;
+                case BTN_DPAD_LEFT: mapped = Button::Left; break;
+                case BTN_DPAD_RIGHT: mapped = Button::Right; break;
+                default: break;
+              }
+            }
+            if (!IsValid(mapped)) {
+              switch (code) {
+                case KEY_POWER: mapped = Button::Power; break;
+                case KEY_BACK: mapped = Button::Menu; break;
+                case KEY_VOLUMEUP: mapped = Button::VolUp; break;
+                case KEY_VOLUMEDOWN: mapped = Button::VolDown; break;
+                default: break;
+              }
+            }
           } else if (IsH700Profile(input_profile_)) {
             // H700 firmwares also report the same physical buttons through SDL.
             // The evdev BTN_* names are not stable across these devices, so do
@@ -1246,7 +1331,11 @@ void InputManager::PollLinuxInputDevices() {
           } else if (code == KEY_POWER) {
             mapped = Button::Power;
           }
-          RecordCalibrationSample(RawInputBinding{RawInputSource::LinuxKey, code, 0, {}, down});
+          RecordCalibrationSample(RawInputBinding{RawInputSource::LinuxKey,
+                                                  code,
+                                                  0,
+                                                  linux_device_name,
+                                                  down});
           if (full_input_log_enabled_ && down && MarkProbeLogged(probe_linux_key_seen_, code)) {
             std::cout << "[native_h700] input probe: type=LINUX_EV_KEY"
                       << " code=" << code

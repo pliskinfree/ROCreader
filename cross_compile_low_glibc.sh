@@ -89,7 +89,7 @@ PY
 }
 
 next_download_zip_utf8() {
-  python3 - "$DOWNLOADS_ROOT" "$TRIMUI_BRICK_LAYOUT" "${DOWNLOAD_RELEASE_VERSION:-}" <<'PY'
+  python3 - "$DOWNLOADS_ROOT" "$TRIMUI_BRICK_LAYOUT" "${DOWNLOAD_RELEASE_VERSION:-}" "${DOWNLOAD_TARGET_SUFFIX:-}" <<'PY'
 import os
 import re
 import sys
@@ -97,8 +97,11 @@ import sys
 downloads = sys.argv[1]
 trimui_brick_layout = sys.argv[2] == "1"
 release_version_override = sys.argv[3]
+target_suffix_override = sys.argv[4]
 prefix = "ROC全能漫画阅读器ver"
-suffix = " for Trimui Brick.zip" if trimui_brick_layout else " for H700.zip"
+suffix = f" for {target_suffix_override}.zip" if target_suffix_override else (
+    " for Trimui Brick.zip" if trimui_brick_layout else " for H700.zip"
+)
 pattern = re.compile(r"^" + re.escape(prefix) + r"(\d+)\.(\d+)" + re.escape(suffix) + r"$")
 best = None
 
@@ -156,7 +159,7 @@ find_pkg_dirs() {
   done
 }
 
-PKG_LIBDIR="$(find_pkg_dirs)"
+PKG_LIBDIR="$(find_pkg_dirs || true)"
 PKG_LIBDIR="${PKG_LIBDIR%:}"
 
 find_libdir() {
@@ -360,7 +363,7 @@ find_so_in_libdir() {
   fi
 
   if [ -f "$SYSROOT/usr/include/zip.h" ] && [ -n "${TARGET_LIBZIP_SO:-}" ]; then
-    FALLBACK_LIBZIP_CFLAGS="-I$SYSROOT/usr/include"
+    FALLBACK_LIBZIP_CFLAGS="-I$SYSROOT/usr/include -I$SYSROOT/usr/include/aarch64-linux-gnu"
     FALLBACK_LIBZIP_LIBS="-L$LIBDIR -lzip"
     echo "[low_glibc] fallback enable: libzip"
   fi
@@ -560,7 +563,7 @@ find_so_in_libdir() {
   echo "[low_glibc] WEBP_LIBS=$WEBP_LIBS_FINAL"
 
   echo "[low_glibc] make clean"
-  make clean
+  make clean REQUIRE_MUPDF=0
   MAKE_JOBS="${MAKE_JOBS:-$(nproc 2>/dev/null || echo 1)}"
   echo "[low_glibc] make -j$MAKE_JOBS"
   make -j"$MAKE_JOBS" \
@@ -1403,7 +1406,8 @@ with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
             zf.write(full, rel)
 PY
 
-  if [ "${LEGACY_DOWNLOADS_MIRROR:-1}" = "1" ] && [ "$TRIMUI_BRICK_LAYOUT" != "1" ]; then
+  if [ "${LEGACY_DOWNLOADS_MIRROR:-1}" = "1" ] && [ "$TRIMUI_BRICK_LAYOUT" != "1" ] &&
+     { [ -z "${DOWNLOAD_TARGET_SUFFIX:-}" ] || [ "${DOWNLOAD_TARGET_SUFFIX:-}" = "H700" ]; }; then
     LEGACY_DOWNLOADS_ROOT="$SELF_DIR/Downloads"
     LEGACY_ZIPFILE="$LEGACY_DOWNLOADS_ROOT/$(basename "$ZIPFILE")"
     if [ "$DOWNLOADS_ROOT" != "$LEGACY_DOWNLOADS_ROOT" ]; then

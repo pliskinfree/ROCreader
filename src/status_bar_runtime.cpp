@@ -20,13 +20,16 @@ void DrawStatusBarRuntime(const StatusBarRenderDeps &deps) {
 
   const int center_y = deps.top_bar_y + deps.top_bar_h / 2;
   const bool trimui_brick_status_layout = deps.input_profile == InputProfile::TrimuiBrick;
-  const int battery_shift_y = trimui_brick_status_layout ? 5 : 3;
+  const int base_screen_w = 720;
+  const int extra_status_x = trimui_brick_status_layout ? 0 : std::max(0, deps.screen_w - scale_px(base_screen_w));
+  auto status_x = [&](int base_x) { return scale_px(base_x) + extra_status_x; };
+  const int battery_shift_y = trimui_brick_status_layout ? 5 : scale_px(3);
   const int h700_battery_shift_x = (deps.screen_w <= 640) ? -80 : 0;
-  const int battery_icon_x = trimui_brick_status_layout ? 750 : 552 + h700_battery_shift_x;
-  const int battery_text_x = trimui_brick_status_layout ? 806 : 587 + h700_battery_shift_x;
+  const int battery_icon_x = trimui_brick_status_layout ? 750 : status_x(552 + h700_battery_shift_x);
+  const int battery_text_x = trimui_brick_status_layout ? 806 : status_x(587 + h700_battery_shift_x);
   const int clock_shift_x = trimui_brick_status_layout ? 64 : 40;
-  const int clock_shift_y = trimui_brick_status_layout ? 5 : 3;
-  int clock_right = deps.screen_w - (trimui_brick_status_layout ? 26 : 16) - clock_shift_x;
+  const int clock_shift_y = trimui_brick_status_layout ? 5 : scale_px(3);
+  int clock_right = trimui_brick_status_layout ? deps.screen_w - 26 - clock_shift_x : status_x(664);
 
   if (!status.clock_text.empty()) {
     TextCacheEntry *clock_tex = deps.get_text_texture ? deps.get_text_texture(status.clock_text, text_color) : nullptr;
@@ -87,4 +90,3 @@ void DrawStatusBarRuntime(const StatusBarRenderDeps &deps) {
   (void)deps;
 #endif
 }
-

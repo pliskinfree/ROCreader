@@ -38,6 +38,7 @@ enum class InputProfile {
   H70034xxSp,
   H70035xxH,
   TrimuiBrick,
+  GKD350HUltra,
   RGDS,
 };
 
@@ -174,6 +175,7 @@ private:
   std::array<bool, 512> probe_joy_axis_seen_{};
   std::array<bool, 512> probe_linux_key_seen_{};
   std::vector<int> linux_input_fds_;
+  std::unordered_map<int, std::string> linux_input_names_;
   bool full_input_log_enabled_ = false;
   bool power_suppressed_until_release_ = false;
   Uint32 power_suppressed_until_tick_ = 0;

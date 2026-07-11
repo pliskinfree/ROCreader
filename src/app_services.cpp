@@ -25,9 +25,12 @@ AppPlatformEnv ResolveAppPlatformEnv(const std::string &device_model_token,
 #endif
   env.capabilities.use_trimui_brick_keymap =
       device_model_token == "trimui-brick" || screen_profile.profile_name == "1024x768";
+  const bool use_gkd350h_ultra_keymap = UsesGKD350HUltraKeymap(device_model_token, screen_profile);
   env.capabilities.input_profile =
       device_model_token == "rgds"
           ? InputProfile::RGDS
+          : use_gkd350h_ultra_keymap
+          ? InputProfile::GKD350HUltra
           : env.capabilities.use_trimui_brick_keymap
           ? InputProfile::TrimuiBrick
           : (env.capabilities.use_h700_defaults
@@ -409,6 +412,8 @@ AppStoragePaths InitializeAppStoragePaths(bool verbose_log) {
     paths.cover_thumb_cache_dir = cache_root / "cover_thumbs";
     paths.removable_cover_thumb_cache_dir = cache_root / "cover_thumbs";
   }
+  runtime_log::Line("main: txt layout cache: " + paths.txt_layout_cache_dir.string());
+  runtime_log::Line("main: cover thumb cache: " + paths.cover_thumb_cache_dir.string());
   {
     std::error_code ec;
     std::filesystem::create_directories(paths.txt_layout_cache_dir, ec);

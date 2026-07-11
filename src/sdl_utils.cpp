@@ -153,6 +153,20 @@ SDL_Texture *CreateScaledTextureCache(SDL_Renderer *renderer, SDL_Texture *sourc
 }
 
 void DrawRect(SDL_Renderer *renderer, int x, int y, int w, int h, SDL_Color color, bool fill) {
+  if (!renderer || w <= 0 || h <= 0) return;
+  int output_w = 0;
+  int output_h = 0;
+  if (SDL_GetRendererOutputSize(renderer, &output_w, &output_h) == 0 && output_w > 0 && output_h > 0) {
+    const long long x1 = std::max<long long>(0, x);
+    const long long y1 = std::max<long long>(0, y);
+    const long long x2 = std::min<long long>(output_w, static_cast<long long>(x) + w);
+    const long long y2 = std::min<long long>(output_h, static_cast<long long>(y) + h);
+    if (x2 <= x1 || y2 <= y1) return;
+    x = static_cast<int>(x1);
+    y = static_cast<int>(y1);
+    w = static_cast<int>(x2 - x1);
+    h = static_cast<int>(y2 - y1);
+  }
   SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
   SDL_Rect rc{x, y, w, h};
   if (fill) SDL_RenderFillRect(renderer, &rc);

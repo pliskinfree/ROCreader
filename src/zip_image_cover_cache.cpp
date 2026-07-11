@@ -76,8 +76,16 @@ void SaveZipImageCoverCacheToDisk(const std::string &doc_path, const FileCacheMe
   if (!cover_surface) return;
   std::error_code ec;
   std::filesystem::create_directories(deps.cover_thumb_cache_dir, ec);
+  if (ec) {
+    runtime_log::Line("[zip_image_cover] cache mkdir failed dir=" +
+                      deps.cover_thumb_cache_dir.string() + " error=" + ec.message());
+    return;
+  }
   const std::filesystem::path cache_file = GetZipImageCoverCacheFile(doc_path, meta, deps);
-  SDL_SaveBMP(cover_surface, cache_file.string().c_str());
+  if (SDL_SaveBMP(cover_surface, cache_file.string().c_str()) != 0) {
+    runtime_log::Line("[zip_image_cover] cache save failed path=" + cache_file.string() +
+                      " error=" + SDL_GetError());
+  }
 }
 
 #ifdef HAVE_LIBZIP

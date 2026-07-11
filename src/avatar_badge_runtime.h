@@ -39,5 +39,6 @@ private:
   std::function<void(SDL_Texture *, int, int)> remember_texture_size_;
   std::function<void(SDL_Texture *)> before_destroy_;
   SDL_Texture *badge_texture_ = nullptr;
+  bool badge_texture_owned_ = false;
   int selected_index_ = -1;
 };

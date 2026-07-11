@@ -2,6 +2,7 @@
 
 #include "app_language.h"
 #include "key_calibration_runtime.h"
+#include "runtime_log.h"
 
 #include <algorithm>
 #include <array>
@@ -271,6 +272,12 @@ std::vector<std::string> WrapTextByWidth(
 void DrawKeyGuidePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect,
                        int language_index, int first_row_y) {
   if (!deps.renderer) return;
+  auto trace = [&](const std::string &message) {
+    if (deps.input_profile == InputProfile::GKD350HUltra) {
+      runtime_log::Line("key_guide_draw: " + message);
+    }
+  };
+  trace("begin");
 
   const SDL_Color title_color{240, 246, 255, 255};
   const SDL_Color key_color{191, 221, 247, 255};
@@ -303,16 +310,19 @@ void DrawKeyGuidePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect,
                  : (deps.has_calibrated_keymap ? CalibratedKeyGuideTitle(language_index)
                                                 : LocalizedAppText(language_index, profile_text_id));
   const int max_text_w = std::max(0, right - left);
+  trace("profile title begin max_w=" + std::to_string(max_text_w));
   if (TextCacheEntry *profile = get_text(profile_title, title_color, true); profile && profile->texture) {
     SDL_Rect dst{left, divider_y - profile->h - ScalePx(scale, 8), profile->w, profile->h};
     SDL_RenderCopy(deps.renderer, profile->texture, nullptr, &dst);
   }
+  trace("profile title done");
   deps.services.draw_rect(preview_rect.x + ScalePx(scale, 10),
                  divider_y,
                  std::max(0, preview_rect.w - ScalePx(scale, 20)),
                  ScalePx(scale, 1),
                  divider_color,
                  true);
+  trace("divider done");
 
   const int line_gap = ScalePx(scale, 4);
   const int row_gap = ScalePx(scale, 10);
@@ -320,6 +330,7 @@ void DrawKeyGuidePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect,
   int cursor_y = start_y;
   const size_t line_count = rgds_guide ? rgds_guide->lines.size() : kKeyGuideLines.size();
   for (size_t i = 0; i < line_count; ++i) {
+    trace("line begin " + std::to_string(i));
     std::string line_text;
     if (rgds_guide) {
       const StaticKeyGuideLine &line = rgds_guide->lines[i];
@@ -329,6 +340,7 @@ void DrawKeyGuidePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect,
       line_text = std::string(line.button_label) + ": " + LocalizedAppText(language_index, line.action_text);
     }
     const std::vector<std::string> wrapped_lines = WrapTextByWidth(line_text, max_text_w, get_text, key_color);
+    trace("line wrapped " + std::to_string(i) + " count=" + std::to_string(wrapped_lines.size()));
     for (size_t line_index = 0; line_index < wrapped_lines.size(); ++line_index) {
       if (TextCacheEntry *line_entry = get_text(wrapped_lines[line_index], key_color);
           line_entry && line_entry->texture) {
@@ -338,5 +350,7 @@ void DrawKeyGuidePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect,
       }
     }
     cursor_y += row_gap;
+    trace("line done " + std::to_string(i));
   }
+  trace("done");
 }

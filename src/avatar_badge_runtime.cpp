@@ -22,14 +22,20 @@ void AvatarBadgeRuntime::SelectIndex(int selected_index) {
   if (!entries_ || selected_index < 0 || selected_index >= static_cast<int>(entries_->size())) return;
 
   SDL_Texture *source = (*entries_)[selected_index].texture;
-  if (!source || !renderer_ || !create_scaled_texture_) return;
+  if (!source || !renderer_) return;
 
   const int badge_size = scale_px_ ? scale_px_(28) : 28;
-  badge_texture_ = create_scaled_texture_(renderer_, source, badge_size, badge_size);
-  if (!badge_texture_) return;
+  if (create_scaled_texture_) {
+    badge_texture_ = create_scaled_texture_(renderer_, source, badge_size, badge_size);
+    badge_texture_owned_ = badge_texture_ != nullptr;
+  }
+  if (!badge_texture_) {
+    badge_texture_ = source;
+    badge_texture_owned_ = false;
+  }
 
   selected_index_ = selected_index;
-  if (remember_texture_size_) remember_texture_size_(badge_texture_, badge_size, badge_size);
+  if (badge_texture_owned_ && remember_texture_size_) remember_texture_size_(badge_texture_, badge_size, badge_size);
 }
 
 void AvatarBadgeRuntime::SelectSavedOrDefault(const std::string &saved_label) {
@@ -58,7 +64,10 @@ int AvatarBadgeRuntime::FindIndexByLabel(const std::string &saved_label) const {
 
 void AvatarBadgeRuntime::DestroyBadgeTexture() {
   if (!badge_texture_) return;
-  if (before_destroy_) before_destroy_(badge_texture_);
-  SDL_DestroyTexture(badge_texture_);
+  if (badge_texture_owned_) {
+    if (before_destroy_) before_destroy_(badge_texture_);
+    SDL_DestroyTexture(badge_texture_);
+  }
   badge_texture_ = nullptr;
+  badge_texture_owned_ = false;
 }

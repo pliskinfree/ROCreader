@@ -28,10 +28,12 @@ std::string MakeTextKey(const std::string &text, SDL_Color color) {
          std::to_string(static_cast<int>(color.g)) + "," + std::to_string(static_cast<int>(color.b));
 }
 
-void PruneTextCache(UiTextCacheState &state, const BeforeDestroyTextTextureFn &before_destroy = {}) {
+void PruneTextCache(UiTextCacheState &state, const std::string &preserve_key = {},
+                    const BeforeDestroyTextTextureFn &before_destroy = {}) {
   while (state.text_cache.size() > state.max_text_cache_entries) {
     auto oldest = state.text_cache.end();
     for (auto it = state.text_cache.begin(); it != state.text_cache.end(); ++it) {
+      if (!preserve_key.empty() && it->first == preserve_key) continue;
       if (oldest == state.text_cache.end() || it->second.last_use < oldest->second.last_use) oldest = it;
     }
     if (oldest == state.text_cache.end()) break;
@@ -257,8 +259,9 @@ TextCacheEntry *GetUiTextTexture(UiTextCacheState &state, SDL_Renderer *renderer
   entry.h = height;
   entry.last_use = SDL_GetTicks();
   auto [inserted, _] = state.text_cache.emplace(key, entry);
-  PruneTextCache(state);
-  return &inserted->second;
+  PruneTextCache(state, key);
+  auto kept = state.text_cache.find(key);
+  return kept == state.text_cache.end() ? nullptr : &kept->second;
 #endif
 }
 

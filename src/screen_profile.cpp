@@ -1,5 +1,7 @@
 #include "screen_profile.h"
 
+#include "../GKD350HUltra/gkd350h_ultra_profile.h"
+
 #include <SDL.h>
 
 #include <algorithm>
@@ -71,6 +73,11 @@ bool ReadEnvScreenProfile(int &out_w, int &out_h) {
   const char *env_profile = std::getenv("ROCREADER_SCREEN_PROFILE");
   if (!env_profile || !*env_profile) return false;
   const std::string profile = ToLowerAscii(env_profile);
+  if (gkd350h_ultra::IsProfileName(profile)) {
+    out_w = gkd350h_ultra::kScreenW;
+    out_h = gkd350h_ultra::kScreenH;
+    return true;
+  }
   if (profile == "1024x768" || profile == "brick" || profile == "trimui-brick") {
     out_w = 1024;
     out_h = 768;
@@ -112,6 +119,11 @@ bool ReadConfigScreenProfile(int &out_w, int &out_h) {
       const std::string key = ToLowerAscii(line.substr(0, eq));
       if (key != "screen_profile") continue;
       const std::string value = ToLowerAscii(line.substr(eq + 1));
+      if (gkd350h_ultra::IsProfileName(value)) {
+        out_w = gkd350h_ultra::kScreenW;
+        out_h = gkd350h_ultra::kScreenH;
+        return true;
+      }
       if (value == "1024x768" || value == "brick" || value == "trimui-brick") {
         out_w = 1024;
         out_h = 768;
@@ -143,6 +155,10 @@ std::string CanonicalModelTokenFromText(const std::string &text) {
   if (compact.empty()) return {};
 
   const std::vector<std::pair<std::string, std::string>> aliases = {
+      {"gkd350hultra", gkd350h_ultra::kCanonicalModel},
+      {"gkd350h", gkd350h_ultra::kCanonicalModel},
+      {"gamekiddygkdatom", gkd350h_ultra::kCanonicalModel},
+      {"gkdatom", gkd350h_ultra::kCanonicalModel},
       {"trimuibrick", "trimui-brick"},
       {"brick", "trimui-brick"},
       {"tg3040", "trimui-brick"},
@@ -183,6 +199,11 @@ bool ApplyProfileFromModelToken(const std::string &model_token, int &out_w, int 
   if (model_token.empty()) return false;
   // Keep machine-to-profile mapping explicit so model-specific panels don't
   // silently fold into the wrong layout.
+  if (gkd350h_ultra::IsCanonicalModel(model_token)) {
+    out_w = gkd350h_ultra::kScreenW;
+    out_h = gkd350h_ultra::kScreenH;
+    return true;
+  }
   if (model_token == "trimui-brick") {
     out_w = 1024;
     out_h = 768;
@@ -355,6 +376,13 @@ bool ReadSdlDisplaySize(int &out_w, int &out_h) {
 }
 
 bool TryApplyProfileFromDetectedSize(ScreenProfile &profile) {
+  if ((profile.detected_w == gkd350h_ultra::kScreenW && profile.detected_h == gkd350h_ultra::kScreenH) ||
+      (profile.detected_w == gkd350h_ultra::kScreenH && profile.detected_h == gkd350h_ultra::kScreenW)) {
+    profile.screen_w = gkd350h_ultra::kScreenW;
+    profile.screen_h = gkd350h_ultra::kScreenH;
+    profile.profile_name = gkd350h_ultra::kProfileName;
+    return true;
+  }
   if (profile.detected_w == 1024 && profile.detected_h == 768) {
     profile.screen_w = 1024;
     profile.screen_h = 768;
@@ -423,11 +451,31 @@ ScreenProfile DetectScreenProfile() {
     if (TryCommitDetectedProfile(profile, detected_w, detected_h, "env")) return profile;
   }
 
+  if (ReadConfigScreenProfile(detected_w, detected_h)) {
+    if (TryCommitDetectedProfile(profile, detected_w, detected_h, "config")) return profile;
+  }
+
   std::string board_ini_token;
   if (ReadBoardIniModelToken(board_ini_token)) {
     if (ApplyProfileFromModelToken(board_ini_token, detected_w, detected_h)) {
       if (TryCommitDetectedProfile(profile, detected_w, detected_h, "board-ini")) return profile;
     }
+  }
+
+  if (ReadDeviceModelScreenProfile(detected_w, detected_h)) {
+    if (TryCommitDetectedProfile(profile, detected_w, detected_h, "device-model")) return profile;
+  }
+
+  if (ReadSdlDisplaySize(detected_w, detected_h)) {
+    if (TryCommitDetectedProfile(profile, detected_w, detected_h, "sdl")) return profile;
+  }
+
+  if (ReadFramebufferModeSize(detected_w, detected_h)) {
+    if (TryCommitDetectedProfile(profile, detected_w, detected_h, "fb-mode")) return profile;
+  }
+
+  if (ReadFramebufferSize(detected_w, detected_h)) {
+    if (TryCommitDetectedProfile(profile, detected_w, detected_h, "fb-size")) return profile;
   }
   return TryCommitDetectedProfile(profile, 720, 720, "board-ini-fallback")
              ? profile
@@ -441,4 +489,9 @@ bool Uses34xxSpKeymap(const std::string &model_token) {
 
 bool Uses35xxHKeymap(const std::string &model_token) {
   return model_token == "rg35xx-h";
+}
+
+bool UsesGKD350HUltraKeymap(const std::string &model_token, const ScreenProfile &screen_profile) {
+  return gkd350h_ultra::IsCanonicalModel(model_token) ||
+         gkd350h_ultra::IsProfileName(screen_profile.profile_name);
 }

@@ -107,6 +107,10 @@ screen_profile_from_board_ini() {
   model_name="$(read_board_ini_model || true)"
   [ -n "$model_name" ] || return 1
   case "$model_name" in
+    *gkd350hultra*|*gkd350h*|*gkd*atom*|*gamekiddy*gkd*atom*)
+      printf '1600x1440|%s\n' "$model_name"
+      return 0
+      ;;
     *trimui*brick*|*brick*|*tg3040*)
       printf '1024x768|%s\n' "$model_name"
       return 0
@@ -130,6 +134,10 @@ screen_profile_from_board_ini() {
 
 normalize_screen_override() {
   case "${ROCREADER_SCREEN_PROFILE:-}" in
+    1600x1440|gkd350h-ultra|gkd350h|gkd-ultra|gkd_atom|gkd-atom|gamekiddy-gkd-atom)
+      export ROCREADER_SCREEN_W=1600
+      export ROCREADER_SCREEN_H=1440
+      ;;
     1024x768|brick|trimui-brick)
       export ROCREADER_SCREEN_W=1024
       export ROCREADER_SCREEN_H=768
@@ -160,6 +168,10 @@ detect_screen_size_token() {
     [ -r "$path" ] || continue
     value="$(tr -d '\000\r' <"$path" | head -n 1)"
     case "$value" in
+      *1600*x*1440*|*1600*1440*|*1440*x*1600*|*1440*1600*)
+        printf '%s\n' "1600x1440"
+        return 0
+        ;;
       *1024*x*768*|*1024*768*)
         printf '%s\n' "1024x768"
         return 0
@@ -186,6 +198,14 @@ ensure_screen_override_if_needed() {
 
   model_rule="$(screen_profile_from_board_ini || true)"
   case "$model_rule" in
+    1600x1440\|*)
+      model_name="${model_rule#*|}"
+      export ROCREADER_SCREEN_PROFILE=1600x1440
+      export ROCREADER_SCREEN_W=1600
+      export ROCREADER_SCREEN_H=1440
+      log_line "[launcher] screen override board.ini: $model_name -> 1600x1440"
+      return 0
+      ;;
     1024x768\|*)
       model_name="${model_rule#*|}"
       export ROCREADER_SCREEN_PROFILE=1024x768
@@ -220,10 +240,61 @@ ensure_screen_override_if_needed() {
       ;;
   esac
 
+  detected_profile="$(detect_screen_size_token || true)"
+  case "$detected_profile" in
+    1600x1440)
+      export ROCREADER_SCREEN_PROFILE=1600x1440
+      export ROCREADER_SCREEN_W=1600
+      export ROCREADER_SCREEN_H=1440
+      log_line "[launcher] screen override fb/sysfs -> 1600x1440"
+      return 0
+      ;;
+    1024x768)
+      export ROCREADER_SCREEN_PROFILE=1024x768
+      export ROCREADER_SCREEN_W=1024
+      export ROCREADER_SCREEN_H=768
+      log_line "[launcher] screen override fb/sysfs -> 1024x768"
+      return 0
+      ;;
+    720x720)
+      export ROCREADER_SCREEN_PROFILE=720x720
+      export ROCREADER_SCREEN_W=720
+      export ROCREADER_SCREEN_H=720
+      log_line "[launcher] screen override fb/sysfs -> 720x720"
+      return 0
+      ;;
+    640x480)
+      export ROCREADER_SCREEN_PROFILE=640x480
+      export ROCREADER_SCREEN_W=640
+      export ROCREADER_SCREEN_H=480
+      log_line "[launcher] screen override fb/sysfs -> 640x480"
+      return 0
+      ;;
+    720x480)
+      export ROCREADER_SCREEN_PROFILE=720x480
+      export ROCREADER_SCREEN_W=720
+      export ROCREADER_SCREEN_H=480
+      log_line "[launcher] screen override fb/sysfs -> 720x480"
+      return 0
+      ;;
+  esac
+
   export ROCREADER_SCREEN_PROFILE=720x720
   export ROCREADER_SCREEN_W=720
   export ROCREADER_SCREEN_H=720
   log_line "[launcher] screen override fallback: board.ini missing -> 720x720"
+}
+
+configure_cache_root_for_profile() {
+  if [ -n "${ROCREADER_CACHE_ROOT:-}" ]; then
+    return 0
+  fi
+  case "${ROCREADER_DEVICE_MODEL:-}:${ROCREADER_SCREEN_PROFILE:-}" in
+    *gkd350h*:*|*gkd*atom*:*|*gamekiddy*gkd*:*|*:1600x1440)
+      export ROCREADER_CACHE_ROOT="$APP_DIR/cache"
+      log_line "[launcher] cache root -> $ROCREADER_CACHE_ROOT"
+      ;;
+  esac
 }
 
 find_pending_marker() {
@@ -431,6 +502,7 @@ if [ "${ROCREADER_VERBOSE_LOG:-0}" = "1" ] || [ "${ROCREADER_DEBUG_LOG:-0}" = "1
 fi
 perform_pending_update_if_any
 ensure_screen_override_if_needed
+configure_cache_root_for_profile
 if [ ! -f "$APP_DIR/online_sources.ini" ]; then
   log_line "[launcher] online_sources missing"
 fi

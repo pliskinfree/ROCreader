@@ -1,6 +1,7 @@
 #include "app_loop.h"
 
 #include "app_bootstrap.h"
+#include "../GKD350HUltra/gkd350h_ultra_profile.h"
 
 #include <SDL.h>
 #ifdef HAVE_SDL2_IMAGE
@@ -680,6 +681,9 @@ int RunApp(int argc, char **argv) {
   RecentPathStore &history_store = runtime_stores.history_store;
   app_context.config.config = &config;
   avatar_badge.SelectSavedOrDefault(config.Get().selected_contributor_avatar_label);
+  runtime_log::Line(std::string("main: avatar badge selected index=") +
+                    std::to_string(avatar_badge.SelectedIndex()) +
+                    " texture=" + (avatar_badge.BadgeTexture() ? "yes" : "no"));
   AppSystemServices system_services = InitializeAppSystemServices(use_h700_defaults, app_config_paths.power_script_path);
   VolumeController &volume_controller = system_services.volume_controller;
   SystemStatusMonitor &system_status = system_services.system_status;
@@ -1228,12 +1232,21 @@ int RunApp(int argc, char **argv) {
   auto scaled_font_pt = [&](int pt) {
     return std::max(1, static_cast<int>(std::round(static_cast<float>(pt) * Layout().ui_scale)));
   };
-  auto reader_font_pt_for_level = [&](int level) {
-    return scaled_font_pt(TxtFontPointSizeForLevel(level));
+  const bool gkd_font_profile = input_profile == InputProfile::GKD350HUltra;
+  auto profile_font_pt = [&](int pt) {
+    return gkd_font_profile ? std::max(1, pt * gkd350h_ultra::kFontScale) : scaled_font_pt(pt);
   };
-  const int body_font_pt = scaled_font_pt(16);
-  const int title_font_pt = scaled_font_pt(24);
+  auto reader_font_pt_for_level = [&](int level) {
+    return profile_font_pt(TxtFontPointSizeForLevel(level));
+  };
+  const int body_font_pt = gkd_font_profile ? gkd350h_ultra::kBodyFontPt : scaled_font_pt(16);
+  const int title_font_pt = gkd_font_profile ? gkd350h_ultra::kTitleFontPt : scaled_font_pt(24);
   int current_reader_font_pt = reader_font_pt_for_level(config.Get().txt_font_size_level);
+  if (gkd_font_profile) {
+    runtime_log::Line("main: gkd font points body=" + std::to_string(body_font_pt) +
+                      " title=" + std::to_string(title_font_pt) +
+                      " reader=" + std::to_string(current_reader_font_pt));
+  }
   TxtTextServiceState txt_text_service{
       {},
       txt_layout_cache_dir,
@@ -1811,10 +1824,67 @@ int RunApp(int argc, char **argv) {
         [&]() { app_shell.RequestQuit(); },
     };
   };
+  int gkd_menu_rect_log_count = 0;
+  auto draw_gkd_menu_rect = [&](SDL_Renderer *target_renderer, int x, int y, int w, int h, SDL_Color c,
+                                bool filled) {
+    SDL_Renderer *rect_renderer = target_renderer ? target_renderer : renderer;
+    if (!rect_renderer || w <= 0 || h <= 0) return;
+    if (gkd_menu_rect_log_count < 24) {
+      runtime_log::Line("main: gkd tiled rect x=" + std::to_string(x) +
+                        " y=" + std::to_string(y) +
+                        " w=" + std::to_string(w) +
+                        " h=" + std::to_string(h) +
+                        " a=" + std::to_string(static_cast<int>(c.a)) +
+                        " filled=" + std::to_string(filled ? 1 : 0));
+    }
+    ++gkd_menu_rect_log_count;
+
+    int output_w = 0;
+    int output_h = 0;
+    if (SDL_GetRendererOutputSize(rect_renderer, &output_w, &output_h) == 0 && output_w > 0 && output_h > 0) {
+      const long long x1 = std::max<long long>(0, x);
+      const long long y1 = std::max<long long>(0, y);
+      const long long x2 = std::min<long long>(output_w, static_cast<long long>(x) + w);
+      const long long y2 = std::min<long long>(output_h, static_cast<long long>(y) + h);
+      if (x2 <= x1 || y2 <= y1) return;
+      x = static_cast<int>(x1);
+      y = static_cast<int>(y1);
+      w = static_cast<int>(x2 - x1);
+      h = static_cast<int>(y2 - y1);
+    }
+
+    SDL_SetRenderDrawColor(rect_renderer, c.r, c.g, c.b, c.a);
+    if (!filled) {
+      const SDL_Rect top{x, y, w, 1};
+      const SDL_Rect bottom{x, y + h - 1, w, 1};
+      const SDL_Rect left{x, y, 1, h};
+      const SDL_Rect right{x + w - 1, y, 1, h};
+      SDL_RenderFillRect(rect_renderer, &top);
+      if (h > 1) SDL_RenderFillRect(rect_renderer, &bottom);
+      if (h > 2) SDL_RenderFillRect(rect_renderer, &left);
+      if (w > 1 && h > 2) SDL_RenderFillRect(rect_renderer, &right);
+      return;
+    }
+
+    constexpr int kTileH = 64;
+    constexpr int kTileW = 256;
+    for (int ty = y; ty < y + h; ty += kTileH) {
+      const int th = std::min(kTileH, y + h - ty);
+      for (int tx = x; tx < x + w; tx += kTileW) {
+        const int tw = std::min(kTileW, x + w - tx);
+        SDL_Rect rc{tx, ty, tw, th};
+        SDL_RenderFillRect(rect_renderer, &rc);
+      }
+    }
+  };
   auto make_settings_render_services = [&](SDL_Renderer *target_renderer,
                                            const std::function<void()> &draw_volume_overlay) {
     return MakeMenuSceneRenderServices(MenuSceneRenderServiceCallbacks{
-        [&](int x, int y, int w, int h, SDL_Color c, bool filled) {
+        [&, target_renderer](int x, int y, int w, int h, SDL_Color c, bool filled) {
+          if (input_profile == InputProfile::GKD350HUltra) {
+            draw_gkd_menu_rect(target_renderer, x, y, w, h, c, filled);
+            return;
+          }
           DrawRect(target_renderer ? target_renderer : renderer, x, y, w, h, c, filled);
         },
         get_texture_size,
@@ -2455,6 +2525,8 @@ int RunApp(int argc, char **argv) {
       if (rgds_input_result.play_back_sfx) play_sfx(SfxId::Back);
     }
     if (!key_calibration_capturing && input.IsPressed(Button::Start) && input.IsPressed(Button::Select)) {
+      runtime_log::Line(std::string("main: quit requested by Start+Select chord profile=") +
+                        InputProfileName(input_profile));
       app_shell.RequestQuit();
     }
 
@@ -2474,18 +2546,28 @@ int RunApp(int argc, char **argv) {
                                       false,
                                       kMenuToggleDebounceSec, input_profile);
       if (menu_toggle_action == MenuToggleAction::CloseSettings) {
+        runtime_log::Line(std::string("main: menu toggle close profile=") + InputProfileName(input_profile));
         menu_scene.BeginClose(
             menu_state,
             MenuSceneAnimationConfig{config.Get().animations, 0.16f, 0.20f, kSettingsToggleGuardSec});
         play_sfx(SfxId::Back);
       } else if (menu_toggle_action == MenuToggleAction::OpenFromShelf ||
                  menu_toggle_action == MenuToggleAction::OpenFromReader) {
+        runtime_log::Line(std::string("main: menu toggle open from=") +
+                          (menu_toggle_action == MenuToggleAction::OpenFromShelf ? "shelf" : "reader") +
+                          " profile=" + InputProfileName(input_profile));
         app_shell.Scenes().OpenSettingsFrom(
             (menu_toggle_action == MenuToggleAction::OpenFromShelf) ? AppScene::Shelf : AppScene::Reader);
+        runtime_log::Line("main: menu toggle scene opened");
+        const bool menu_open_animations =
+            config.Get().animations && input_profile != InputProfile::GKD350HUltra;
         menu_scene.BeginOpen(
             menu_state,
-            MenuSceneAnimationConfig{config.Get().animations, 0.16f, 0.20f, kSettingsToggleGuardSec});
+            MenuSceneAnimationConfig{menu_open_animations, 0.16f, 0.20f, kSettingsToggleGuardSec});
+        runtime_log::Line("main: menu toggle animation opened");
+        runtime_log::Line("main: menu toggle sfx begin");
         play_sfx(SfxId::Back);
+        runtime_log::Line("main: menu toggle sfx done");
       }
     }
 
@@ -2515,15 +2597,20 @@ int RunApp(int argc, char **argv) {
       queue_visible_shelf_cover_lookahead();
     } else if (state == AppScene::Settings) {
       const NativeConfig &ui_cfg = config.Get();
+      if (input_profile == InputProfile::GKD350HUltra) runtime_log::Line("main: settings input begin");
       PrepareMenuSceneInputState(system_settings_state,
                                  menu_scene.IsSelected(menu_state, SettingId::SystemControls),
                                  system_control_service,
                                  contributor_avatar_state,
                                   contributor_avatar_entries.size());
+      if (input_profile == InputProfile::GKD350HUltra) runtime_log::Line("main: settings input prepared");
       MenuSceneInputContext menu_input_context =
           make_menu_scene_input_context(ui_cfg, dt, menu_state, make_menu_scene_input_services());
+      if (input_profile == InputProfile::GKD350HUltra) runtime_log::Line("main: settings menu input begin");
       menu_scene.HandleInput(menu_input_context);
+      if (input_profile == InputProfile::GKD350HUltra) runtime_log::Line("main: settings menu input done");
       const OnlineShelfControllerTickResult online_after_input = online_shelf_controller.TickAfterInput(shelf_runtime);
+      if (input_profile == InputProfile::GKD350HUltra) runtime_log::Line("main: settings online tick done");
       if (online_after_input.refresh_roots_after_disconnect) {
         HandleOnlineShelfDeferredDisconnect(online_shelf_controller,
                                             books_roots,
@@ -2595,8 +2682,20 @@ int RunApp(int argc, char **argv) {
       if (state == AppScene::Shelf || (!is_rgds_runtime && state == AppScene::Settings)) {
         draw_volume_overlay = [&]() { DrawVolumeOverlay(make_volume_overlay_render_deps(now)); };
         draw_system_status_overlay = [&]() { DrawStatusBarRuntime(make_status_bar_render_deps()); };
+        if (input_profile == InputProfile::GKD350HUltra && state == AppScene::Settings) {
+          runtime_log::Line("main: settings shelf background draw begin");
+        }
         shelf_scene.Draw(make_shelf_scene_render_context(dt, animate_enabled));
+        if (input_profile == InputProfile::GKD350HUltra && state == AppScene::Settings) {
+          runtime_log::Line("main: settings shelf background draw done");
+        }
+        if (input_profile == InputProfile::GKD350HUltra && state == AppScene::Settings) {
+          runtime_log::Line("main: settings status draw begin");
+        }
         draw_system_status_overlay();
+        if (input_profile == InputProfile::GKD350HUltra && state == AppScene::Settings) {
+          runtime_log::Line("main: settings status draw done");
+        }
 
         if (state != AppScene::Settings) {
           draw_volume_overlay();
@@ -2633,8 +2732,18 @@ int RunApp(int argc, char **argv) {
       }
 
       if (!is_rgds_runtime && state == AppScene::Settings) {
+        if (input_profile == InputProfile::GKD350HUltra) runtime_log::Line("main: menu draw begin");
+        if (input_profile == InputProfile::GKD350HUltra) {
+          SDL_SetRenderTarget(renderer, nullptr);
+          SDL_RenderSetViewport(renderer, nullptr);
+          SDL_RenderSetClipRect(renderer, nullptr);
+          SDL_RenderSetScale(renderer, 1.0f, 1.0f);
+          runtime_log::Line("main: gkd menu renderer state reset");
+        }
         menu_scene.Draw(make_menu_scene_render_context(cfg, draw_volume_overlay));
+        if (input_profile == InputProfile::GKD350HUltra) runtime_log::Line("main: menu draw done");
         draw_system_status_overlay();
+        if (input_profile == InputProfile::GKD350HUltra) runtime_log::Line("main: menu status redraw done");
         if (online_shelf_controller.HasDeferredConnect()) {
           app_shell.Present();
           HandleOnlineShelfDeferredConnect(online_shelf_controller,

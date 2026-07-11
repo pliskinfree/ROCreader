@@ -1,5 +1,6 @@
 #include "settings_runtime.h"
 #include "app_language.h"
+#include "runtime_log.h"
 #include "settings_panel_router.h"
 
 #include <algorithm>
@@ -113,6 +114,31 @@ void HandleSettingsInput(SettingsRuntimeInputDeps &deps) {
 }
 
 void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
+  auto trace = [&](const std::string &message) {
+    if (deps.input_profile == InputProfile::GKD350HUltra) {
+      runtime_log::Line("settings_draw: " + message);
+    }
+  };
+  auto copy_texture = [&](const std::string &label, SDL_Texture *texture,
+                          const SDL_Rect *src, const SDL_Rect &dst) {
+    if (!texture || dst.w <= 0 || dst.h <= 0) {
+      trace("copy skip " + label + " invalid");
+      return;
+    }
+    trace("copy begin " + label +
+          " dst=" + std::to_string(dst.x) + "," + std::to_string(dst.y) +
+          "," + std::to_string(dst.w) + "x" + std::to_string(dst.h));
+    const int rc = SDL_RenderCopy(deps.renderer, texture, src, &dst);
+    trace("copy done " + label + " rc=" + std::to_string(rc));
+  };
+  if (!deps.renderer) {
+    trace("skip no renderer");
+    return;
+  }
+  if (deps.menu_items.empty()) {
+    trace("skip empty menu");
+    return;
+  }
   const int language_index = SystemLanguageIndexFromConfigValue(deps.cfg.system_language);
   const float anim_progress = deps.menu_anim.Value();
   const float eased =
@@ -121,9 +147,22 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
   const int menu_h = std::max(0, deps.layout.screen_h - menu_y);
   const int menu_width = deps.layout.settings_sidebar_w;
   const int x = static_cast<int>(-menu_width + menu_width * eased);
+  const bool gkd_profile = deps.input_profile == InputProfile::GKD350HUltra;
+  const bool gkd_safe_draw = false;
+  trace("begin layout=" + std::to_string(deps.layout.screen_w) + "x" +
+        std::to_string(deps.layout.screen_h) + " menu_width=" + std::to_string(menu_width) +
+        " x=" + std::to_string(x) +
+        " eased=" + std::to_string(eased) +
+        " selected=" + std::to_string(deps.menu_selected) +
+        " items=" + std::to_string(deps.menu_items.size()));
 
-  deps.services.draw_rect(x, menu_y, menu_width, menu_h,
-                 SDL_Color{0, 0, 0, static_cast<Uint8>(eased * deps.sidebar_mask_max_alpha)}, true);
+  if (!gkd_safe_draw && !gkd_profile) {
+    deps.services.draw_rect(x, menu_y, menu_width, menu_h,
+                   SDL_Color{0, 0, 0, static_cast<Uint8>(eased * deps.sidebar_mask_max_alpha)}, true);
+    trace("mask drawn");
+  } else {
+    trace("mask skipped gkd");
+  }
 
   const int preview_x = x + menu_width;
   const int preview_w = std::max(0, deps.layout.screen_w - preview_x);
@@ -136,18 +175,38 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
       int pw = 0;
       int ph = 0;
       deps.services.get_texture_size(preview_tex, pw, ph);
+      trace("preview texture size=" + std::to_string(pw) + "x" + std::to_string(ph));
       SDL_Rect pd{preview_x, menu_y, pw, ph};
-      if (selected == SettingId::VersionUpdate) {
+      if (gkd_profile && pw > 0 && ph > 0) {
+        const float fit = std::min(static_cast<float>(preview_w) / static_cast<float>(pw),
+                                   static_cast<float>(menu_h) / static_cast<float>(ph));
+        pd.w = std::max(1, static_cast<int>(std::round(static_cast<float>(pw) * fit)));
+        pd.h = std::max(1, static_cast<int>(std::round(static_cast<float>(ph) * fit)));
+        pd.x = preview_x + std::max(0, (preview_w - pd.w) / 2);
+        pd.y = menu_y + std::max(0, (menu_h - pd.h) / 2);
+      } else if (selected == SettingId::VersionUpdate) {
         pd.x = preview_x + std::max(0, (preview_w - pw) / 2);
         pd.y = menu_y + std::max(0, (menu_h - ph) / 2);
       }
-      SDL_RenderCopy(deps.renderer, preview_tex, nullptr, &pd);
-      preview_rect = pd;
+      if (pw > 0 && ph > 0) {
+        copy_texture("settings_preview", preview_tex, nullptr, pd);
+        preview_rect = pd;
+        trace("preview drawn");
+      } else {
+        trace("preview skipped invalid size");
+      }
+    } else {
+      trace("preview missing");
     }
   }
 
-  deps.services.draw_rect(x, menu_y, menu_width, menu_h, SDL_Color{24, 34, 46, 255}, true);
-  deps.services.draw_rect(x + menu_width - 1, menu_y, 1, menu_h, SDL_Color{82, 125, 158, 255}, true);
+  if (!gkd_safe_draw) {
+    deps.services.draw_rect(x, menu_y, menu_width, menu_h, SDL_Color{24, 34, 46, 255}, true);
+    deps.services.draw_rect(x + menu_width - 1, menu_y, 1, menu_h, SDL_Color{82, 125, 158, 255}, true);
+    trace("sidebar bg drawn");
+  } else {
+    trace("sidebar bg skipped gkd");
+  }
 
   const float scale = deps.layout.ui_scale;
   const int sidebar_margin_x = ScalePx(scale, 12);
@@ -163,6 +222,7 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
   const SDL_Color title_color{240, 246, 255, 255};
   const SDL_Color item_color{230, 236, 248, 255};
   TextCacheEntry *title_tex = deps.services.get_title_text_texture ? deps.services.get_title_text_texture(menu_title, title_color) : nullptr;
+  trace(std::string("title texture ") + (title_tex && title_tex->texture ? "ok" : "missing"));
   const int title_max_w = std::max(0, menu_width - 20);
   const bool compact_sidebar = deps.layout.screen_w <= 640 || menu_width <= 160;
   if (compact_sidebar && title_tex && title_tex->w > title_max_w && deps.services.get_text_texture) {
@@ -176,10 +236,15 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
     const int title_gap = ScalePx(scale, 8);
     divider_y = title_y + title_tex->h + title_gap;
     SDL_Rect td{title_x, title_y, title_tex->w, title_tex->h};
-    SDL_RenderCopy(deps.renderer, title_tex->texture, nullptr, &td);
+    if (title_tex->w > 0 && title_tex->h > 0) {
+      copy_texture("menu_title", title_tex->texture, nullptr, td);
+    }
   }
-  deps.services.draw_rect(x + ScalePx(scale, 8), divider_y, menu_width - ScalePx(scale, 16), ScalePx(scale, 1),
-                 SDL_Color{66, 95, 124, 255}, true);
+  if (!gkd_safe_draw) {
+    deps.services.draw_rect(x + ScalePx(scale, 8), divider_y, menu_width - ScalePx(scale, 16), ScalePx(scale, 1),
+                   SDL_Color{66, 95, 124, 255}, true);
+  }
+  trace("title and divider drawn");
   y = divider_y + ScalePx(scale, 12);
   text_left = x + sidebar_text_pad_x;
   first_menu_item_y = y;
@@ -216,15 +281,18 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
       menu_width,
       std::max(0, visible_bottom - list_clip_top_y),
   };
+  trace("sidebar list begin clip_h=" + std::to_string(sidebar_clip.h));
   SDL_RenderSetClipRect(deps.renderer, &sidebar_clip);
   for (size_t i = 0; i < deps.menu_items.size(); ++i) {
     const int item_y = y;
     y += sidebar_item_pitch;
     if (item_y + sidebar_item_h < list_clip_top_y || item_y > visible_bottom) continue;
     const bool sel = static_cast<int>(i) == deps.menu_selected;
-    const SDL_Color c = sel ? SDL_Color{63, 119, 158, 255} : SDL_Color{57, 73, 96, 214};
-    deps.services.draw_rect(x + sidebar_margin_x, item_y, menu_width - sidebar_margin_x * 2, sidebar_item_h, c, true);
-    if (sel) {
+    if (!gkd_safe_draw) {
+      const SDL_Color c = sel ? SDL_Color{63, 119, 158, 255} : SDL_Color{57, 73, 96, 214};
+      deps.services.draw_rect(x + sidebar_margin_x, item_y, menu_width - sidebar_margin_x * 2, sidebar_item_h, c, true);
+    }
+    if (sel && !gkd_safe_draw) {
       deps.services.draw_rect(x + sidebar_margin_x, item_y, sidebar_indicator_w, sidebar_item_h,
                      SDL_Color{139, 214, 255, 255}, true);
       deps.services.draw_rect(x + sidebar_margin_x - ScalePx(scale, 1), item_y - ScalePx(scale, 1),
@@ -238,17 +306,22 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
       if (label_tex && label_tex->texture) {
         const int ty = item_y + std::max(0, (sidebar_item_h - label_tex->h) / 2);
         SDL_Rect td{text_left, ty, label_tex->w, label_tex->h};
-        SDL_RenderCopy(deps.renderer, label_tex->texture, nullptr, &td);
+        if (label_tex->w > 0 && label_tex->h > 0) {
+          copy_texture("menu_label_" + std::to_string(i), label_tex->texture, nullptr, td);
+        }
       }
     }
 #endif
   }
   SDL_RenderSetClipRect(deps.renderer, had_clip == SDL_TRUE ? &previous_clip : nullptr);
+  trace("sidebar list done");
 
   const SettingId selected =
       deps.menu_items[std::clamp(deps.menu_selected, 0, static_cast<int>(deps.menu_items.size()) - 1)];
+  trace("selected panel begin");
   DrawSelectedSettingsPanel(selected, deps, preview_rect, language_index, first_menu_item_y,
                             sidebar_item_pitch, sidebar_item_h, scale);
+  trace("selected panel done");
 
   auto draw_native_topmost = [&](SDL_Texture *tex, int px, int py) {
     if (!tex) return;
@@ -257,10 +330,11 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
     deps.services.get_texture_size(tex, tw, th);
     if (tw <= 0 || th <= 0) return;
     SDL_Rect dst{px, py, tw, th};
-    SDL_RenderCopy(deps.renderer, tex, nullptr, &dst);
+    copy_texture("native_topmost", tex, nullptr, dst);
   };
 
   if (deps.show_chrome) {
+    trace("chrome begin");
     if (deps.ui_assets.top_status_bar) {
       draw_native_topmost(deps.ui_assets.top_status_bar, 0, 0);
     } else {
@@ -279,5 +353,6 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
       deps.services.draw_rect(0, deps.layout.bottom_bar_y, deps.layout.screen_w, deps.layout.bottom_bar_h,
                      SDL_Color{8, 10, 14, 255}, true);
     }
+    trace("chrome done");
   }
 }

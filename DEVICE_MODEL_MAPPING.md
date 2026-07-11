@@ -30,6 +30,7 @@ Update policy:
 - `H700Default`: generic H700 mapping
 - `H70034xxSp`: RG34XXSP dedicated mapping
 - `TrimuiBrick`: Trimui Brick dedicated mapping
+- `GKD350HUltra`: GKD350H Ultra dedicated mapping
 
 ## Chip Families
 
@@ -67,6 +68,17 @@ Rules:
 | Canonical model | Display name | Accepted aliases | Resolution | Input mapping |
 | --- | --- | --- | --- | --- |
 | `trimui-brick` | `Trimui Brick` | `trimuibrick`, `trimui brick`, `brick`, `tg3040` | `1024x768` | `TrimuiBrick` |
+
+### RK3576S
+
+Rules:
+
+- GKD350H Ultra uses the 1600x1440 landscape Wayland profile.
+- The underlying panel is 1440x1600 portrait, rotated by the compositor.
+
+| Canonical model | Display name | Accepted aliases | Resolution | Input mapping |
+| --- | --- | --- | --- | --- |
+| `gkd350h-ultra` | `GKD350H Ultra` | `gkd350hultra`, `gkd350h`, `gkd350h-ultra`, `gkd ultra`, `gkd_atom`, `gamekiddy gkd atom` | `1600x1440` | `GKD350HUltra` |
 
 ## Matching Guidance
 

@@ -1,5 +1,7 @@
 #include "app_layout.h"
 
+#include "../GKD350HUltra/gkd350h_ultra_layout.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -99,6 +101,10 @@ const LayoutMetrics *g_layout = &layout_720x480;
 const LayoutMetrics &Layout() { return *g_layout; }
 
 const LayoutMetrics &SelectLayoutProfile(int screen_w, int screen_h) {
+  if (screen_w == gkd350h_ultra::Layout1600x1440().screen_w &&
+      screen_h == gkd350h_ultra::Layout1600x1440().screen_h) {
+    return gkd350h_ultra::Layout1600x1440();
+  }
   if (screen_w == layout_1024x768.screen_w && screen_h == layout_1024x768.screen_h) return layout_1024x768;
   if (screen_w == layout_720x720.screen_w && screen_h == layout_720x720.screen_h) return layout_720x720;
   if (screen_w == layout_640x480.screen_w && screen_h == layout_640x480.screen_h) return layout_640x480;

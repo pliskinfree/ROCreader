@@ -5,6 +5,7 @@
 #include "zip_image_cover_cache.h"
 #include "path_adapter.h"
 #include "pdf_reader.h"
+#include "runtime_log.h"
 
 #include <algorithm>
 #include <cmath>
@@ -126,11 +127,20 @@ void SavePdfCoverCacheToDisk(const std::string &doc_path, const std::vector<unsi
   std::error_code ec;
   const std::filesystem::path cache_dir = SelectCoverCacheDir(doc_path, deps);
   std::filesystem::create_directories(cache_dir, ec);
+  if (ec) {
+    runtime_log::Line("[pdf_cover] cache mkdir failed dir=" + cache_dir.string() +
+                      " error=" + ec.message());
+    return;
+  }
   SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormatFrom(
       const_cast<unsigned char *>(cover_rgba.data()), deps.cover_w, deps.cover_h, 32, deps.cover_w * 4,
       SDL_PIXELFORMAT_RGBA32);
   if (!surface) return;
-  SDL_SaveBMP(surface, GetPdfCoverCacheFile(doc_path, deps).string().c_str());
+  const std::filesystem::path cache_file = GetPdfCoverCacheFile(doc_path, deps);
+  if (SDL_SaveBMP(surface, cache_file.string().c_str()) != 0) {
+    runtime_log::Line("[pdf_cover] cache save failed path=" + cache_file.string() +
+                      " error=" + SDL_GetError());
+  }
   SDL_FreeSurface(surface);
 }
 
