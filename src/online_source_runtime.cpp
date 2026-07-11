@@ -294,7 +294,7 @@ void ReloadOnlineSourceConfig(OnlineSourceState &state) {
   }
   state.selected_source_index = std::clamp(state.selected_source_index, 0,
                                            static_cast<int>(state.sources.size()) - 1);
-  state.selected_row = std::clamp(state.selected_row, 0, static_cast<int>(state.sources.size()) + 2);
+  state.selected_row = std::clamp(state.selected_row, 0, static_cast<int>(state.sources.size()));
   state.status_message = "Loaded " + std::to_string(state.sources.size()) + " online source(s)";
 }
 

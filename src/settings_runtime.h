@@ -4,6 +4,7 @@
 #include "animation.h"
 #include "contributor_avatar_runtime.h"
 #include "input_manager.h"
+#include "key_calibration_runtime.h"
 #include "online_source_runtime.h"
 #include "reader_session_state.h"
 #include "system_settings_runtime.h"
@@ -21,6 +22,7 @@
 enum class SettingId {
   SystemControls,
   KeyGuide,
+  KeyCalibration,
   ClearHistory,
   CleanCache,
   TxtToUtf8,
@@ -53,6 +55,7 @@ struct SettingsRuntimeInputActions {
 struct SettingsRuntimeInputDeps {
   const InputManager &input;
   const NativeConfig &ui_cfg;
+  InputProfile input_profile = InputProfile::DesktopDefault;
   float dt = 0.0f;
   SettingsRuntimeMenuState menu;
   SystemSettingsState &system_settings_state;
@@ -61,6 +64,8 @@ struct SettingsRuntimeInputDeps {
   TxtSettingsCallbacks txt_settings_callbacks;
   ContributorAvatarState &contributor_avatar_state;
   size_t contributor_avatar_count = 0;
+  KeyCalibrationState &key_calibration_state;
+  KeyCalibrationCallbacks key_calibration_callbacks;
   VersionUpdateState &version_update_state;
   OnlineSourceState &online_source_state;
   VersionUpdateCallbacks version_update_callbacks;
@@ -104,6 +109,8 @@ struct SettingsRuntimeRenderDeps {
   const TxtSettingsState &txt_settings_state;
   const std::vector<ContributorAvatarEntry> &contributor_avatar_entries;
   const ContributorAvatarState &contributor_avatar_state;
+  const KeyCalibrationState &key_calibration_state;
+  bool has_calibrated_keymap = false;
   const VersionUpdateState &version_update_state;
   const OnlineSourceState &online_source_state;
   SettingsRuntimeLayout layout;

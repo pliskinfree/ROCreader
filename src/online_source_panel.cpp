@@ -82,6 +82,15 @@ int ButtonRowStart(const OnlineSourceState &state) {
   return static_cast<int>(state.sources.size());
 }
 
+int SourceListStartIndex(const OnlineSourceState &state, int visible_rows) {
+  const int source_count = static_cast<int>(state.sources.size());
+  if (source_count <= 0 || visible_rows <= 0 || source_count <= visible_rows) return 0;
+  const int focus_row = state.selected_row >= source_count
+                            ? source_count - 1
+                            : std::clamp(state.selected_row, 0, source_count - 1);
+  return std::clamp(focus_row - visible_rows + 1, 0, source_count - visible_rows);
+}
+
 const char *OnlineText(int language_index, int id) {
   static const char *texts[12][14] = {
       {u8"URL\u5165\u53e3", u8"\u8fde\u63a5", u8"\u6e05\u9664\u7f13\u5b58", u8"\u9000\u51fa\u8fde\u63a5", u8"\u672a\u8fde\u63a5", u8"\u8fde\u63a5\u4e2d", u8"\u5df2\u8fde\u63a5", u8"\u65e0\u53ef\u7528\u8fde\u63a5\u6e90", u8"\u5df2\u9009\u62e9", u8"\u5df2\u52a0\u8f7d", u8"\u4e2a\u8fde\u63a5\u6e90", u8"\u76ee\u5f55\u52a0\u8f7d\u5931\u8d25", u8"\u5df2\u65ad\u5f00", u8"\u7f13\u5b58\u5df2\u6e05\u9664"},
@@ -214,22 +223,26 @@ void DrawOnlineSourcePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rec
 
   const int row_h = ScalePx(scale, 31);
   const int row_gap = ScalePx(scale, 7);
-  int exit_row_index = 0;
+  // Keep the URL action buttons at their 2.37-era row after inserting Key Calibration.
+  int button_anchor_row_index = 0;
   for (size_t i = 0; i < deps.menu_items.size(); ++i) {
-    if (deps.menu_items[i] == SettingId::ExitApp) {
-      exit_row_index = static_cast<int>(i);
+    if (deps.menu_items[i] == SettingId::UrlEntry) {
+      button_anchor_row_index = static_cast<int>(i);
       break;
     }
   }
-  const int button_y = first_menu_item_y + sidebar_item_pitch * exit_row_index;
+  const int button_y = first_menu_item_y + sidebar_item_pitch * button_anchor_row_index;
   const int button_h = sidebar_item_h;
   const int list_bottom = std::min(button_y - ScalePx(scale, 14), safe_rect.y + safe_rect.h);
   const int max_rows = std::max(1, (list_bottom - y) / std::max(1, row_h + row_gap));
-  const int visible_sources = std::min<int>(state.sources.size(), max_rows);
-  for (int i = 0; i < visible_sources; ++i) {
-    const OnlineSourceEntry &source = state.sources[i];
-    const bool row_selected = state.panel_active && state.selected_row == i;
-    const bool checked = state.selected_source_index == i;
+  const int source_count = static_cast<int>(state.sources.size());
+  const int visible_sources = std::min(source_count, max_rows);
+  const int source_start = SourceListStartIndex(state, visible_sources);
+  for (int visible_i = 0; visible_i < visible_sources; ++visible_i) {
+    const int source_index = source_start + visible_i;
+    const OnlineSourceEntry &source = state.sources[source_index];
+    const bool row_selected = state.panel_active && state.selected_row == source_index;
+    const bool checked = state.selected_source_index == source_index;
     const SDL_Color row_color = row_selected ? SDL_Color{54, 103, 139, 220}
                                              : (light ? SDL_Color{229, 233, 238, 220}
                                                       : SDL_Color{42, 54, 70, 216});

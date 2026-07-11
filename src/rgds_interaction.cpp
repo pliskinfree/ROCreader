@@ -22,10 +22,6 @@ void CloseReaderToShelf(InteractionState &state) {
 InteractionResult HandleFrameInput(InteractionState &state, const InputManager &input, AppScene scene,
                                    uint32_t now) {
   InteractionResult result;
-  if (input.IsJustPressed(Button::Quit)) {
-    result.quit_requested = true;
-  }
-
   if (input.IsJustPressed(Button::Select)) {
     state.focus_top = !state.focus_top;
     state.focus_flash_until = now + static_cast<uint32_t>(kFocusFlashSec * 1000.0f);

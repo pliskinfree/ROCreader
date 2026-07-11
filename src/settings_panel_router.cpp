@@ -6,6 +6,7 @@
 #include "contact_panel.h"
 #include "exit_panel.h"
 #include "history_panel.h"
+#include "key_calibration_panel.h"
 #include "key_guide_panel.h"
 #include "online_source_panel.h"
 #include "system_controls_panel.h"
@@ -18,6 +19,7 @@ bool HandleSelectedSettingsPanelInput(SettingId id, SettingsRuntimeInputDeps &de
   if (id == SettingId::SystemControls && HandleSystemControlsPanelInput(deps)) return true;
   if (id == SettingId::TxtToUtf8 && HandleTxtSettingsPanelInput(deps)) return true;
   if (id == SettingId::ContributorAvatars && HandleAvatarPanelInput(deps)) return true;
+  if (id == SettingId::KeyCalibration && HandleKeyCalibrationPanelInput(deps)) return true;
   if (id == SettingId::VersionUpdate && HandleUpdatePanelInput(deps)) return true;
   if (id == SettingId::UrlEntry && HandleOnlineSourcePanelInput(deps)) return true;
   return false;
@@ -39,6 +41,9 @@ void DrawSelectedSettingsPanel(SettingId selected, SettingsRuntimeRenderDeps &de
   }
   if (selected == SettingId::KeyGuide) {
     DrawKeyGuidePanel(deps, preview_rect, language_index, first_menu_item_y);
+  }
+  if (selected == SettingId::KeyCalibration) {
+    DrawKeyCalibrationPanel(deps, preview_rect, language_index, scale);
   }
   if (selected == SettingId::ContactMe) {
     DrawContactPanel(deps, preview_rect, language_index);

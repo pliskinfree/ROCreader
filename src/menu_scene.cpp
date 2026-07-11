@@ -22,11 +22,13 @@ MenuSceneLayoutMetrics MakeMenuSceneLayoutMetrics(const LayoutMetrics &layout) {
 MenuSceneInputServices MakeMenuSceneInputServices(
     SystemSettingsCallbacks system_settings_callbacks,
     TxtSettingsCallbacks txt_settings_callbacks,
+    KeyCalibrationCallbacks key_calibration_callbacks,
     VersionUpdateCallbacks version_update_callbacks,
     SettingsRuntimeInputActions actions) {
   return MenuSceneInputServices{
       std::move(system_settings_callbacks),
       std::move(txt_settings_callbacks),
+      std::move(key_calibration_callbacks),
       std::move(version_update_callbacks),
       std::move(actions),
   };
@@ -85,6 +87,7 @@ void MenuScene::HandleInput(const MenuSceneInputContext &context) const {
   SettingsRuntimeInputDeps deps{
       context.input,
       context.ui_cfg,
+      context.input_profile,
       context.dt,
       SettingsRuntimeMenuState{
           context.menu_state.closing,
@@ -100,6 +103,8 @@ void MenuScene::HandleInput(const MenuSceneInputContext &context) const {
       context.services.txt_settings_callbacks,
       context.contributor_avatar_state,
       context.contributor_avatar_count,
+      context.key_calibration_state,
+      context.services.key_calibration_callbacks,
       context.version_update_state,
       context.online_source_state,
       context.services.version_update_callbacks,
@@ -127,6 +132,8 @@ void MenuScene::Draw(const MenuSceneRenderContext &context) const {
       context.txt_settings_state,
       context.contributor_avatar_entries,
       context.contributor_avatar_state,
+      context.key_calibration_state,
+      context.has_calibrated_keymap,
       context.version_update_state,
       context.online_source_state,
       MakeLayout(layout),

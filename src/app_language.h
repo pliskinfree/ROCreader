@@ -6,6 +6,7 @@ enum class AppTextId {
   MenuTitle = 0,
   SettingSystemControls,
   SettingKeyGuide,
+  SettingKeyCalibration,
   SettingClearHistory,
   SettingClearCache,
   SettingTxtToUtf8,

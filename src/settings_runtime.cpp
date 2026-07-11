@@ -15,6 +15,7 @@ std::string SettingLabel(SettingId id, int language_index) {
   switch (id) {
   case SettingId::SystemControls: return LocalizedAppText(language_index, AppTextId::SettingSystemControls);
   case SettingId::KeyGuide: return LocalizedAppText(language_index, AppTextId::SettingKeyGuide);
+  case SettingId::KeyCalibration: return LocalizedAppText(language_index, AppTextId::SettingKeyCalibration);
   case SettingId::ClearHistory: return LocalizedAppText(language_index, AppTextId::SettingClearHistory);
   case SettingId::CleanCache: return LocalizedAppText(language_index, AppTextId::SettingClearCache);
   case SettingId::TxtToUtf8: return LocalizedAppText(language_index, AppTextId::SettingTxtToUtf8);
@@ -31,6 +32,7 @@ SDL_Texture *SelectedPreviewTexture(const UiAssets &ui_assets, SettingId id) {
   switch (id) {
   case SettingId::SystemControls: return ui_assets.settings_preview_default;
   case SettingId::KeyGuide: return ui_assets.settings_preview_default;
+  case SettingId::KeyCalibration: return ui_assets.settings_preview_default;
   case SettingId::ClearHistory: return ui_assets.settings_preview_clean_history;
   case SettingId::CleanCache: return ui_assets.settings_preview_clean_cache;
   case SettingId::TxtToUtf8: return ui_assets.settings_preview_default;
@@ -76,13 +78,15 @@ void HandleSettingsInput(SettingsRuntimeInputDeps &deps) {
       current_id == SettingId::TxtToUtf8 && deps.txt_settings_state.panel_active;
   const bool avatar_grid_active =
       current_id == SettingId::ContributorAvatars && deps.contributor_avatar_state.grid_active;
+  const bool key_calibration_active =
+      current_id == SettingId::KeyCalibration && deps.key_calibration_state.panel_active;
   const bool version_update_active =
       current_id == SettingId::VersionUpdate && deps.version_update_state.panel_active;
   const bool online_source_active =
       current_id == SettingId::UrlEntry && deps.online_source_state.panel_active;
 
-  if (!system_settings_active && !txt_settings_active && !avatar_grid_active && !version_update_active &&
-      !online_source_active &&
+  if (!system_settings_active && !txt_settings_active && !avatar_grid_active && !key_calibration_active &&
+      !version_update_active && !online_source_active &&
       menu.close_armed && menu.toggle_guard <= 0.0f &&
       !menu.closing &&
       (deps.input.IsJustPressed(Button::B) || deps.actions.menu_toggle_request)) {
@@ -184,14 +188,46 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
                  SDL_Color{66, 95, 124, 255}, true);
 #endif
 
+  const int list_top_y = y;
+  const int list_clip_top_y = std::max(menu_y, first_menu_item_y - ScalePx(scale, 12) + ScalePx(scale, 1));
+  const int selected_index =
+      std::clamp(deps.menu_selected, 0, std::max(0, static_cast<int>(deps.menu_items.size()) - 1));
+  const int selected_top = list_top_y + selected_index * sidebar_item_pitch;
+  const int selected_bottom = selected_top + sidebar_item_h;
+  const int visible_top = list_top_y;
+  const int visible_bottom =
+      std::max(visible_top, deps.layout.bottom_bar_y);
+  int sidebar_scroll_y = 0;
+  if (selected_bottom > visible_bottom) {
+    sidebar_scroll_y = selected_bottom - visible_bottom;
+  }
+  if (selected_top - sidebar_scroll_y < visible_top) {
+    sidebar_scroll_y = selected_top - visible_top;
+  }
+  sidebar_scroll_y = std::max(0, sidebar_scroll_y);
+  y -= sidebar_scroll_y;
+
+  SDL_Rect previous_clip{};
+  const SDL_bool had_clip = SDL_RenderIsClipEnabled(deps.renderer);
+  if (had_clip == SDL_TRUE) SDL_RenderGetClipRect(deps.renderer, &previous_clip);
+  SDL_Rect sidebar_clip{
+      x,
+      list_clip_top_y,
+      menu_width,
+      std::max(0, visible_bottom - list_clip_top_y),
+  };
+  SDL_RenderSetClipRect(deps.renderer, &sidebar_clip);
   for (size_t i = 0; i < deps.menu_items.size(); ++i) {
+    const int item_y = y;
+    y += sidebar_item_pitch;
+    if (item_y + sidebar_item_h < list_clip_top_y || item_y > visible_bottom) continue;
     const bool sel = static_cast<int>(i) == deps.menu_selected;
     const SDL_Color c = sel ? SDL_Color{63, 119, 158, 255} : SDL_Color{57, 73, 96, 214};
-    deps.services.draw_rect(x + sidebar_margin_x, y, menu_width - sidebar_margin_x * 2, sidebar_item_h, c, true);
+    deps.services.draw_rect(x + sidebar_margin_x, item_y, menu_width - sidebar_margin_x * 2, sidebar_item_h, c, true);
     if (sel) {
-      deps.services.draw_rect(x + sidebar_margin_x, y, sidebar_indicator_w, sidebar_item_h,
+      deps.services.draw_rect(x + sidebar_margin_x, item_y, sidebar_indicator_w, sidebar_item_h,
                      SDL_Color{139, 214, 255, 255}, true);
-      deps.services.draw_rect(x + sidebar_margin_x - ScalePx(scale, 1), y - ScalePx(scale, 1),
+      deps.services.draw_rect(x + sidebar_margin_x - ScalePx(scale, 1), item_y - ScalePx(scale, 1),
                      menu_width - sidebar_margin_x * 2 + ScalePx(scale, 2),
                      sidebar_item_h + ScalePx(scale, 2), SDL_Color{85, 152, 198, 208}, false);
     }
@@ -200,14 +236,14 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
     if (!label_text.empty() && deps.services.get_text_texture) {
       TextCacheEntry *label_tex = deps.services.get_text_texture(label_text, item_color);
       if (label_tex && label_tex->texture) {
-        const int ty = y + std::max(0, (sidebar_item_h - label_tex->h) / 2);
+        const int ty = item_y + std::max(0, (sidebar_item_h - label_tex->h) / 2);
         SDL_Rect td{text_left, ty, label_tex->w, label_tex->h};
         SDL_RenderCopy(deps.renderer, label_tex->texture, nullptr, &td);
       }
     }
 #endif
-    y += sidebar_item_pitch;
   }
+  SDL_RenderSetClipRect(deps.renderer, had_clip == SDL_TRUE ? &previous_clip : nullptr);
 
   const SettingId selected =
       deps.menu_items[std::clamp(deps.menu_selected, 0, static_cast<int>(deps.menu_items.size()) - 1)];

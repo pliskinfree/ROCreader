@@ -89,17 +89,24 @@ PY
 }
 
 next_download_zip_utf8() {
-  python3 - "$DOWNLOADS_ROOT" "$TRIMUI_BRICK_LAYOUT" <<'PY'
+  python3 - "$DOWNLOADS_ROOT" "$TRIMUI_BRICK_LAYOUT" "${DOWNLOAD_RELEASE_VERSION:-}" <<'PY'
 import os
 import re
 import sys
 
 downloads = sys.argv[1]
 trimui_brick_layout = sys.argv[2] == "1"
+release_version_override = sys.argv[3]
 prefix = "ROC全能漫画阅读器ver"
 suffix = " for Trimui Brick.zip" if trimui_brick_layout else " for H700.zip"
 pattern = re.compile(r"^" + re.escape(prefix) + r"(\d+)\.(\d+)" + re.escape(suffix) + r"$")
 best = None
+
+if release_version_override:
+    if not re.fullmatch(r"\d+(?:\.\d+)*", release_version_override):
+        raise SystemExit(f"invalid DOWNLOAD_RELEASE_VERSION: {release_version_override}")
+    print(os.path.join(downloads, f"{prefix}{release_version_override}{suffix}"))
+    raise SystemExit(0)
 
 if os.path.isdir(downloads):
     for name in os.listdir(downloads):
@@ -1367,6 +1374,7 @@ EOF
     exit 1
   fi
   if [ "$TRIMUI_BRICK_LAYOUT" != "1" ]; then
+    mkdir -p "$ZIP_STAGE_IMGS"
     cp "$LAUNCHER" "$ZIP_STAGE_APPS/ROCreader.sh"
     if [ -f "$SELF_DIR/ui/ROCreader.png" ]; then
       cp "$SELF_DIR/ui/ROCreader.png" "$ZIP_STAGE_IMGS/ROCreader.png"

@@ -138,12 +138,14 @@ void HandleOnlineShelfDeferredDisconnect(OnlineShelfController &online_shelf_con
                                          const OnlineShelfDeferredDisconnectHandlers &handlers);
 MenuSceneInputContext MakeMenuSceneInputContext(const InputManager &input,
                                                 const NativeConfig &ui_cfg,
+                                                InputProfile input_profile,
                                                 float dt,
                                                 MenuSceneState &menu_state,
                                                 SystemSettingsState &system_settings_state,
                                                 TxtSettingsState &txt_settings_state,
                                                 ContributorAvatarState &contributor_avatar_state,
                                                 size_t contributor_avatar_count,
+                                                KeyCalibrationState &key_calibration_state,
                                                 VersionUpdateState &version_update_state,
                                                 OnlineSourceState &online_source_state,
                                                 MenuSceneInputServices services);

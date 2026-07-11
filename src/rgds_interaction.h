@@ -19,7 +19,6 @@ struct InteractionState {
 struct InteractionResult {
   bool menu_key_consumed = false;
   bool select_key_consumed = false;
-  bool quit_requested = false;
   bool play_change_sfx = false;
   bool play_back_sfx = false;
 };

@@ -3,6 +3,7 @@ param(
     [string]$BaseImage = "debian:bullseye-slim",
     [ValidateSet("0", "1")]
     [string]$RequireMupdf = "1",
+    [string]$ReleaseVersion = "",
     [switch]$SkipCMake,
     [switch]$NoBuildImage
 )
@@ -18,6 +19,14 @@ $DistDir = Join-Path $ScriptDir "dist_lowglibc"
 $DownloadsDir = Join-Path $ScriptDir "Downloads"
 $LogsDir = Join-Path $ScriptDir "logs"
 $SysrootOverlayDir = Join-Path $ScriptDir "sysroot_overlay"
+
+$normalizedReleaseVersion = ""
+if ($ReleaseVersion) {
+    $normalizedReleaseVersion = $ReleaseVersion -replace '^ver', ''
+    if ($normalizedReleaseVersion -notmatch '^\d+(?:\.\d+)*$') {
+        throw "Invalid release version: $ReleaseVersion"
+    }
+}
 
 if (-not (Test-Path (Join-Path $ToolchainDir "Dockerfile"))) {
     throw "Toolchain Dockerfile not found: $ToolchainDir"
@@ -130,12 +139,21 @@ $ContainerScriptPath = Join-Path $WorkspaceDir "build_low_glibc_container.sh"
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($ContainerScriptPath, $containerScript, $Utf8NoBom)
 
-docker run --rm `
-    -e "REQUIRE_MUPDF=$RequireMupdf" `
-    -v "${projectMount}:/root/workspace/ROCreader" `
-    -w /root/workspace/ROCreader `
-    $ImageName `
-    bash /root/workspace/ROCreader/TrimuiBrick/workspace/build_low_glibc_container.sh
+$dockerArgs = @(
+    "run", "--rm",
+    "-e", "REQUIRE_MUPDF=$RequireMupdf"
+)
+if ($normalizedReleaseVersion) {
+    $dockerArgs += @("-e", "DOWNLOAD_RELEASE_VERSION=$normalizedReleaseVersion")
+}
+$dockerArgs += @(
+    "-v", "${projectMount}:/root/workspace/ROCreader",
+    "-w", "/root/workspace/ROCreader",
+    $ImageName,
+    "bash", "/root/workspace/ROCreader/TrimuiBrick/workspace/build_low_glibc_container.sh"
+)
+
+& docker @dockerArgs
 if ($LASTEXITCODE -ne 0) {
     throw "Trimui Brick Docker package build failed."
 }

@@ -36,6 +36,7 @@ struct MenuSceneAnimationConfig {
 struct MenuSceneInputServices {
   SystemSettingsCallbacks system_settings_callbacks;
   TxtSettingsCallbacks txt_settings_callbacks;
+  KeyCalibrationCallbacks key_calibration_callbacks;
   VersionUpdateCallbacks version_update_callbacks;
   SettingsRuntimeInputActions actions;
 };
@@ -43,18 +44,21 @@ struct MenuSceneInputServices {
 MenuSceneInputServices MakeMenuSceneInputServices(
     SystemSettingsCallbacks system_settings_callbacks,
     TxtSettingsCallbacks txt_settings_callbacks,
+    KeyCalibrationCallbacks key_calibration_callbacks,
     VersionUpdateCallbacks version_update_callbacks,
     SettingsRuntimeInputActions actions);
 
 struct MenuSceneInputContext {
   const InputManager &input;
   const NativeConfig &ui_cfg;
+  InputProfile input_profile = InputProfile::DesktopDefault;
   float dt = 0.0f;
   MenuSceneState &menu_state;
   SystemSettingsState &system_settings_state;
   TxtSettingsState &txt_settings_state;
   ContributorAvatarState &contributor_avatar_state;
   size_t contributor_avatar_count = 0;
+  KeyCalibrationState &key_calibration_state;
   VersionUpdateState &version_update_state;
   OnlineSourceState &online_source_state;
   MenuSceneInputServices services;
@@ -72,6 +76,8 @@ struct MenuSceneRenderContext {
   const TxtSettingsState &txt_settings_state;
   const std::vector<ContributorAvatarEntry> &contributor_avatar_entries;
   const ContributorAvatarState &contributor_avatar_state;
+  const KeyCalibrationState &key_calibration_state;
+  bool has_calibrated_keymap = false;
   const VersionUpdateState &version_update_state;
   const OnlineSourceState &online_source_state;
   MenuSceneLayoutMetrics layout;

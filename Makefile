@@ -111,6 +111,8 @@ MENU_SRCS := \
   src/contact_panel.cpp \
   src/exit_panel.cpp \
   src/key_guide_panel.cpp \
+  src/key_calibration_panel.cpp \
+  src/key_calibration_runtime.cpp \
   src/system_settings_runtime.cpp \
   src/txt_settings_runtime.cpp \
   src/version_update_runtime.cpp \

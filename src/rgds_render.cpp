@@ -55,6 +55,8 @@ void DrawBottomMenu(const BottomRenderDeps &deps) {
       deps.txt_settings_state,
       deps.contributor_avatar_entries ? *deps.contributor_avatar_entries : deps.resources.bottom_contributor_avatar_entries,
       deps.contributor_avatar_state,
+      deps.key_calibration_state,
+      deps.has_calibrated_keymap,
       deps.version_update_state,
       deps.online_source_state,
       deps.menu_layout,

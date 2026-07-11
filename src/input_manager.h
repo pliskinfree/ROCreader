@@ -3,7 +3,9 @@
 #include <SDL.h>
 
 #include <array>
+#include <deque>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 constexpr int kButtonCount = 19;
@@ -39,9 +41,44 @@ enum class InputProfile {
   RGDS,
 };
 
+enum class RawInputSource {
+  Keyboard,
+  GameControllerButton,
+  JoystickButton,
+  GameControllerAxis,
+  JoystickAxis,
+  JoystickHat,
+  LinuxKey,
+  LinuxAbs,
+};
+
+struct RawInputBinding {
+  RawInputSource source = RawInputSource::Keyboard;
+  int code = 0;
+  int direction = 0;
+  std::string device_name;
+  bool pressed = true;
+};
+
+struct AxisButtonMap {
+  Button negative = static_cast<Button>(-1);
+  Button positive = static_cast<Button>(-1);
+};
+
+struct HatButtonMap {
+  Button up = static_cast<Button>(-1);
+  Button down = static_cast<Button>(-1);
+  Button left = static_cast<Button>(-1);
+  Button right = static_cast<Button>(-1);
+};
+
 const char *ButtonName(Button b);
 const char *InputProfileName(InputProfile profile);
 const char *SdlEventName(Uint32 type);
+const char *RawInputSourceName(RawInputSource source);
+std::string DescribeRawInputBinding(const RawInputBinding &binding);
+std::string RawInputBindingKey(const RawInputBinding &binding);
+bool RawInputBindingWritable(const RawInputBinding &binding);
 
 struct BtnState {
   bool down = false;
@@ -73,6 +110,8 @@ public:
   void ResetAll();
   void RefreshDevices();
   void SuppressPowerUntilRelease();
+  void ClearCalibrationSamples() const;
+  bool TakeCalibrationSample(RawInputBinding &out) const;
   std::string DescribeJoyMap() const;
   std::string DescribePadMap() const;
 
@@ -82,8 +121,12 @@ public:
   static bool IsValid(Button b);
 private:
   static Button KeyToButton(SDL_Keycode k);
+  Button KeyboardToButton(SDL_Keycode k) const;
   Button PadToButton(uint8_t b) const;
   Button JoyButtonToButton(uint8_t b) const;
+  void RecordCalibrationSample(const RawInputBinding &binding) const;
+  bool ApplyAxisMap(const std::array<AxisButtonMap, 16> &map, int axis, int value);
+  bool HasCalibratedButton(Button b) const;
   void PollDeviceInputEvents();
   void LoadDefaultPadMap(InputProfile input_profile);
   void LoadDefaultJoyMap(InputProfile input_profile);
@@ -91,6 +134,8 @@ private:
   static bool ParseButtonName(const std::string &raw, Button &out);
   void LoadOverrides(const std::string &mapping_path);
   void SetDown(Button b, bool down);
+  bool ApplyCustomHatMap(uint8_t hat, uint8_t value);
+  bool ApplyCustomLinuxAbsMap(int code, int value);
   bool MarkProbeLogged(std::array<bool, 512> &seen, int index);
   bool MarkProbeLogged(std::array<bool, 16> &seen, int index);
   bool ShouldLogProbeKey(SDL_Scancode scancode);
@@ -108,6 +153,14 @@ private:
   std::array<BtnState, kButtonCount> states_{};
   std::array<Button, 32> pad_map_{};
   std::array<Button, 32> joy_map_{};
+  std::unordered_map<int, Button> key_map_;
+  std::unordered_map<int, Button> linux_key_map_;
+  std::array<AxisButtonMap, 16> pad_axis_map_{};
+  std::array<AxisButtonMap, 16> joy_axis_map_{};
+  std::array<AxisButtonMap, 64> linux_abs_map_{};
+  std::array<HatButtonMap, 16> joy_hat_map_{};
+  std::array<bool, kButtonCount> calibrated_buttons_{};
+  mutable std::deque<RawInputBinding> calibration_samples_;
   InputProfile input_profile_ = InputProfile::DesktopDefault;
   std::array<int, 16> last_pad_axis_values_{};
   std::array<int, 16> last_joy_axis_values_{};

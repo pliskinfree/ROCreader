@@ -648,9 +648,10 @@ int RunApp(int argc, char **argv) {
   const std::filesystem::path &removable_cover_thumb_cache_dir = app_storage_paths.removable_cover_thumb_cache_dir;
 
   const AppPlatformEnv platform_env = ResolveAppPlatformEnv(device_model_token, screen_profile, rgds_runtime);
-  const InputProfile input_profile = platform_env.capabilities.input_profile;
   const bool use_h700_defaults = platform_env.capabilities.use_h700_defaults;
   const AppConfigPaths app_config_paths = ResolveAppConfigPaths(runtime_paths);
+  bool has_calibrated_keymap = HasCompletedKeyCalibration(app_config_paths.keymap_path.string());
+  const InputProfile input_profile = platform_env.capabilities.input_profile;
   if (verbose_log) {
     std::cout << "[native_h700] keymap path: " << filesystem_compat::LexicallyNormal(app_config_paths.keymap_path).string() << "\n";
     std::cout << "[native_h700] config path: " << filesystem_compat::LexicallyNormal(app_config_paths.config_path).string() << "\n";
@@ -800,6 +801,7 @@ int RunApp(int argc, char **argv) {
   InitializeRgdsStartupState(is_rgds_runtime, menu_state, rgds_interaction, false);
   menu_state.items = {
       SettingId::KeyGuide,
+      SettingId::KeyCalibration,
       SettingId::SystemControls,
       SettingId::TxtToUtf8,
       SettingId::ContributorAvatars,
@@ -807,6 +809,8 @@ int RunApp(int argc, char **argv) {
       SettingId::VersionUpdate,
       SettingId::UrlEntry,
       SettingId::ExitApp};
+  KeyCalibrationState key_calibration_state;
+  InitializeKeyCalibrationState(key_calibration_state);
   VersionUpdateState version_update_state{};
   InitializeVersionUpdateState(version_update_state);
   OnlineShelfController online_shelf_controller;
@@ -1630,12 +1634,14 @@ int RunApp(int argc, char **argv) {
                                            MenuSceneInputServices services) {
     return MakeMenuSceneInputContext(input,
                                      ui_cfg,
+                                     input_profile,
                                      frame_dt,
                                      menu_state_ref,
                                      system_settings_state,
                                      txt_settings_state,
                                      contributor_avatar_state,
                                      contributor_avatar_entries.size(),
+                                     key_calibration_state,
                                      version_update_state,
                                      online_source_state,
                                      std::move(services));
@@ -1794,6 +1800,17 @@ int RunApp(int argc, char **argv) {
         },
     };
   };
+  auto make_key_calibration_callbacks = [&]() {
+    return KeyCalibrationCallbacks{
+        [&](KeyCalibrationState &state) {
+          const bool saved =
+              SaveKeyCalibrationMapping(app_config_paths.keymap_path.string(), device_model_token, input_profile, state);
+          has_calibrated_keymap = HasCompletedKeyCalibration(app_config_paths.keymap_path.string());
+          return saved;
+        },
+        [&]() { app_shell.RequestQuit(); },
+    };
+  };
   auto make_settings_render_services = [&](SDL_Renderer *target_renderer,
                                            const std::function<void()> &draw_volume_overlay) {
     return MakeMenuSceneRenderServices(MenuSceneRenderServiceCallbacks{
@@ -1822,6 +1839,8 @@ int RunApp(int argc, char **argv) {
         txt_settings_state,
         contributor_avatar_entries,
         contributor_avatar_state,
+        key_calibration_state,
+        has_calibrated_keymap,
         version_update_state,
         online_source_state,
         make_menu_scene_layout_metrics(),
@@ -1937,6 +1956,8 @@ int RunApp(int argc, char **argv) {
         txt_settings_state,
         is_rgds_runtime ? nullptr : &contributor_avatar_entries,
         contributor_avatar_state,
+        key_calibration_state,
+        has_calibrated_keymap,
         version_update_state,
         online_source_state,
         make_menu_scene_layout_metrics(),
@@ -2110,6 +2131,7 @@ int RunApp(int argc, char **argv) {
     return MakeMenuSceneInputServices(
         make_system_settings_callbacks(),
         make_txt_settings_callbacks(),
+        make_key_calibration_callbacks(),
         make_version_update_callbacks(),
         make_settings_input_actions(menu_toggle_request, std::move(on_close_override)));
   };
@@ -2264,6 +2286,10 @@ int RunApp(int argc, char **argv) {
     }
 
     const uint32_t power_now = SDL_GetTicks();
+    const bool key_calibration_capturing_before_power =
+        state == AppScene::Settings &&
+        menu_scene.IsSelected(menu_state, SettingId::KeyCalibration) &&
+        key_calibration_state.phase == KeyCalibrationPhase::Capturing;
     if (input_wake_next_resync_tick != 0 && observed_input_this_frame) {
       input_wake_next_resync_tick = 0;
     } else if (input_wake_next_resync_tick != 0 &&
@@ -2313,7 +2339,7 @@ int RunApp(int argc, char **argv) {
       continue;
     }
 
-    if (power_input_allowed && input.IsJustPressed(Button::Power)) {
+    if (!key_calibration_capturing_before_power && power_input_allowed && input.IsJustPressed(Button::Power)) {
       if (lid_power_controller.TriggerPowerKeyScreenOff(input_profile)) {
         if (input_profile == InputProfile::RGDS) {
           rgds_display_sleep_active = true;
@@ -2329,6 +2355,11 @@ int RunApp(int argc, char **argv) {
         continue;
       }
     }
+
+    const bool key_calibration_capturing =
+        state == AppScene::Settings &&
+        menu_scene.IsSelected(menu_state, SettingId::KeyCalibration) &&
+        key_calibration_state.phase == KeyCalibrationPhase::Capturing;
 
     system_status.Poll(now);
 
@@ -2373,19 +2404,21 @@ int RunApp(int argc, char **argv) {
       }
       last_system_volume_sync = now;
     }
-    HandleVolumeControls(
-        app_ui, input, now, volume_controller, config,
-        [&](int volume) {
-          runtime_sfx_volume = std::clamp(volume, 0, SDL_MIX_MAXVOLUME);
-          sfx.SetVolume(runtime_sfx_volume);
-        },
-        [&]() { play_sfx(SfxId::Change); },
-        [&](uint32_t due) {
-          if (!pending_volume_change_sfx) {
-            pending_volume_change_sfx = true;
-            pending_volume_change_sfx_due = due;
-          }
-        });
+    if (!key_calibration_capturing) {
+      HandleVolumeControls(
+          app_ui, input, now, volume_controller, config,
+          [&](int volume) {
+            runtime_sfx_volume = std::clamp(volume, 0, SDL_MIX_MAXVOLUME);
+            sfx.SetVolume(runtime_sfx_volume);
+          },
+          [&]() { play_sfx(SfxId::Change); },
+          [&](uint32_t due) {
+            if (!pending_volume_change_sfx) {
+              pending_volume_change_sfx = true;
+              pending_volume_change_sfx_due = due;
+            }
+          });
+    }
     if (pending_volume_change_sfx && SDL_TICKS_PASSED(now, pending_volume_change_sfx_due)) {
       pending_volume_change_sfx = false;
       play_sfx(SfxId::Change);
@@ -2400,7 +2433,8 @@ int RunApp(int argc, char **argv) {
       transient_message_dismissed_this_frame = true;
     }
 
-    if (state == AppScene::Shelf || (!is_rgds_runtime && state == AppScene::Settings)) {
+    if (!key_calibration_capturing &&
+        (state == AppScene::Shelf || (!is_rgds_runtime && state == AppScene::Settings))) {
       if (input.IsJustPressed(Button::Up) || input.IsJustPressed(Button::Down) ||
           input.IsJustPressed(Button::Left) || input.IsJustPressed(Button::Right)) {
         play_sfx(SfxId::Move);
@@ -2415,13 +2449,14 @@ int RunApp(int argc, char **argv) {
     }
 
     rgds::InteractionResult rgds_input_result;
-    if (is_rgds_runtime) {
+    if (is_rgds_runtime && !key_calibration_capturing) {
       rgds_input_result = rgds::HandleFrameInput(rgds_interaction, input, state, now);
-      if (rgds_input_result.quit_requested) app_shell.RequestQuit();
       if (rgds_input_result.play_change_sfx) play_sfx(SfxId::Change);
       if (rgds_input_result.play_back_sfx) play_sfx(SfxId::Back);
     }
-    if (input.IsPressed(Button::Start) && input.IsPressed(Button::Select)) app_shell.RequestQuit();
+    if (!key_calibration_capturing && input.IsPressed(Button::Start) && input.IsPressed(Button::Select)) {
+      app_shell.RequestQuit();
+    }
 
     if (is_rgds_runtime) {
       if (rgds_input_result.menu_key_consumed && state == AppScene::Reader && rgds_interaction.menu_open) {
@@ -2432,10 +2467,12 @@ int RunApp(int argc, char **argv) {
       }
     } else {
       const MenuToggleAction menu_toggle_action =
-          HandleMenuToggleInput(app_ui, input, state == AppScene::Settings, state == AppScene::Shelf,
-                                state == AppScene::Reader, menu_scene.CanCloseWithToggle(menu_state), 0.0f,
-                                false,
-                                kMenuToggleDebounceSec, input_profile);
+          key_calibration_capturing
+              ? MenuToggleAction::None
+              : HandleMenuToggleInput(app_ui, input, state == AppScene::Settings, state == AppScene::Shelf,
+                                      state == AppScene::Reader, menu_scene.CanCloseWithToggle(menu_state), 0.0f,
+                                      false,
+                                      kMenuToggleDebounceSec, input_profile);
       if (menu_toggle_action == MenuToggleAction::CloseSettings) {
         menu_scene.BeginClose(
             menu_state,

@@ -1,6 +1,7 @@
 #include "key_guide_panel.h"
 
 #include "app_language.h"
+#include "key_calibration_runtime.h"
 
 #include <algorithm>
 #include <array>
@@ -53,7 +54,7 @@ constexpr std::array<StaticKeyGuide, 12> kRgdsKeyGuides = {{
          {"L2 / R2", u8"\u4e66\u67b6\u8f85\u52a9\u7ffb\u9875\uff1b\u56fe\u7247\u9605\u8bfb\u53ef\u65cb\u8f6c\uff0c90/270 \u8fdb\u5165\u6a2a\u5411\u53cc\u9875\uff1b\u7eaf\u6587\u672c\u548c\u56fe\u6587\u6df7\u5408\u4e0d\u65cb\u8f6c"},
          {"Select", u8"\u5728\u4e0a\u5c4f\u4e66\u67b6/\u9605\u8bfb\u548c\u4e0b\u5c4f\u83dc\u5355\u95f4\u5207\u6362\u7126\u70b9"},
          {"Menu", u8"\u4e66\u67b6\u65f6\u805a\u7126\u4e0b\u5c4f\u83dc\u5355\uff1b\u9605\u8bfb\u65f6\u5728\u4e0b\u5c4f\u6253\u5f00/\u5173\u95ed\u83dc\u5355"},
-         {"RG", u8"\u76f4\u63a5\u9000\u51fa\u7a0b\u5e8f\uff1bVol+ / Vol- \u53ea\u8c03\u6574\u97f3\u91cf"},
+         {"RG", u8"\u53ef\u5728\u6309\u952e\u6821\u51c6\u4e2d\u6620\u5c04\uff1bVol+ / Vol- \u53ea\u8c03\u6574\u97f3\u91cf"},
      }}},
     {u8"RGDS \u96d9\u87a2\u5e55\u5c08\u7528\u6620\u5c04",
      {{
@@ -66,7 +67,7 @@ constexpr std::array<StaticKeyGuide, 12> kRgdsKeyGuides = {{
          {"L2 / R2", u8"\u66f8\u67b6\u8f14\u52a9\u7ffb\u9801\uff1b\u5716\u7247\u95b1\u8b80\u53ef\u65cb\u8f49\uff0c90/270 \u9032\u5165\u6a6b\u5411\u96d9\u9801\uff1b\u7d14\u6587\u672c\u548c\u5716\u6587\u6df7\u5408\u4e0d\u65cb\u8f49"},
          {"Select", u8"\u5728\u4e0a\u5c4f\u66f8\u67b6/\u95b1\u8b80\u548c\u4e0b\u5c4f\u9078\u55ae\u9593\u5207\u63db\u7126\u9ede"},
          {"Menu", u8"\u66f8\u67b6\u6642\u805a\u7126\u4e0b\u5c4f\u9078\u55ae\uff1b\u95b1\u8b80\u6642\u5728\u4e0b\u5c4f\u958b\u555f/\u95dc\u9589\u9078\u55ae"},
-         {"RG", u8"\u76f4\u63a5\u96e2\u958b\u7a0b\u5f0f\uff1bVol+ / Vol- \u53ea\u8abf\u6574\u97f3\u91cf"},
+         {"RG", u8"\u53ef\u5728\u6309\u9375\u6821\u6e96\u4e2d\u6620\u5c04\uff1bVol+ / Vol- \u53ea\u8abf\u6574\u97f3\u91cf"},
      }}},
     {"RGDS Dual-Screen Mapping",
      {{
@@ -79,7 +80,7 @@ constexpr std::array<StaticKeyGuide, 12> kRgdsKeyGuides = {{
          {"L2 / R2", "Rotate image readers; 90/270 switch to spread pages"},
          {"Select", "Switch focus between the upper shelf/reader and the lower menu"},
          {"Menu", "Focus the lower menu on shelf; open/close the lower menu while reading"},
-         {"RG", "Exit the app; Vol+ / Vol- adjust volume"},
+         {"RG", "Available for key calibration; Vol+ / Vol- adjust volume"},
      }}},
     {"Asignacion RGDS de doble pantalla",
      {{
@@ -92,7 +93,7 @@ constexpr std::array<StaticKeyGuide, 12> kRgdsKeyGuides = {{
          {"L2 / R2", "Rotar imagenes; 90/270 doble pagina"},
          {"Select", "Cambiar foco entre la pantalla superior y el menu inferior"},
          {"Menu", "En estanteria enfoca el menu inferior; en lectura abre/cierra ese menu"},
-         {"RG", "Salir de la app; Vol+ / Vol- ajustan volumen"},
+         {"RG", "Disponible para calibracion; Vol+ / Vol- ajustan volumen"},
      }}},
     {"Mappage RGDS double ecran",
      {{
@@ -105,7 +106,7 @@ constexpr std::array<StaticKeyGuide, 12> kRgdsKeyGuides = {{
          {"L2 / R2", "Rotation images; 90/270 double page"},
          {"Select", "Basculer le focus entre l'ecran superieur et le menu inferieur"},
          {"Menu", "Focus sur le menu inferieur en bibliotheque; ouvrir/fermer ce menu en lecture"},
-         {"RG", "Quitter l'app; Vol+ / Vol- volume"},
+         {"RG", "Disponible pour calibrage; Vol+ / Vol- volume"},
      }}},
     {"RGDS Dualscreen-Belegung",
      {{
@@ -118,7 +119,7 @@ constexpr std::array<StaticKeyGuide, 12> kRgdsKeyGuides = {{
          {"L2 / R2", "Bilder drehen; 90/270 Doppelseite"},
          {"Select", "Fokus zwischen oberem Bildschirm und unterem Menue wechseln"},
          {"Menu", "Im Regal unteres Menue fokussieren; beim Lesen unteres Menue oeffnen/schliessen"},
-         {"RG", "App beenden; Vol+ / Vol- Lautstaerke"},
+         {"RG", "Fuer Kalibrierung verfuegbar; Vol+ / Vol- Lautstaerke"},
      }}},
     {u8"RGDS \u30c7\u30e5\u30a2\u30eb\u753b\u9762\u30de\u30c3\u30d4\u30f3\u30b0",
      {{
@@ -131,7 +132,7 @@ constexpr std::array<StaticKeyGuide, 12> kRgdsKeyGuides = {{
          {"L2 / R2", u8"\u753b\u50cf\u3092\u56de\u8ee2\uff1b90/270\u3067\u898b\u958b\u304d"},
          {"Select", u8"\u4e0a\u753b\u9762\u306e\u672c\u68da/\u8aad\u66f8\u3068\u4e0b\u753b\u9762\u30e1\u30cb\u30e5\u30fc\u306e\u30d5\u30a9\u30fc\u30ab\u30b9\u5207\u66ff"},
          {"Menu", u8"\u672c\u68da\u3067\u4e0b\u30e1\u30cb\u30e5\u30fc\u306b\u30d5\u30a9\u30fc\u30ab\u30b9\uff1b\u8aad\u66f8\u4e2d\u306f\u4e0b\u30e1\u30cb\u30e5\u30fc\u3092\u958b\u9589"},
-         {"RG", u8"\u30a2\u30d7\u30ea\u3092\u7d42\u4e86\uff1bVol+ / Vol- \u97f3\u91cf"},
+         {"RG", u8"\u30ad\u30fc\u8f03\u6b63\u3067\u5272\u308a\u5f53\u3066\u53ef\u80fd\uff1bVol+ / Vol- \u97f3\u91cf"},
      }}},
     {u8"RGDS \ub4c0\uc5bc \uc2a4\ud06c\ub9b0 \ub9e4\ud551",
      {{
@@ -144,7 +145,7 @@ constexpr std::array<StaticKeyGuide, 12> kRgdsKeyGuides = {{
          {"L2 / R2", u8"\uc774\ubbf8\uc9c0 \ud68c\uc804; 90/270 \uc591\ucabd \ud398\uc774\uc9c0"},
          {"Select", u8"\uc0c1\ub2e8 \ucc45\uc7a5/\ub9ac\ub354\uc640 \ud558\ub2e8 \uba54\ub274 \uc0ac\uc774\uc758 \ud3ec\ucee4\uc2a4 \uc804\ud658"},
          {"Menu", u8"\ucc45\uc7a5\uc5d0\uc11c \ud558\ub2e8 \uba54\ub274 \ud3ec\ucee4\uc2a4; \uc77d\uae30 \uc911 \ud558\ub2e8 \uba54\ub274 \uc5f4\uae30/\ub2eb\uae30"},
-         {"RG", u8"\uc571 \uc885\ub8cc; Vol+ / Vol- \uc74c\ub7c9"},
+         {"RG", u8"\ud0a4 \ubcf4\uc815\uc5d0\uc11c \ub9e4\ud551 \uac00\ub2a5; Vol+ / Vol- \uc74c\ub7c9"},
      }}},
     {u8"\u062a\u062e\u0637\u064a\u0637 RGDS \u0644\u0644\u0634\u0627\u0634\u062a\u064a\u0646",
      {{
@@ -157,7 +158,7 @@ constexpr std::array<StaticKeyGuide, 12> kRgdsKeyGuides = {{
          {"L2 / R2", u8"\u062a\u062f\u0648\u064a\u0631 \u0627\u0644\u0635\u0648\u0631\u061b 90/270 \u0635\u0641\u062d\u062a\u0627\u0646"},
          {"Select", u8"\u062a\u0628\u062f\u064a\u0644 \u0627\u0644\u062a\u0631\u0643\u064a\u0632 \u0628\u064a\u0646 \u0627\u0644\u0634\u0627\u0634\u0629 \u0627\u0644\u0639\u0644\u064a\u0627 \u0648\u0627\u0644\u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0633\u0641\u0644\u064a\u0629"},
          {"Menu", u8"\u062a\u0631\u0643\u064a\u0632 \u0627\u0644\u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0633\u0641\u0644\u064a\u0629 \u0641\u064a \u0627\u0644\u0631\u0641\u061b \u0641\u062a\u062d/\u0625\u063a\u0644\u0627\u0642\u0647\u0627 \u0623\u062b\u0646\u0627\u0621 \u0627\u0644\u0642\u0631\u0627\u0621\u0629"},
-         {"RG", u8"\u0625\u0646\u0647\u0627\u0621 \u0627\u0644\u062a\u0637\u0628\u064a\u0642\u061b Vol+ / Vol- \u0635\u0648\u062a"},
+         {"RG", u8"\u0645\u062a\u0627\u062d \u0644\u0645\u0639\u0627\u064a\u0631\u0629 \u0627\u0644\u0623\u0632\u0631\u0627\u0631\u061b Vol+ / Vol- \u0635\u0648\u062a"},
      }}},
     {u8"\u0420\u0430\u0441\u043a\u043b\u0430\u0434\u043a\u0430 RGDS \u0434\u043b\u044f \u0434\u0432\u0443\u0445 \u044d\u043a\u0440\u0430\u043d\u043e\u0432",
      {{
@@ -170,7 +171,7 @@ constexpr std::array<StaticKeyGuide, 12> kRgdsKeyGuides = {{
          {"L2 / R2", u8"\u041f\u043e\u0432\u043e\u0440\u043e\u0442 \u0438\u0437\u043e\u0431\u0440.; 90/270 \u0440\u0430\u0437\u0432\u043e\u0440\u043e\u0442"},
          {"Select", u8"\u0424\u043e\u043a\u0443\u0441 \u043c\u0435\u0436\u0434\u0443 \u0432\u0435\u0440\u0445\u043d\u0438\u043c \u044d\u043a\u0440\u0430\u043d\u043e\u043c \u0438 \u043d\u0438\u0436\u043d\u0438\u043c \u043c\u0435\u043d\u044e"},
          {"Menu", u8"\u041d\u0430 \u043f\u043e\u043b\u043a\u0435 \u0444\u043e\u043a\u0443\u0441 \u043d\u0430 \u043d\u0438\u0436\u043d\u0435\u0435 \u043c\u0435\u043d\u044e; \u0432 \u0447\u0442\u0435\u043d\u0438\u0438 \u043e\u0442\u043a\u0440\u044b\u0442\u044c/\u0437\u0430\u043a\u0440\u044b\u0442\u044c"},
-         {"RG", u8"\u0412\u044b\u0445\u043e\u0434 \u0438\u0437 \u043f\u0440\u0438\u043b.; Vol+ / Vol- \u0433\u0440\u043e\u043c\u043a."},
+         {"RG", u8"\u041c\u043e\u0436\u043d\u043e \u043d\u0430\u0437\u043d\u0430\u0447\u0438\u0442\u044c \u0432 \u043a\u0430\u043b\u0438\u0431\u0440\u043e\u0432\u043a\u0435; Vol+ / Vol- \u0433\u0440\u043e\u043c\u043a."},
      }}},
     {"Mapeamento RGDS de tela dupla",
      {{
@@ -183,7 +184,7 @@ constexpr std::array<StaticKeyGuide, 12> kRgdsKeyGuides = {{
          {"L2 / R2", "Girar imagens; 90/270 pagina dupla"},
          {"Select", "Alternar foco entre tela superior/leitor e menu inferior"},
          {"Menu", "Na estante foca o menu inferior; na leitura abre/fecha esse menu"},
-         {"RG", "Sair do app; Vol+ / Vol- volume"},
+         {"RG", "Disponivel na calibracao; Vol+ / Vol- volume"},
      }}},
     {u8"S\u01a1 \u0111\u1ed3 ph\u00edm RGDS hai m\u00e0n h\u00ecnh",
      {{
@@ -196,7 +197,7 @@ constexpr std::array<StaticKeyGuide, 12> kRgdsKeyGuides = {{
          {"L2 / R2", u8"Xoay \u1ea3nh; 90/270 hai trang"},
          {"Select", u8"Chuy\u1ec3n ti\u00eau \u0111i\u1ec3m gi\u1eefa m\u00e0n tr\u00ean/tr\u00ecnh \u0111\u1ecdc v\u00e0 menu d\u01b0\u1edbi"},
          {"Menu", u8"\u1ede gi\u00e1 s\u00e1ch chuy\u1ec3n focus v\u00e0o menu d\u01b0\u1edbi; khi \u0111\u1ecdc m\u1edf/\u0111\u00f3ng menu n\u00e0y"},
-         {"RG", u8"Tho\u00e1t \u1ee9ng d\u1ee5ng; Vol+ / Vol- \u00e2m l\u01b0\u1ee3ng"},
+         {"RG", u8"Co the gan khi hieu chinh phim; Vol+ / Vol- am luong"},
      }}},
 }};
 
@@ -293,16 +294,14 @@ void DrawKeyGuidePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect,
   }
   AppTextId profile_text_id = AppTextId::KeyGuideProfileOtherH700;
   if (!rgds_profile) {
-    if (deps.input_profile == InputProfile::H70034xxSp) {
-      profile_text_id = AppTextId::KeyGuideProfile34xxSp;
-    } else if (deps.input_profile == InputProfile::H70035xxH) {
-      profile_text_id = AppTextId::KeyGuideProfile35xxH;
-    } else if (deps.input_profile == InputProfile::TrimuiBrick) {
+    if (!deps.has_calibrated_keymap && deps.input_profile == InputProfile::TrimuiBrick) {
       profile_text_id = AppTextId::KeyGuideProfileTrimuiBrick;
     }
   }
   const std::string profile_title =
-      rgds_guide ? rgds_guide->title : LocalizedAppText(language_index, profile_text_id);
+      rgds_guide ? rgds_guide->title
+                 : (deps.has_calibrated_keymap ? CalibratedKeyGuideTitle(language_index)
+                                                : LocalizedAppText(language_index, profile_text_id));
   const int max_text_w = std::max(0, right - left);
   if (TextCacheEntry *profile = get_text(profile_title, title_color, true); profile && profile->texture) {
     SDL_Rect dst{left, divider_y - profile->h - ScalePx(scale, 8), profile->w, profile->h};

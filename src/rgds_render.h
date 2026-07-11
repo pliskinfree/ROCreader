@@ -78,6 +78,8 @@ struct BottomRenderDeps {
   const TxtSettingsState &txt_settings_state;
   const std::vector<ContributorAvatarEntry> *contributor_avatar_entries = nullptr;
   const ContributorAvatarState &contributor_avatar_state;
+  const KeyCalibrationState &key_calibration_state;
+  bool has_calibrated_keymap = false;
   const VersionUpdateState &version_update_state;
   const OnlineSourceState &online_source_state;
   MenuSceneLayoutMetrics menu_layout;

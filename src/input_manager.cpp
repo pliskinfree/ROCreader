@@ -6,6 +6,8 @@
 #include <iostream>
 #include <cmath>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 
 #if !defined(_WIN32)
 #include <cerrno>
@@ -107,6 +109,155 @@ const char *SdlEventName(Uint32 type) {
   }
 }
 
+const char *RawInputSourceName(RawInputSource source) {
+  switch (source) {
+  case RawInputSource::Keyboard: return "key";
+  case RawInputSource::GameControllerButton: return "pad";
+  case RawInputSource::JoystickButton: return "joy";
+  case RawInputSource::GameControllerAxis: return "pad_axis";
+  case RawInputSource::JoystickAxis: return "joy_axis";
+  case RawInputSource::JoystickHat: return "joy_hat";
+  case RawInputSource::LinuxKey: return "linux_key";
+  case RawInputSource::LinuxAbs: return "linux_abs";
+  default: return "unknown";
+  }
+}
+
+std::string DirectionName(int direction) {
+  if (direction < 0) return "neg";
+  if (direction > 0) return "pos";
+  return "center";
+}
+
+std::string HatDirectionName(int direction) {
+  switch (direction) {
+  case SDL_HAT_UP: return "up";
+  case SDL_HAT_DOWN: return "down";
+  case SDL_HAT_LEFT: return "left";
+  case SDL_HAT_RIGHT: return "right";
+  default: return std::to_string(direction);
+  }
+}
+
+std::string DescribeRawInputBinding(const RawInputBinding &binding) {
+  std::ostringstream out;
+  out << RawInputSourceName(binding.source) << "." << binding.code;
+  if (binding.source == RawInputSource::GameControllerAxis ||
+      binding.source == RawInputSource::JoystickAxis ||
+      binding.source == RawInputSource::LinuxAbs) {
+    out << "." << DirectionName(binding.direction);
+  } else if (binding.source == RawInputSource::JoystickHat) {
+    out << "." << HatDirectionName(binding.direction);
+  }
+  if (!binding.device_name.empty()) out << " (" << binding.device_name << ")";
+  return out.str();
+}
+
+std::string RawInputBindingKey(const RawInputBinding &binding) {
+  std::ostringstream out;
+  switch (binding.source) {
+  case RawInputSource::Keyboard:
+    out << "key." << binding.code;
+    break;
+  case RawInputSource::GameControllerButton:
+    out << "pad." << binding.code;
+    break;
+  case RawInputSource::JoystickButton:
+    out << "joy." << binding.code;
+    break;
+  case RawInputSource::GameControllerAxis:
+    out << "pad_axis." << binding.code << "." << DirectionName(binding.direction);
+    break;
+  case RawInputSource::JoystickAxis:
+    out << "joy_axis." << binding.code << "." << DirectionName(binding.direction);
+    break;
+  case RawInputSource::JoystickHat:
+    out << "joy_hat." << binding.code << "." << HatDirectionName(binding.direction);
+    break;
+  case RawInputSource::LinuxKey:
+    out << "linux_key." << binding.code;
+    break;
+  case RawInputSource::LinuxAbs:
+    out << "linux_abs." << binding.code << "." << DirectionName(binding.direction);
+    break;
+  default:
+    break;
+  }
+  return out.str();
+}
+
+bool RawInputBindingWritable(const RawInputBinding &binding) {
+  if (binding.code < 0) return false;
+  if (binding.source == RawInputSource::GameControllerAxis ||
+      binding.source == RawInputSource::JoystickAxis ||
+      binding.source == RawInputSource::LinuxAbs) return true;
+  if (binding.source == RawInputSource::JoystickHat) {
+    return binding.direction == SDL_HAT_UP ||
+           binding.direction == SDL_HAT_DOWN ||
+           binding.direction == SDL_HAT_LEFT ||
+           binding.direction == SDL_HAT_RIGHT;
+  }
+  return true;
+}
+
+bool IsCalibrationMappingOverrideKey(const std::string &key) {
+  return key.rfind("joy.", 0) == 0 ||
+         key.rfind("pad.", 0) == 0 ||
+         key.rfind("key.", 0) == 0 ||
+         key.rfind("linux_key.", 0) == 0 ||
+         key.rfind("joy_axis.", 0) == 0 ||
+         key.rfind("pad_axis.", 0) == 0 ||
+         key.rfind("linux_abs.", 0) == 0 ||
+         key.rfind("joy_hat.", 0) == 0;
+}
+
+bool IsSupportedCalibrationOverrideKey(const std::string &key) {
+  return key.rfind("joy.", 0) == 0 ||
+         key.rfind("pad.", 0) == 0 ||
+         key.rfind("joy_axis.", 0) == 0 ||
+         key.rfind("pad_axis.", 0) == 0 ||
+         key.rfind("linux_key.", 0) == 0 ||
+         key.rfind("joy_hat.", 0) == 0 ||
+         key.rfind("linux_abs.", 0) == 0;
+}
+
+bool IsCalibratedLogicalButton(Button button) {
+  switch (button) {
+  case Button::Up:
+  case Button::Down:
+  case Button::Left:
+  case Button::Right:
+  case Button::A:
+  case Button::B:
+  case Button::X:
+  case Button::Y:
+  case Button::Menu:
+  case Button::L1:
+  case Button::L2:
+  case Button::R1:
+  case Button::R2:
+  case Button::Start:
+  case Button::Select:
+    return true;
+  default:
+    return false;
+  }
+}
+
+int CalibrationKeyPriority(const std::string &key) {
+  if (key.rfind("joy.", 0) == 0 || key.rfind("pad.", 0) == 0) return 50;
+  if (key.rfind("joy_hat.", 0) == 0) return 40;
+  if (key.rfind("joy_axis.", 0) == 0 || key.rfind("pad_axis.", 0) == 0) return 30;
+  if (key.rfind("linux_abs.", 0) == 0) return 25;
+  if (key.rfind("linux_key.", 0) == 0) return 20;
+  if (key.rfind("key.", 0) == 0) return 10;
+  return 0;
+}
+
+int CalibrationKeyPriority(const std::string &key, Button, InputProfile) {
+  return CalibrationKeyPriority(key);
+}
+
 InputManager::InputManager(const std::string &mapping_path, InputProfile input_profile) {
   input_profile_ = input_profile;
   full_input_log_enabled_ = FullInputLogEnabled();
@@ -138,7 +289,12 @@ void InputManager::HandleEvent(const SDL_Event &e) {
       SetDown(Button::Menu, true);
       return;
     }
-    const Button mapped = KeyToButton(e.key.keysym.sym);
+    RecordCalibrationSample(RawInputBinding{RawInputSource::Keyboard,
+                                            static_cast<int>(e.key.keysym.sym),
+                                            0,
+                                            {},
+                                            true});
+    const Button mapped = KeyboardToButton(e.key.keysym.sym);
     if (ShouldLogProbeKey(e.key.keysym.scancode)) {
       std::cout << "[native_h700] input probe: type=" << SdlEventName(e.type)
                 << " key=" << static_cast<int>(e.key.keysym.sym)
@@ -151,10 +307,20 @@ void InputManager::HandleEvent(const SDL_Event &e) {
       SetDown(Button::Menu, false);
       return;
     }
-    const Button mapped = KeyToButton(e.key.keysym.sym);
+    const Button mapped = KeyboardToButton(e.key.keysym.sym);
+    RecordCalibrationSample(RawInputBinding{RawInputSource::Keyboard,
+                                            static_cast<int>(e.key.keysym.sym),
+                                            0,
+                                            {},
+                                            false});
     SetDown(mapped, false);
   } else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
     if (input_profile_ == InputProfile::RGDS) return;
+    RecordCalibrationSample(RawInputBinding{RawInputSource::GameControllerButton,
+                                            static_cast<int>(e.cbutton.button),
+                                            0,
+                                            {},
+                                            true});
     const Button mapped = PadToButton(e.cbutton.button);
     if (ShouldLogProbePadButton(e.cbutton.button)) {
       std::cout << "[native_h700] input probe: type=" << SdlEventName(e.type)
@@ -164,6 +330,11 @@ void InputManager::HandleEvent(const SDL_Event &e) {
     SetDown(PadToButton(e.cbutton.button), true);
   } else if (e.type == SDL_CONTROLLERBUTTONUP) {
     if (input_profile_ == InputProfile::RGDS) return;
+    RecordCalibrationSample(RawInputBinding{RawInputSource::GameControllerButton,
+                                            static_cast<int>(e.cbutton.button),
+                                            0,
+                                            {},
+                                            false});
     SetDown(PadToButton(e.cbutton.button), false);
   } else if (e.type == SDL_CONTROLLERAXISMOTION) {
     if (input_profile_ == InputProfile::RGDS) return;
@@ -184,19 +355,30 @@ void InputManager::HandleEvent(const SDL_Event &e) {
       last_pad_axis_values_[static_cast<size_t>(axis)] = val;
       pad_axis_seen_[static_cast<size_t>(axis)] = true;
     }
+    RecordCalibrationSample(RawInputBinding{RawInputSource::GameControllerAxis,
+                                            axis,
+                                            std::abs(val) > kDeadzone ? (val > 0 ? 1 : -1) : 0,
+                                            {},
+                                            std::abs(val) > kDeadzone});
+    if (ApplyAxisMap(pad_axis_map_, axis, val)) return;
     if (axis == SDL_CONTROLLER_AXIS_LEFTX || axis == SDL_CONTROLLER_AXIS_RIGHTX) {
-      SetDown(Button::Left, val < -kDeadzone);
-      SetDown(Button::Right, val > kDeadzone);
+      if (!HasCalibratedButton(Button::Left)) SetDown(Button::Left, val < -kDeadzone);
+      if (!HasCalibratedButton(Button::Right)) SetDown(Button::Right, val > kDeadzone);
     } else if (axis == SDL_CONTROLLER_AXIS_LEFTY || axis == SDL_CONTROLLER_AXIS_RIGHTY) {
-      SetDown(Button::Up, val < -kDeadzone);
-      SetDown(Button::Down, val > kDeadzone);
-    } else if (axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) {
+      if (!HasCalibratedButton(Button::Up)) SetDown(Button::Up, val < -kDeadzone);
+      if (!HasCalibratedButton(Button::Down)) SetDown(Button::Down, val > kDeadzone);
+    } else if (axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT && !HasCalibratedButton(Button::L2)) {
       SetDown(Button::L2, val > kDeadzone);
-    } else if (axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) {
+    } else if (axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT && !HasCalibratedButton(Button::R2)) {
       SetDown(Button::R2, val > kDeadzone);
     }
   } else if (e.type == SDL_JOYBUTTONDOWN) {
     if (input_profile_ == InputProfile::RGDS) return;
+    RecordCalibrationSample(RawInputBinding{RawInputSource::JoystickButton,
+                                            static_cast<int>(e.jbutton.button),
+                                            0,
+                                            {},
+                                            true});
     const Button mapped = JoyButtonToButton(e.jbutton.button);
     if (ShouldLogProbeJoyButton(e.jbutton.button)) {
       std::cout << "[native_h700] input probe: type=" << SdlEventName(e.type)
@@ -206,6 +388,11 @@ void InputManager::HandleEvent(const SDL_Event &e) {
     SetDown(JoyButtonToButton(e.jbutton.button), true);
   } else if (e.type == SDL_JOYBUTTONUP) {
     if (input_profile_ == InputProfile::RGDS) return;
+    RecordCalibrationSample(RawInputBinding{RawInputSource::JoystickButton,
+                                            static_cast<int>(e.jbutton.button),
+                                            0,
+                                            {},
+                                            false});
     SetDown(JoyButtonToButton(e.jbutton.button), false);
   } else if (e.type == SDL_JOYHATMOTION) {
     if (input_profile_ == InputProfile::RGDS) return;
@@ -215,10 +402,23 @@ void InputManager::HandleEvent(const SDL_Event &e) {
                 << " hat=" << static_cast<int>(e.jhat.hat)
                 << " value=" << static_cast<int>(v) << "\n";
     }
-    SetDown(Button::Up, (v & SDL_HAT_UP) != 0);
-    SetDown(Button::Down, (v & SDL_HAT_DOWN) != 0);
-    SetDown(Button::Left, (v & SDL_HAT_LEFT) != 0);
-    SetDown(Button::Right, (v & SDL_HAT_RIGHT) != 0);
+    const uint8_t single =
+        (v & SDL_HAT_UP) ? SDL_HAT_UP :
+        ((v & SDL_HAT_DOWN) ? SDL_HAT_DOWN :
+         ((v & SDL_HAT_LEFT) ? SDL_HAT_LEFT :
+          ((v & SDL_HAT_RIGHT) ? SDL_HAT_RIGHT : SDL_HAT_CENTERED)));
+    if (single != SDL_HAT_CENTERED) {
+      RecordCalibrationSample(RawInputBinding{RawInputSource::JoystickHat,
+                                              static_cast<int>(e.jhat.hat),
+                                              static_cast<int>(single),
+                                              {},
+                                              true});
+    }
+    if (ApplyCustomHatMap(e.jhat.hat, v)) return;
+    if (!HasCalibratedButton(Button::Up)) SetDown(Button::Up, (v & SDL_HAT_UP) != 0);
+    if (!HasCalibratedButton(Button::Down)) SetDown(Button::Down, (v & SDL_HAT_DOWN) != 0);
+    if (!HasCalibratedButton(Button::Left)) SetDown(Button::Left, (v & SDL_HAT_LEFT) != 0);
+    if (!HasCalibratedButton(Button::Right)) SetDown(Button::Right, (v & SDL_HAT_RIGHT) != 0);
   } else if (e.type == SDL_JOYAXISMOTION) {
     if (input_profile_ == InputProfile::RGDS) return;
     constexpr int kDeadzone = 16000;
@@ -238,16 +438,26 @@ void InputManager::HandleEvent(const SDL_Event &e) {
       last_joy_axis_values_[static_cast<size_t>(axis)] = val;
       joy_axis_seen_[static_cast<size_t>(axis)] = true;
     }
+    RecordCalibrationSample(RawInputBinding{RawInputSource::JoystickAxis,
+                                            axis,
+                                            std::abs(val) > kDeadzone ? (val > 0 ? 1 : -1) : 0,
+                                            {},
+                                            std::abs(val) > kDeadzone});
+    if (ApplyAxisMap(joy_axis_map_, axis, val)) return;
     if (axis == 0 || axis == 6) {
-      SetDown(Button::Left, val < -kDeadzone);
-      SetDown(Button::Right, val > kDeadzone);
+      if (!HasCalibratedButton(Button::Left)) SetDown(Button::Left, val < -kDeadzone);
+      if (!HasCalibratedButton(Button::Right)) SetDown(Button::Right, val > kDeadzone);
     } else if (axis == 1 || axis == 7) {
-      SetDown(Button::Up, val < -kDeadzone);
-      SetDown(Button::Down, val > kDeadzone);
-    } else if (input_profile_ == InputProfile::TrimuiBrick && axis == 2) {
-      SetDown(Button::L2, val > kDeadzone);
-    } else if (input_profile_ == InputProfile::TrimuiBrick && axis == 5) {
-      SetDown(Button::R2, val > kDeadzone);
+      if (!HasCalibratedButton(Button::Up)) SetDown(Button::Up, val < -kDeadzone);
+      if (!HasCalibratedButton(Button::Down)) SetDown(Button::Down, val > kDeadzone);
+    } else if (input_profile_ == InputProfile::TrimuiBrick &&
+               axis == 2 &&
+               !HasCalibratedButton(Button::L2)) {
+      SetDown(Button::L2, val < -kDeadzone);
+    } else if (input_profile_ == InputProfile::TrimuiBrick &&
+               axis == 5 &&
+               !HasCalibratedButton(Button::R2)) {
+      SetDown(Button::R2, val < -kDeadzone);
     }
   }
 }
@@ -382,6 +592,12 @@ Button InputManager::KeyToButton(SDL_Keycode k) {
   }
 }
 
+Button InputManager::KeyboardToButton(SDL_Keycode k) const {
+  const auto it = key_map_.find(static_cast<int>(k));
+  if (it != key_map_.end()) return it->second;
+  return KeyToButton(k);
+}
+
 Button InputManager::PadToButton(uint8_t b) const {
   if (b >= pad_map_.size()) return InvalidButton();
   return pad_map_[b];
@@ -390,6 +606,102 @@ Button InputManager::PadToButton(uint8_t b) const {
 Button InputManager::JoyButtonToButton(uint8_t b) const {
   if (b >= joy_map_.size()) return InvalidButton();
   return joy_map_[b];
+}
+
+void InputManager::RecordCalibrationSample(const RawInputBinding &binding) const {
+  if (!RawInputBindingWritable(binding)) return;
+  const std::string key = RawInputBindingKey(binding);
+  if (binding.source == RawInputSource::GameControllerAxis ||
+      binding.source == RawInputSource::JoystickAxis ||
+      binding.source == RawInputSource::LinuxAbs) {
+    for (auto &existing : calibration_samples_) {
+      if (existing.source == binding.source &&
+          existing.code == binding.code &&
+          existing.direction == binding.direction) {
+        existing = binding;
+        return;
+      }
+    }
+  }
+  for (const auto &existing : calibration_samples_) {
+    if (RawInputBindingKey(existing) == key && existing.pressed == binding.pressed) return;
+  }
+  calibration_samples_.push_back(binding);
+  while (calibration_samples_.size() > 32) calibration_samples_.pop_front();
+}
+
+void InputManager::ClearCalibrationSamples() const {
+  calibration_samples_.clear();
+}
+
+bool InputManager::TakeCalibrationSample(RawInputBinding &out) const {
+  while (!calibration_samples_.empty()) {
+    RawInputBinding binding = calibration_samples_.front();
+    calibration_samples_.pop_front();
+    if (!RawInputBindingWritable(binding)) continue;
+    out = std::move(binding);
+    return true;
+  }
+  return false;
+}
+
+bool InputManager::ApplyAxisMap(const std::array<AxisButtonMap, 16> &map, int axis, int value) {
+  if (axis < 0 || axis >= static_cast<int>(map.size())) return false;
+  constexpr int kDeadzone = 16000;
+  const AxisButtonMap &entry = map[static_cast<size_t>(axis)];
+  bool handled = false;
+  if (IsValid(entry.negative)) {
+    SetDown(entry.negative, value < -kDeadzone);
+    handled = true;
+  }
+  if (IsValid(entry.positive)) {
+    SetDown(entry.positive, value > kDeadzone);
+    handled = true;
+  }
+  return handled;
+}
+
+bool InputManager::HasCalibratedButton(Button b) const {
+  if (!IsValid(b)) return false;
+  return calibrated_buttons_[static_cast<size_t>(static_cast<int>(b))];
+}
+
+bool InputManager::ApplyCustomHatMap(uint8_t hat, uint8_t value) {
+  if (hat >= joy_hat_map_.size()) return false;
+  const HatButtonMap &entry = joy_hat_map_[hat];
+  bool handled = false;
+  if (IsValid(entry.up)) {
+    SetDown(entry.up, (value & SDL_HAT_UP) != 0);
+    handled = true;
+  }
+  if (IsValid(entry.down)) {
+    SetDown(entry.down, (value & SDL_HAT_DOWN) != 0);
+    handled = true;
+  }
+  if (IsValid(entry.left)) {
+    SetDown(entry.left, (value & SDL_HAT_LEFT) != 0);
+    handled = true;
+  }
+  if (IsValid(entry.right)) {
+    SetDown(entry.right, (value & SDL_HAT_RIGHT) != 0);
+    handled = true;
+  }
+  return handled;
+}
+
+bool InputManager::ApplyCustomLinuxAbsMap(int code, int value) {
+  if (code < 0 || code >= static_cast<int>(linux_abs_map_.size())) return false;
+  const AxisButtonMap &entry = linux_abs_map_[static_cast<size_t>(code)];
+  bool handled = false;
+  if (IsValid(entry.negative)) {
+    SetDown(entry.negative, value < 0);
+    handled = true;
+  }
+  if (IsValid(entry.positive)) {
+    SetDown(entry.positive, value > 0);
+    handled = true;
+  }
+  return handled;
 }
 
 void InputManager::PollDeviceInputEvents() {
@@ -542,21 +854,184 @@ void InputManager::LoadOverrides(const std::string &mapping_path) {
   std::ifstream in(mapping_path);
   if (!in) return;
   std::string line;
+  std::vector<std::string> lines;
+  bool has_calibration_header = false;
+  bool supported_calibration_version = false;
   while (std::getline(in, line)) {
+    if (line.rfind("# ROCreader calibrated keymap", 0) == 0) has_calibration_header = true;
+    if (line.rfind("# calibration_version=", 0) == 0) {
+      const int calibration_version = std::atoi(line.substr(22).c_str());
+      supported_calibration_version =
+          calibration_version == 2 ||
+          calibration_version == 3 ||
+          calibration_version == 4 ||
+          calibration_version == 5;
+    }
+    lines.push_back(line);
+  }
+
+  std::unordered_set<std::string> selected_calibration_keys;
+  if (has_calibration_header && supported_calibration_version) {
+    struct SelectedCalibrationKey {
+      std::string key;
+      int priority = -1;
+    };
+    std::unordered_map<int, SelectedCalibrationKey> selected_by_button;
+    for (std::string candidate_line : lines) {
+      candidate_line = Trim(candidate_line);
+      if (candidate_line.empty() || candidate_line[0] == '#' || candidate_line[0] == ';') continue;
+      const size_t eq = candidate_line.find('=');
+      if (eq == std::string::npos) continue;
+      const std::string key = Trim(candidate_line.substr(0, eq));
+      if (!IsCalibrationMappingOverrideKey(key) || !IsSupportedCalibrationOverrideKey(key)) continue;
+      Button mapped = InvalidButton();
+      if (!ParseButtonName(Trim(candidate_line.substr(eq + 1)), mapped) ||
+          !IsCalibratedLogicalButton(mapped)) {
+        continue;
+      }
+      const bool trimui_calibrated_shoulder =
+          input_profile_ == InputProfile::TrimuiBrick &&
+          (mapped == Button::L2 || mapped == Button::R2);
+      if (trimui_calibrated_shoulder) {
+        continue;
+      }
+      const int priority = CalibrationKeyPriority(key, mapped, input_profile_);
+      SelectedCalibrationKey &selected = selected_by_button[static_cast<int>(mapped)];
+      if (priority > selected.priority) {
+        selected.key = key;
+        selected.priority = priority;
+      }
+    }
+    calibrated_buttons_.fill(false);
+    for (const auto &item : selected_by_button) {
+      const SelectedCalibrationKey &selected = item.second;
+      if (selected.key.empty()) continue;
+      selected_calibration_keys.insert(selected.key);
+    }
+    auto should_clear_button = [&](Button button) {
+      return IsCalibratedLogicalButton(button) &&
+             selected_by_button.find(static_cast<int>(button)) != selected_by_button.end();
+    };
+    for (Button &mapped : pad_map_) {
+      if (should_clear_button(mapped)) mapped = InvalidButton();
+    }
+    for (Button &mapped : joy_map_) {
+      if (should_clear_button(mapped)) mapped = InvalidButton();
+    }
+    auto clear_axis_map = [&](auto &map) {
+      for (AxisButtonMap &entry : map) {
+        if (should_clear_button(entry.negative)) entry.negative = InputManager::InvalidButton();
+        if (should_clear_button(entry.positive)) entry.positive = InputManager::InvalidButton();
+      }
+    };
+    clear_axis_map(pad_axis_map_);
+    clear_axis_map(joy_axis_map_);
+    clear_axis_map(linux_abs_map_);
+    for (HatButtonMap &entry : joy_hat_map_) {
+      if (should_clear_button(entry.up)) entry.up = InvalidButton();
+      if (should_clear_button(entry.down)) entry.down = InvalidButton();
+      if (should_clear_button(entry.left)) entry.left = InvalidButton();
+      if (should_clear_button(entry.right)) entry.right = InvalidButton();
+    }
+  }
+
+  for (std::string line : lines) {
     line = Trim(line);
     if (line.empty() || line[0] == '#' || line[0] == ';') continue;
     const size_t eq = line.find('=');
     if (eq == std::string::npos) continue;
     const std::string key = Trim(line.substr(0, eq));
     const std::string val = Trim(line.substr(eq + 1));
+    if (has_calibration_header && !supported_calibration_version &&
+        IsCalibrationMappingOverrideKey(key)) {
+      continue;
+    }
+    if (has_calibration_header && supported_calibration_version &&
+        IsCalibrationMappingOverrideKey(key) &&
+        !IsSupportedCalibrationOverrideKey(key)) {
+      continue;
+    }
+    if (has_calibration_header && supported_calibration_version &&
+        IsCalibrationMappingOverrideKey(key) &&
+        selected_calibration_keys.find(key) == selected_calibration_keys.end()) {
+      continue;
+    }
     Button mapped = InvalidButton();
     if (!ParseButtonName(val, mapped)) continue;
+    bool applied = false;
     if (key.rfind("joy.", 0) == 0) {
       const int idx = std::atoi(key.substr(4).c_str());
-      if (idx >= 0 && idx < static_cast<int>(joy_map_.size())) joy_map_[idx] = mapped;
+      if (idx >= 0 && idx < static_cast<int>(joy_map_.size())) {
+        joy_map_[idx] = mapped;
+        applied = true;
+      }
     } else if (key.rfind("pad.", 0) == 0) {
       const int idx = std::atoi(key.substr(4).c_str());
-      if (idx >= 0 && idx < static_cast<int>(pad_map_.size())) pad_map_[idx] = mapped;
+      if (idx >= 0 && idx < static_cast<int>(pad_map_.size())) {
+        pad_map_[idx] = mapped;
+        applied = true;
+      }
+    } else if (key.rfind("key.", 0) == 0) {
+      const int idx = std::atoi(key.substr(4).c_str());
+      key_map_[idx] = mapped;
+      applied = true;
+    } else if (key.rfind("linux_key.", 0) == 0) {
+      const int idx = std::atoi(key.substr(10).c_str());
+      linux_key_map_[idx] = mapped;
+      applied = true;
+    } else if (key.rfind("joy_axis.", 0) == 0 || key.rfind("pad_axis.", 0) == 0 ||
+               key.rfind("linux_abs.", 0) == 0) {
+      const bool is_pad = key.rfind("pad_axis.", 0) == 0;
+      const bool is_linux_abs = key.rfind("linux_abs.", 0) == 0;
+      const size_t prefix_len = is_pad ? 9u : (is_linux_abs ? 10u : 9u);
+      const size_t dot = key.find('.', prefix_len);
+      if (dot == std::string::npos) continue;
+      const int idx = std::atoi(key.substr(prefix_len, dot - prefix_len).c_str());
+      const std::string dir = key.substr(dot + 1);
+      AxisButtonMap *entry = nullptr;
+      if (is_pad && idx >= 0 && idx < static_cast<int>(pad_axis_map_.size())) {
+        entry = &pad_axis_map_[static_cast<size_t>(idx)];
+      } else if (!is_pad && !is_linux_abs && idx >= 0 && idx < static_cast<int>(joy_axis_map_.size())) {
+        entry = &joy_axis_map_[static_cast<size_t>(idx)];
+      } else if (is_linux_abs && idx >= 0 && idx < static_cast<int>(linux_abs_map_.size())) {
+        entry = &linux_abs_map_[static_cast<size_t>(idx)];
+      }
+      if (!entry) continue;
+      if (dir == "neg" || dir == "negative" || dir == "-") {
+        entry->negative = mapped;
+        applied = true;
+      } else if (dir == "pos" || dir == "positive" || dir == "+") {
+        entry->positive = mapped;
+        applied = true;
+      }
+    } else if (key.rfind("joy_hat.", 0) == 0) {
+      const size_t prefix_len = 8;
+      const size_t dot = key.find('.', prefix_len);
+      if (dot == std::string::npos) continue;
+      const int idx = std::atoi(key.substr(prefix_len, dot - prefix_len).c_str());
+      if (idx < 0 || idx >= static_cast<int>(joy_hat_map_.size())) continue;
+      HatButtonMap &entry = joy_hat_map_[static_cast<size_t>(idx)];
+      const std::string dir = key.substr(dot + 1);
+      if (dir == "up") {
+        entry.up = mapped;
+        applied = true;
+      } else if (dir == "down") {
+        entry.down = mapped;
+        applied = true;
+      } else if (dir == "left") {
+        entry.left = mapped;
+        applied = true;
+      } else if (dir == "right") {
+        entry.right = mapped;
+        applied = true;
+      }
+    }
+    if (applied &&
+        has_calibration_header &&
+        supported_calibration_version &&
+        IsCalibrationMappingOverrideKey(key) &&
+        IsCalibratedLogicalButton(mapped)) {
+      calibrated_buttons_[static_cast<size_t>(static_cast<int>(mapped))] = true;
     }
   }
 }
@@ -577,7 +1052,8 @@ void InputManager::SetDown(Button b, bool down) {
       return;
     }
   }
-  BtnState &s = states_[static_cast<int>(b)];
+  const int button_index = static_cast<int>(b);
+  BtnState &s = states_[button_index];
   if (down && !s.down) {
     s.down = true;
     s.just_pressed = true;
@@ -674,6 +1150,9 @@ void InputManager::PollLinuxInputDevices() {
         if (event.type == EV_ABS && (input_profile_ == InputProfile::RGDS || IsH700Profile(input_profile_))) {
           const int code = static_cast<int>(event.code);
           const int value = static_cast<int>(event.value);
+          const int dir = AxisDirectionFromValue(fd, code, value);
+          RecordCalibrationSample(RawInputBinding{RawInputSource::LinuxAbs, code, dir, {}, dir != 0});
+          if (ApplyCustomLinuxAbsMap(code, dir)) continue;
           if (code == ABS_HAT0X) {
             SetDown(Button::Left, value < 0);
             SetDown(Button::Right, value > 0);
@@ -683,19 +1162,15 @@ void InputManager::PollLinuxInputDevices() {
           } else if (input_profile_ != InputProfile::RGDS) {
             continue;
           } else if (code == ABS_Z) {
-            const int dir = AxisDirectionFromValue(fd, code, value);
             SetDown(Button::Left, dir < 0);
             SetDown(Button::Right, dir > 0);
           } else if (code == ABS_RX) {
-            const int dir = AxisDirectionFromValue(fd, code, value);
             SetDown(Button::Up, dir < 0);
             SetDown(Button::Down, dir > 0);
           } else if (code == ABS_RZ) {
-            const int dir = AxisDirectionFromValue(fd, code, value);
             SetDown(Button::Y, dir < 0);
             SetDown(Button::A, dir > 0);
           } else if (code == ABS_RY) {
-            const int dir = AxisDirectionFromValue(fd, code, value);
             SetDown(Button::X, dir < 0);
             SetDown(Button::B, dir > 0);
           }
@@ -713,7 +1188,10 @@ void InputManager::PollLinuxInputDevices() {
           if (event.value == 2) continue;
           const bool down = event.value == 1;
           Button mapped = InvalidButton();
-          if (input_profile_ == InputProfile::RGDS) {
+          const auto override_it = linux_key_map_.find(code);
+          if (override_it != linux_key_map_.end()) {
+            mapped = override_it->second;
+          } else if (input_profile_ == InputProfile::RGDS) {
             switch (code) {
               case 304: mapped = Button::A; break;
               case 305: mapped = Button::B; break;
@@ -768,6 +1246,7 @@ void InputManager::PollLinuxInputDevices() {
           } else if (code == KEY_POWER) {
             mapped = Button::Power;
           }
+          RecordCalibrationSample(RawInputBinding{RawInputSource::LinuxKey, code, 0, {}, down});
           if (full_input_log_enabled_ && down && MarkProbeLogged(probe_linux_key_seen_, code)) {
             std::cout << "[native_h700] input probe: type=LINUX_EV_KEY"
                       << " code=" << code
