@@ -223,8 +223,8 @@ void DrawOnlineSourcePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rec
                           true);
   int y = divider_y + ScalePx(scale, 16);
 
-  const int row_h = ScalePx(scale, 31);
-  const int row_gap = ScalePx(scale, 7);
+  const int row_h = gkd_profile ? ScalePx(scale, 58) : ScalePx(scale, 31);
+  const int row_gap = ScalePx(scale, gkd_profile ? 10 : 7);
   // On GKD the action row visually continues the left-side Exit row.
   int button_anchor_row_index = 0;
   for (size_t i = 0; i < deps.menu_items.size(); ++i) {
@@ -254,17 +254,38 @@ void DrawOnlineSourcePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rec
     deps.services.draw_rect(rx, y, rw, row_h, row_color, true);
     deps.services.draw_rect(rx, y, rw, row_h, row_selected ? accent : border, false);
 
-    const int box = ScalePx(scale, 14);
-    const int box_x = rx + ScalePx(scale, 10);
+    const int box = ScalePx(scale, gkd_profile ? 18 : 14);
+    const int box_x = rx + ScalePx(scale, gkd_profile ? 18 : 10);
     const int box_y = y + std::max(0, (row_h - box) / 2);
     deps.services.draw_rect(box_x, box_y, box, box, checked ? accent : muted, false);
     if (checked) deps.services.draw_rect(box_x + ScalePx(scale, 3), box_y + ScalePx(scale, 3),
                                          box - ScalePx(scale, 6), box - ScalePx(scale, 6), accent, true);
-    const int source_text_x = box_x + box + ScalePx(scale, 10);
-    const std::string source_text =
-        TruncateToWidth(deps, source.url, std::max(1, rx + rw - source_text_x - ScalePx(scale, 8)),
-                        source.enabled ? text : muted);
-    DrawText(deps, source_text, source_text_x, y + ScalePx(scale, 6), source.enabled ? text : muted);
+    const int source_text_x = box_x + box + ScalePx(scale, gkd_profile ? 18 : 10);
+    const int source_text_right_pad = ScalePx(scale, gkd_profile ? 18 : 8);
+    const int source_text_w = std::max(1, rx + rw - source_text_x - source_text_right_pad);
+    const SDL_Color source_color = source.enabled ? text : muted;
+    if (gkd_profile && !source.name.empty() && source.name != source.url) {
+      const std::string source_name = TruncateToWidth(deps, source.name, source_text_w, source_color);
+      const std::string source_url = TruncateToWidth(deps, source.url, source_text_w, muted);
+      TextCacheEntry *name_entry = GetTextEntry(deps, source_name, source_color);
+      TextCacheEntry *url_entry = GetTextEntry(deps, source_url, muted);
+      const int name_h = name_entry ? name_entry->h : 0;
+      const int url_h = url_entry ? url_entry->h : 0;
+      const int text_gap = ScalePx(scale, 3);
+      const int block_h = std::max(0, name_h + (url_h > 0 ? text_gap + url_h : 0));
+      int text_y = y + std::max(0, (row_h - block_h) / 2);
+      DrawText(deps, source_name, source_text_x, text_y, source_color);
+      if (!source_url.empty()) {
+        text_y += name_h + text_gap;
+        DrawText(deps, source_url, source_text_x, text_y, muted);
+      }
+    } else {
+      const std::string source_text =
+          TruncateToWidth(deps, source.url, source_text_w, source_color);
+      TextCacheEntry *source_entry = GetTextEntry(deps, source_text, source_color);
+      const int source_h = source_entry ? source_entry->h : 0;
+      DrawText(deps, source_text, source_text_x, y + std::max(0, (row_h - source_h) / 2), source_color);
+    }
     y += row_h + row_gap;
   }
   if (state.sources.empty()) {

@@ -450,11 +450,21 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
       status_text = u8"\u52a0\u8f7d\u4e2d";
     }
     if (!status_text.empty()) {
-      const int bar_h = std::max(20, std::min(28, dst.h / 6));
+      const bool gkd350h_ultra_online_status_bar =
+          item.is_remote &&
+          deps.layout.screen_w == 1600 &&
+          deps.layout.screen_h == 1440 &&
+          deps.online_shelf_active &&
+          deps.online_shelf_active();
+      const int bar_h = gkd350h_ultra_online_status_bar
+                            ? std::max(40, std::min(56, dst.h / 8))
+                            : std::max(20, std::min(28, dst.h / 6));
       deps.draw_rect(dst.x, dst.y, dst.w, bar_h,
                      SDL_Color{0, 0, 0, static_cast<Uint8>(std::min<int>(170, alpha))}, true);
       if (status_text == u8"\u52a0\u8f7d\u4e2d" || status_text == u8"\u4e0b\u8f7d\u4e2d") {
-        const int progress_h = std::max(2, std::min(4, bar_h / 6));
+        const int progress_h = gkd350h_ultra_online_status_bar
+                                   ? std::max(4, std::min(8, bar_h / 7))
+                                   : std::max(2, std::min(4, bar_h / 6));
         const int progress_y = dst.y + bar_h - progress_h;
         deps.draw_rect(dst.x, progress_y, dst.w, progress_h,
                        SDL_Color{36, 58, 76, static_cast<Uint8>(std::min<int>(150, alpha))}, true);
