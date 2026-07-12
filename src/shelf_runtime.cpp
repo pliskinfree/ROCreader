@@ -588,7 +588,7 @@ void DrawShelfRuntime(ShelfRuntimeRenderDeps &deps) {
     const int base_total_w = deps.layout.nav_slot_w * 4;
     const int nav_slot_w = std::max(1, base_total_w / nav_count);
     const bool online = deps.online_shelf_active && deps.online_shelf_active();
-    const int nav_pill_h = 32;
+    const int nav_pill_h = std::max(1, deps.layout.nav_pill_h);
     int nav_text_center_h = nav_pill_h;
     SDL_Color nav_text{238, 242, 250, 255};
     std::vector<int> text_widths(static_cast<size_t>(nav_count), 0);

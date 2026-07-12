@@ -9,7 +9,7 @@ SSH_OPTS="${SSH_OPTS:-}"
 
 if [ -z "$DEVICE_HOST" ]; then
   echo "[gkd_sync] ERROR: DEVICE_HOST is required, for example:"
-  echo "[gkd_sync]   DEVICE_HOST=root@192.168.31.123 $0"
+  echo "[gkd_sync]   DEVICE_HOST=root@192.168.31.12 $0"
   exit 2
 fi
 

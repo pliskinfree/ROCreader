@@ -20,16 +20,23 @@ void DrawStatusBarRuntime(const StatusBarRenderDeps &deps) {
 
   const int center_y = deps.top_bar_y + deps.top_bar_h / 2;
   const bool trimui_brick_status_layout = deps.input_profile == InputProfile::TrimuiBrick;
+  const bool gkd350h_ultra_status_layout = deps.input_profile == InputProfile::GKD350HUltra;
   const int base_screen_w = 720;
   const int extra_status_x = trimui_brick_status_layout ? 0 : std::max(0, deps.screen_w - scale_px(base_screen_w));
   auto status_x = [&](int base_x) { return scale_px(base_x) + extra_status_x; };
-  const int battery_shift_y = trimui_brick_status_layout ? 5 : scale_px(3);
+  const int battery_shift_y = trimui_brick_status_layout ? 5 : (gkd350h_ultra_status_layout ? 0 : scale_px(3));
   const int h700_battery_shift_x = (deps.screen_w <= 640) ? -80 : 0;
-  const int battery_icon_x = trimui_brick_status_layout ? 750 : status_x(552 + h700_battery_shift_x);
-  const int battery_text_x = trimui_brick_status_layout ? 806 : status_x(587 + h700_battery_shift_x);
+  const int battery_icon_x = trimui_brick_status_layout ? 750
+                             : gkd350h_ultra_status_layout ? 1249
+                                                          : status_x(552 + h700_battery_shift_x);
+  const int battery_text_x = trimui_brick_status_layout ? 806
+                             : gkd350h_ultra_status_layout ? 1308
+                                                          : status_x(587 + h700_battery_shift_x);
   const int clock_shift_x = trimui_brick_status_layout ? 64 : 40;
-  const int clock_shift_y = trimui_brick_status_layout ? 5 : scale_px(3);
-  int clock_right = trimui_brick_status_layout ? deps.screen_w - 26 - clock_shift_x : status_x(664);
+  const int clock_shift_y = trimui_brick_status_layout ? 5 : (gkd350h_ultra_status_layout ? 0 : scale_px(3));
+  int clock_right = trimui_brick_status_layout ? deps.screen_w - 26 - clock_shift_x
+                    : gkd350h_ultra_status_layout ? 1468
+                                                 : status_x(664);
 
   if (!status.clock_text.empty()) {
     TextCacheEntry *clock_tex = deps.get_text_texture ? deps.get_text_texture(status.clock_text, text_color) : nullptr;
@@ -41,9 +48,11 @@ void DrawStatusBarRuntime(const StatusBarRenderDeps &deps) {
     }
   }
 
-  const int avatar_badge_size = scale_px(28);
-  const int avatar_badge_x = deps.screen_w - scale_px(12) - avatar_badge_size;
-  const int avatar_badge_y = scale_px(4);
+  const int avatar_badge_size = gkd350h_ultra_status_layout ? 64 : scale_px(28);
+  const int avatar_badge_x = gkd350h_ultra_status_layout
+                                 ? 1512
+                                 : deps.screen_w - scale_px(12) - avatar_badge_size;
+  const int avatar_badge_y = gkd350h_ultra_status_layout ? 8 : scale_px(4);
   if (deps.draw_rect) {
     deps.draw_rect(avatar_badge_x, avatar_badge_y, avatar_badge_size, avatar_badge_size,
                    SDL_Color{26, 32, 42, 220}, true);
@@ -61,18 +70,22 @@ void DrawStatusBarRuntime(const StatusBarRenderDeps &deps) {
     int battery_text_w = battery_tex ? battery_tex->w : 0;
     int battery_text_h = battery_tex ? battery_tex->h : 0;
 
-    const int cap_w = scale_px(4);
-    const int cap_h = scale_px(8);
-    const int body_w = scale_px(24);
-    const int body_h = scale_px(12);
+    const int cap_w = gkd350h_ultra_status_layout ? 4 : scale_px(4);
+    const int cap_h = gkd350h_ultra_status_layout ? 10 : scale_px(8);
+    const int body_w = gkd350h_ultra_status_layout ? 47 : scale_px(24);
+    const int body_h = gkd350h_ultra_status_layout ? 29 : scale_px(12);
     const int icon_x = battery_icon_x;
-    const int icon_y = center_y - body_h / 2 + battery_shift_y;
+    const int icon_y = gkd350h_ultra_status_layout ? 26 : center_y - body_h / 2 + battery_shift_y;
 
     if (deps.draw_rect) {
-      deps.draw_rect(icon_x, icon_y, body_w, body_h, outline_color, false);
+      const int outline_width = gkd350h_ultra_status_layout ? 3 : 1;
+      for (int inset = 0; inset < outline_width; ++inset) {
+        deps.draw_rect(icon_x + inset, icon_y + inset,
+                       body_w - inset * 2, body_h - inset * 2, outline_color, false);
+      }
       deps.draw_rect(icon_x + body_w, center_y - cap_h / 2 + battery_shift_y, cap_w, cap_h, outline_color, true);
 
-      const int inner_pad = scale_px(2);
+      const int inner_pad = gkd350h_ultra_status_layout ? 5 : scale_px(2);
       const int inner_w = body_w - inner_pad * 2;
       const int inner_h = body_h - inner_pad * 2;
       const int fill_w = std::clamp((inner_w * status.battery_percent) / 100, 0, inner_w);

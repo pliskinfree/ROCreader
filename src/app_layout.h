@@ -36,6 +36,7 @@ struct LayoutMetrics {
   int nav_start_x = 90;
   int nav_slot_w = 135;
   int nav_y = 42;
+  int nav_pill_h = 32;
   int reader_progress_panel_margin_x = 18;
   int reader_progress_panel_margin_bottom = 12;
   int reader_progress_bar_margin_x = 34;

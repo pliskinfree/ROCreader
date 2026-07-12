@@ -91,23 +91,28 @@ quit chord.
 
 ## UI Layout Notes
 
-The 1600x1440 profile is based on the 720x720 shelf layout at 2x scale, with
-the extra 160 horizontal pixels applied by UI role:
+The reader/image modes remain fullscreen `1600x1440`. The settings layout
+continues to use the 720x720-at-2x placement rules, while the shelf uses native
+1600x1440 artwork geometry:
 
-- Centered shelf/grid/nav content: `x * 2 + 80`
-- Left-edge menu/sidebar surfaces: `x * 2`
-- Right-edge top/nav/status surfaces: `x * 2 + 160`
-- Vertical positions and most small icons: `y * 2`
-- Reader/image modes: fullscreen `1600x1440`
+- Shelf covers: `314x471`, starting at `(74, 222)`
+- Shelf grid step: `386px` horizontally and `541px` vertically
+- Shelf selection/shadow frame: `394x551`
+- Navigation content: four `300px` equal slots starting at `x=196`
+- URL shelves: the same `1200px` navigation width divided by the active sub-tab count
+- Left/right navigation icons: `(48, 104)` and `(1480, 104)`
+- Dynamic battery body: `(1249, 26)`, `47x29`, with a `3px` outline and `4x10` terminal
+- Dynamic battery percentage starts at `x=1308`; the clock is right-aligned to `x=1468`
+- Dynamic avatar badge: `(1512, 8)`, `64x64`
 
 Current 1600x1440 UI asset expectations:
 
 | Asset role | Expected size |
 | --- | --- |
 | `background_main.png` | `1600x1440` |
-| `top_status_bar.png` | `1600x72` |
-| `bottom_hint_bar.png` | `1600x70` |
-| Shelf cover/title assets | 720x720 asset size at 2x |
+| `top_status_bar.png` | `1600x80` |
+| `bottom_hint_bar.png` | `1600x80` |
+| Shelf cover/title assets | `314x471` cover/title, `394x551` frame |
 | Settings preview images | `1120x1440`, paired with a 480px sidebar |
 
 Suggested local workspace layout:
@@ -123,7 +128,7 @@ The first build route should reuse the repository low-glibc flow with a target
 sysroot:
 
 ```sh
-DEVICE_HOST=root@192.168.31.123 ./GKD350HUltra/sync_sysroot.sh
+DEVICE_HOST=root@192.168.31.12 ./GKD350HUltra/sync_sysroot.sh
 ./GKD350HUltra/prepare_headers_overlay.sh
 ./GKD350HUltra/build_low_glibc.sh
 ```
@@ -131,7 +136,7 @@ DEVICE_HOST=root@192.168.31.123 ./GKD350HUltra/sync_sysroot.sh
 From PowerShell on Windows:
 
 ```powershell
-.\GKD350HUltra\sync_sysroot.ps1 -DeviceHost root@192.168.31.123
+.\GKD350HUltra\sync_sysroot.ps1 -DeviceHost root@192.168.31.12
 .\GKD350HUltra\prepare_headers_overlay.ps1
 .\GKD350HUltra\build_low_glibc.ps1
 ```

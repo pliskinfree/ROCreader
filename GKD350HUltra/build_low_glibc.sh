@@ -18,7 +18,7 @@ export REQUIRE_MUPDF="${REQUIRE_MUPDF:-1}"
 if [ ! -d "$SYSROOT/usr/include" ] || [ ! -d "$SYSROOT/usr/lib" ]; then
   echo "[gkd_build] ERROR: invalid sysroot: $SYSROOT"
   echo "[gkd_build] Run sync first, for example:"
-  echo "[gkd_build]   DEVICE_HOST=root@192.168.31.123 $SELF_DIR/sync_sysroot.sh"
+  echo "[gkd_build]   DEVICE_HOST=root@192.168.31.12 $SELF_DIR/sync_sysroot.sh"
   exit 1
 fi
 

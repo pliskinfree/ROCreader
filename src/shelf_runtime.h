@@ -188,6 +188,7 @@ struct ShelfLayoutMetrics {
   int nav_start_x = 0;
   int nav_slot_w = 0;
   int nav_y = 0;
+  int nav_pill_h = 32;
 };
 
 struct ShelfRuntimeRenderDeps {

@@ -29,6 +29,7 @@ ShelfLayoutMetrics MakeShelfSceneLayoutMetrics(const LayoutMetrics &layout) {
       layout.nav_start_x,
       layout.nav_slot_w,
       layout.nav_y,
+      layout.nav_pill_h,
   };
 }
 

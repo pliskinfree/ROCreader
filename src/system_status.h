@@ -3,6 +3,7 @@
 #include <cstdint>
 #include "filesystem_compat.h"
 #include <string>
+#include <vector>
 
 struct SystemStatusSnapshot {
   bool battery_available = false;
@@ -34,5 +35,7 @@ private:
   SystemStatusSnapshot snapshot_;
   std::filesystem::path battery_capacity_path_;
   std::filesystem::path battery_status_path_;
+  std::vector<std::filesystem::path> charger_status_paths_;
+  std::vector<std::filesystem::path> charger_online_paths_;
   uint32_t last_poll_tick_ = 0;
 };

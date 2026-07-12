@@ -40,6 +40,29 @@ std::string ToLowerAsciiImpl(std::string text) {
                  [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   return text;
 }
+
+bool EnvTruthy(const char *value) {
+  if (!value || !*value) return false;
+  const std::string lower = ToLowerAsciiImpl(TrimAsciiImpl(value));
+  return lower == "1" || lower == "true" || lower == "yes" || lower == "on";
+}
+
+bool IsGkd350HUltraRuntime() {
+  const std::string model =
+      ToLowerAsciiImpl(std::getenv("ROCREADER_DEVICE_MODEL") ? std::getenv("ROCREADER_DEVICE_MODEL") : "");
+  const std::string profile =
+      ToLowerAsciiImpl(std::getenv("ROCREADER_SCREEN_PROFILE") ? std::getenv("ROCREADER_SCREEN_PROFILE") : "");
+  const std::string width =
+      TrimAsciiImpl(std::getenv("ROCREADER_SCREEN_W") ? std::getenv("ROCREADER_SCREEN_W") : "");
+  const std::string height =
+      TrimAsciiImpl(std::getenv("ROCREADER_SCREEN_H") ? std::getenv("ROCREADER_SCREEN_H") : "");
+  return model.find("gkd350h") != std::string::npos ||
+         model.find("gkd-350h") != std::string::npos ||
+         model.find("gkd_atom") != std::string::npos ||
+         model.find("gkd-atom") != std::string::npos ||
+         profile == "1600x1440" ||
+         (width == "1600" && height == "1440");
+}
 } // namespace
 
 SystemStatusMonitor::SystemStatusMonitor() {
@@ -88,12 +111,20 @@ bool SystemStatusMonitor::ParseInt(const std::string &text, int &out_value) {
 void SystemStatusMonitor::DiscoverBatteryPaths() {
   const char *env_capacity = std::getenv("ROCREADER_BATTERY_CAPACITY_PATH");
   const char *env_status = std::getenv("ROCREADER_BATTERY_STATUS_PATH");
+  const char *env_charger_status = std::getenv("ROCREADER_CHARGER_STATUS_PATH");
+  const char *env_charger_online = std::getenv("ROCREADER_CHARGER_ONLINE_PATH");
   if (env_capacity && *env_capacity) battery_capacity_path_ = env_capacity;
   if (env_status && *env_status) battery_status_path_ = env_status;
-  if (!battery_capacity_path_.empty() || !battery_status_path_.empty()) {
+  if (env_charger_status && *env_charger_status) charger_status_paths_.emplace_back(env_charger_status);
+  if (env_charger_online && *env_charger_online) charger_online_paths_.emplace_back(env_charger_online);
+  if (!battery_capacity_path_.empty() || !battery_status_path_.empty() ||
+      !charger_status_paths_.empty() || !charger_online_paths_.empty()) {
     if (VerboseLogEnabled()) {
       std::cout << "[native_h700] battery discover: env capacity=" << battery_capacity_path_.string()
-                << " status=" << battery_status_path_.string() << "\n";
+                << " status=" << battery_status_path_.string()
+                << " charger_status=" << (charger_status_paths_.empty() ? "" : charger_status_paths_.front().string())
+                << " charger_online=" << (charger_online_paths_.empty() ? "" : charger_online_paths_.front().string())
+                << "\n";
     }
     return;
   }
@@ -133,9 +164,35 @@ void SystemStatusMonitor::DiscoverBatteryPaths() {
     if (!battery_capacity_path_.empty() || !battery_status_path_.empty()) break;
   }
 
+  if (IsGkd350HUltraRuntime()) {
+    for (std::filesystem::directory_iterator it(root, ec), end; it != end; it.increment(ec)) {
+      if (ec) {
+        ec.clear();
+        continue;
+      }
+      const std::filesystem::path dir = it->path();
+      const std::string type = ToLowerAscii(TrimAscii(ReadSmallTextFile(dir / "type")));
+      const std::string lower_name = ToLowerAscii(dir.filename().string());
+      const bool looks_like_charger =
+          type == "usb" ||
+          lower_name.find("charger") != std::string::npos ||
+          lower_name.find("usb") != std::string::npos;
+      if (!looks_like_charger) continue;
+
+      const std::filesystem::path status = dir / "status";
+      const std::filesystem::path online = dir / "online";
+      if (std::filesystem::exists(status, ec) && !ec) charger_status_paths_.push_back(status);
+      ec.clear();
+      if (std::filesystem::exists(online, ec) && !ec) charger_online_paths_.push_back(online);
+      ec.clear();
+    }
+  }
+
   if (VerboseLogEnabled()) {
     std::cout << "[native_h700] battery discover: capacity=" << battery_capacity_path_.string()
-              << " status=" << battery_status_path_.string() << "\n";
+              << " status=" << battery_status_path_.string()
+              << " charger_status_count=" << charger_status_paths_.size()
+              << " charger_online_count=" << charger_online_paths_.size() << "\n";
   }
 }
 
@@ -175,6 +232,31 @@ void SystemStatusMonitor::UpdateBattery() {
       snapshot_.charging_text = status;
       snapshot_.charging =
           lower.find("charging") != std::string::npos && lower.find("discharging") == std::string::npos;
+    }
+  }
+
+  for (const std::filesystem::path &path : charger_status_paths_) {
+    const std::string status = TrimAscii(ReadSmallTextFile(path));
+    if (status.empty()) continue;
+    const std::string lower = ToLowerAscii(status);
+    snapshot_.charging_status_available = true;
+    if (snapshot_.charging_text.empty() || snapshot_.charging_text == "Discharging") {
+      snapshot_.charging_text = status;
+    }
+    if (lower.find("charging") != std::string::npos && lower.find("discharging") == std::string::npos) {
+      snapshot_.charging = true;
+    }
+  }
+
+  for (const std::filesystem::path &path : charger_online_paths_) {
+    const std::string online = TrimAscii(ReadSmallTextFile(path));
+    if (online.empty()) continue;
+    snapshot_.charging_status_available = true;
+    if (EnvTruthy(online.c_str())) {
+      snapshot_.charging = true;
+      if (snapshot_.charging_text.empty() || snapshot_.charging_text == "Discharging") {
+        snapshot_.charging_text = "Charging";
+      }
     }
   }
 }
