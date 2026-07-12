@@ -1,5 +1,6 @@
 #include "txt_settings_runtime.h"
 #include "app_language.h"
+#include "gkd_menu_button_metrics.h"
 
 #include <algorithm>
 #include <array>
@@ -165,23 +166,33 @@ void DrawTxtSettingsPreview(const TxtSettingsRenderDeps &deps) {
   };
 
   const float scale = deps.ui_scale;
-  const int divider_inset = ScalePx(scale, 10);
-  const int preview_padding_x = ScalePx(scale, 16);
+  const bool gkd_profile = deps.gkd_profile;
+  const int divider_inset = ScalePx(scale, gkd_profile ? 18 : 10);
+  const int preview_padding_x = ScalePx(scale, gkd_profile ? 32 : 16);
   const int row_center0 = deps.first_row_y + deps.row_height / 2;
   const int row_center1 = deps.first_row_y + deps.row_pitch + deps.row_height / 2;
   const int row_center2 = deps.first_row_y + deps.row_pitch * 2 + deps.row_height / 2;
   const int row_center3 = deps.first_row_y + deps.row_pitch * 3 + deps.row_height / 2;
-  const int button_w = ScalePx(scale, 28);
-  const int button_h = ScalePx(scale, 28);
-  const int color_block_w = button_w * 2;
-  const int color_block_h = button_h;
-  const int color_gap = ScalePx(scale, 8);
-  const int label_control_gap = ScalePx(scale, 18);
-  const int transcode_button_h = ScalePx(scale, 28);
+  const int arrow_text_h = std::max(
+      get_emphasis_entry("<", text_color) ? get_emphasis_entry("<", text_color)->h : 0,
+      get_emphasis_entry(">", text_color) ? get_emphasis_entry(">", text_color)->h : 0);
+  const int transcode_text_h =
+      get_text_entry(LocalizedAppText(deps.language_index, AppTextId::TxtStartTranscode), text_color)
+          ? get_text_entry(LocalizedAppText(deps.language_index, AppTextId::TxtStartTranscode), text_color)->h
+          : 0;
+  const int button_h = gkd_profile ? gkd_menu::ControlH(scale)
+                                   : std::max(ScalePx(scale, 28), arrow_text_h + ScalePx(scale, 8));
+  const int button_w = gkd_profile ? gkd_menu::StepButtonW(scale) : std::max(ScalePx(scale, 28), button_h);
+  const int color_block_h = gkd_profile ? std::max(ScalePx(scale, 36), button_h - ScalePx(scale, 4)) : button_h;
+  const int color_block_w = gkd_profile ? std::max(ScalePx(scale, 56), color_block_h * 3 / 2) : button_w * 2;
+  const int color_gap = ScalePx(scale, gkd_profile ? 10 : 8);
+  const int transcode_button_h = gkd_profile
+                                     ? gkd_menu::ControlH(scale)
+                                     : std::max(ScalePx(scale, 28), transcode_text_h + ScalePx(scale, 8));
   const int number_w = ScalePx(scale, 30);
 
   deps.draw_rect(deps.preview_rect.x + divider_inset,
-                 deps.first_row_y - ScalePx(scale, 12),
+                 deps.first_row_y - ScalePx(scale, gkd_profile ? 18 : 12),
                  std::max(0, deps.preview_rect.w - divider_inset * 2),
                  ScalePx(scale, 1),
                  divider_color,
@@ -195,29 +206,23 @@ void DrawTxtSettingsPreview(const TxtSettingsRenderDeps &deps) {
   }};
   const std::array<int, 4> row_centers = {{row_center0, row_center1, row_center2, row_center3}};
 
-  int max_label_w = 0;
-  for (const char *label : labels) {
-    if (TextCacheEntry *entry = get_text_entry(label, text_color); entry) {
-      max_label_w = std::max(max_label_w, entry->w);
-    }
-  }
-
   const int color_controls_w = kColorOptionCount * color_block_w + (kColorOptionCount - 1) * color_gap;
   const int mid_gap = ScalePx(scale, 10);
-  const int font_controls_w = button_w + mid_gap + number_w + mid_gap + button_w;
-  const int min_transcode_button_w = ScalePx(scale, 82);
+  const int min_transcode_button_w = gkd_profile ? gkd_menu::LongButtonW(scale) : ScalePx(scale, 82);
   const int transcode_button_padding = ScalePx(scale, 18);
   const int transcode_button_w =
-      std::max(min_transcode_button_w,
-               (get_text_entry(LocalizedAppText(deps.language_index, AppTextId::TxtStartTranscode), text_color)
-                        ? get_text_entry(LocalizedAppText(deps.language_index, AppTextId::TxtStartTranscode), text_color)->w
-                        : 0) +
-                   transcode_button_padding * 2);
-  const int transcode_controls_w = transcode_button_w;
-  const int max_controls_w = std::max({color_controls_w, font_controls_w, transcode_controls_w});
-  const int content_w = max_label_w + label_control_gap + max_controls_w;
-  const int content_left = deps.preview_rect.x + preview_padding_x;
-  const int control_right = content_left + content_w;
+      gkd_profile
+          ? min_transcode_button_w
+          : std::max(min_transcode_button_w,
+                     (get_text_entry(LocalizedAppText(deps.language_index, AppTextId::TxtStartTranscode), text_color)
+                              ? get_text_entry(LocalizedAppText(deps.language_index, AppTextId::TxtStartTranscode),
+                                               text_color)
+                                    ->w
+                              : 0) +
+                         transcode_button_padding * 2);
+  const int right_padding_x = gkd_profile ? gkd_menu::RightPadding(scale) : preview_padding_x;
+  const int content_left = deps.preview_rect.x + (gkd_profile ? ScalePx(scale, 16) : preview_padding_x);
+  const int control_right = deps.preview_rect.x + deps.preview_rect.w - right_padding_x;
 
   for (size_t i = 0; i < labels.size(); ++i) {
     if (TextCacheEntry *entry = get_text_entry(labels[i], text_color); entry && entry->texture) {

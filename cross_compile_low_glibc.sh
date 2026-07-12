@@ -1333,6 +1333,24 @@ EOF
     [ ! -f "$RUNTIME_DIR/icon.png" ] && [ -f "$SELF_DIR/ui/common/ROCreader.png" ] && cp "$SELF_DIR/ui/common/ROCreader.png" "$RUNTIME_DIR/icon.png"
   else
     cp "$SELF_DIR/ROCreader.sh" "$LAUNCHER"
+    if [ -n "${ROCREADER_UPDATE_CONTENTS_URL:-}" ]; then
+      python3 - "$LAUNCHER" "$ROCREADER_UPDATE_CONTENTS_URL" <<'PY'
+import re
+import sys
+
+path, update_url = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as fh:
+    text = fh.read()
+text = re.sub(
+    r'export ROCREADER_UPDATE_CONTENTS_URL="\$\{ROCREADER_UPDATE_CONTENTS_URL:-[^}]*\}"',
+    f'export ROCREADER_UPDATE_CONTENTS_URL="${{ROCREADER_UPDATE_CONTENTS_URL:-{update_url}}}"',
+    text,
+    count=1,
+)
+with open(path, "w", encoding="utf-8", newline="\n") as fh:
+    fh.write(text)
+PY
+    fi
   fi
 
   chmod +x "$RUNTIME_DIR/rocreader_sdl" 2>/dev/null || true

@@ -1,5 +1,7 @@
 #include "system_settings_runtime.h"
 
+#include "gkd_menu_button_metrics.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -205,16 +207,33 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
   };
 
   const float scale = deps.ui_scale;
-  const int button_size = ScalePx(scale, 28);
-  const int meter_h = ScalePx(scale, 28);
-  const int control_value_gap = ScalePx(scale, 8);
-  const int min_dual_button_w = ScalePx(scale, 66);
-  const int lid_button_gap = ScalePx(scale, 16);
-  const int min_action_button_w = ScalePx(scale, 66);
-  const int control_side_gap = ScalePx(scale, 16);
-  const int preview_padding_x = ScalePx(scale, 16);
+  const bool gkd_profile = deps.gkd_profile;
+  int max_control_text_h = 0;
+  for (const std::string &text : {std::string("-"), std::string("+"), std::string("<"), std::string(">"),
+                                  std::string(LocalizedAppText(0, AppTextId::SystemOn)),
+                                  std::string(LocalizedAppText(1, AppTextId::SystemOn)),
+                                  std::string(LocalizedAppText(0, AppTextId::SystemOff)),
+                                  std::string(LocalizedAppText(1, AppTextId::SystemOff)),
+                                  std::string(LocalizedAppText(0, AppTextId::SystemClear)),
+                                  std::string(LocalizedAppText(1, AppTextId::SystemClear))}) {
+    if (TextCacheEntry *entry = get_text_entry(text, text_color); entry) {
+      max_control_text_h = std::max(max_control_text_h, entry->h);
+    }
+  }
+  const int button_size = gkd_profile
+                              ? gkd_menu::StepButtonW(scale)
+                              : std::max(ScalePx(scale, 28), max_control_text_h + ScalePx(scale, 8));
+  const int button_h = gkd_profile ? gkd_menu::ControlH(scale) : button_size;
+  const int meter_h = button_h;
+  const int control_value_gap = gkd_profile ? 0 : ScalePx(scale, 8);
+  const int min_dual_button_w = gkd_profile ? gkd_menu::LongButtonW(scale) : ScalePx(scale, 66);
+  const int lid_button_gap = gkd_profile ? gkd_menu::ButtonGap(scale) : ScalePx(scale, 16);
+  const int min_action_button_w = gkd_profile ? gkd_menu::LongButtonW(scale) : ScalePx(scale, 66);
+  const int control_side_gap = gkd_profile ? gkd_menu::ButtonGap(scale) : ScalePx(scale, 16);
+  const int preview_left_padding_x = ScalePx(scale, 16);
+  const int preview_right_padding_x = gkd_profile ? gkd_menu::RightPadding(scale) : ScalePx(scale, 16);
   const int label_control_gap = ScalePx(scale, 18);
-  const int top_divider_inset = ScalePx(scale, 10);
+  const int top_divider_inset = ScalePx(scale, gkd_profile ? 18 : 10);
 
   int max_value_w = 0;
   for (const std::string &text : {std::string("0"), std::string("100")}) {
@@ -223,51 +242,58 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
     }
   }
   int max_label_w = 0;
-  for (const auto &row : rows) {
-    if (TextCacheEntry *entry = get_text_entry(row.label, text_color); entry) {
-      max_label_w = std::max(max_label_w, entry->w);
+  const std::array<AppTextId, 7> system_label_ids = {{
+      AppTextId::SystemKeySound,
+      AppTextId::SystemBrightness,
+      AppTextId::SystemAutoSleep,
+      AppTextId::SystemSleepTimer,
+      AppTextId::SystemLanguage,
+      AppTextId::SystemClearCache,
+      AppTextId::SystemClearHistory,
+  }};
+  const int first_metric_language = gkd_profile ? 0 : deps.state.system_language_index;
+  const int metric_language_count = gkd_profile ? SystemLanguageCount() : 1;
+  for (int language_offset = 0; language_offset < metric_language_count; ++language_offset) {
+    const int language_index = first_metric_language + language_offset;
+    for (AppTextId id : system_label_ids) {
+      if (TextCacheEntry *entry = get_text_entry(LocalizedAppText(language_index, id), text_color); entry) {
+        max_label_w = std::max(max_label_w, entry->w);
+      }
     }
   }
-  if (TextCacheEntry *entry = get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemAutoSleep), text_color); entry) {
-    max_label_w = std::max(max_label_w, entry->w);
-  }
-  if (TextCacheEntry *entry = get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemSleepTimer), text_color); entry) {
-    max_label_w = std::max(max_label_w, entry->w);
-  }
-  if (TextCacheEntry *entry = get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemLanguage), text_color); entry) {
-    max_label_w = std::max(max_label_w, entry->w);
-  }
-  if (TextCacheEntry *entry = get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemClearCache), text_color); entry) {
-    max_label_w = std::max(max_label_w, entry->w);
-  }
-  if (TextCacheEntry *entry = get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemClearHistory), text_color); entry) {
-    max_label_w = std::max(max_label_w, entry->w);
-  }
 
-  const int dual_button_padding = ScalePx(scale, 16);
-  const int action_button_padding = ScalePx(scale, 18);
-  const int on_off_max_w = std::max(
-      get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemOn), text_color)
-              ? get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemOn), text_color)->w
-              : 0,
-      get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemOff), text_color)
-              ? get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemOff), text_color)->w
-              : 0);
-  const int clear_text_w =
-      get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemClear), text_color)
-          ? get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemClear), text_color)->w
-          : 0;
-  const int lid_button_w = std::max(min_dual_button_w, on_off_max_w + dual_button_padding * 2);
-  const int action_button_w = std::max(min_action_button_w, clear_text_w + action_button_padding * 2);
+  const int dual_button_padding = ScalePx(scale, gkd_profile ? 22 : 16);
+  const int action_button_padding = ScalePx(scale, gkd_profile ? 24 : 18);
+  int on_off_max_w = 0;
+  int clear_text_w = 0;
+  for (int lang = 0; lang < SystemLanguageCount(); ++lang) {
+    if (TextCacheEntry *entry = get_text_entry(LocalizedAppText(lang, AppTextId::SystemOn), text_color); entry) {
+      on_off_max_w = std::max(on_off_max_w, entry->w);
+    }
+    if (TextCacheEntry *entry = get_text_entry(LocalizedAppText(lang, AppTextId::SystemOff), text_color); entry) {
+      on_off_max_w = std::max(on_off_max_w, entry->w);
+    }
+    if (TextCacheEntry *entry = get_text_entry(LocalizedAppText(lang, AppTextId::SystemClear), text_color); entry) {
+      clear_text_w = std::max(clear_text_w, entry->w);
+    }
+  }
+  const int lid_button_w = gkd_profile ? min_dual_button_w
+                                       : std::max(min_dual_button_w, on_off_max_w + dual_button_padding * 2);
+  const int action_button_w = gkd_profile ? min_action_button_w
+                                          : std::max(min_action_button_w, clear_text_w + action_button_padding * 2);
   const int fixed_control_w =
-      button_size + control_side_gap + control_side_gap + button_size + control_value_gap + max_value_w;
+      button_size + control_side_gap + control_side_gap + button_size + control_value_gap +
+      (gkd_profile ? 0 : max_value_w);
   const int single_row_total_w = max_label_w + label_control_gap + action_button_w;
   const int lid_total_w = max_label_w + label_control_gap + lid_button_w * 2 + lid_button_gap;
   int max_interval_w = 0;
-  for (int i = 0; i < static_cast<int>(kSleepIntervalLabels.size()); ++i) {
-    const char *label = AutoSleepIntervalLocalizedLabel(deps.state.system_language_index, i);
-    if (TextCacheEntry *entry = get_text_entry(label, text_color); entry) {
-      max_interval_w = std::max(max_interval_w, entry->w);
+  for (int language_offset = 0; language_offset < metric_language_count; ++language_offset) {
+    const int language_index = first_metric_language + language_offset;
+    for (int i = 0; i < static_cast<int>(kSleepIntervalLabels.size()); ++i) {
+      const char *label = AutoSleepIntervalLocalizedLabel(language_index, i);
+      if (TextCacheEntry *entry = get_text_entry(label, text_color); entry) {
+        max_interval_w = std::max(max_interval_w, entry->w);
+      }
     }
   }
   int max_language_w = 0;
@@ -278,20 +304,30 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
     }
   }
   const int mid_gap = ScalePx(scale, 10);
-  const int interval_total_w = max_label_w + label_control_gap + button_size + mid_gap + max_interval_w + mid_gap + button_size;
+  const int selector_value_w = std::max(max_interval_w, max_language_w);
+  const int interval_total_w = max_label_w + label_control_gap + button_size + mid_gap + selector_value_w + mid_gap + button_size;
   const int language_total_w =
-      max_label_w + label_control_gap + button_size + mid_gap + max_language_w + mid_gap + button_size;
-  const int meter_w =
-      std::max(ScalePx(scale, 110), deps.preview_rect.w - preview_padding_x * 2 - max_label_w - label_control_gap - fixed_control_w);
+      max_label_w + label_control_gap + button_size + mid_gap + selector_value_w + mid_gap + button_size;
+  const int max_content_w = std::max(1, deps.preview_rect.w - preview_left_padding_x - preview_right_padding_x);
+  const int available_meter_w = max_content_w - max_label_w - label_control_gap - fixed_control_w;
+  const int meter_w = std::max(ScalePx(scale, gkd_profile ? 70 : 110), available_meter_w);
   const int control_total_w = max_label_w + label_control_gap + fixed_control_w + meter_w;
-  const int content_w = std::max({control_total_w, lid_total_w, interval_total_w, language_total_w, single_row_total_w});
+  const int content_w = gkd_profile
+                            ? std::min(max_content_w, std::max({control_total_w, lid_total_w, interval_total_w,
+                                                                language_total_w, single_row_total_w}))
+                            : std::max({control_total_w, lid_total_w, interval_total_w, language_total_w,
+                                        single_row_total_w});
   const int centered_x = deps.preview_rect.x + (deps.preview_rect.w - content_w) / 2;
-  const int base_x = std::max(deps.preview_rect.x + ScalePx(scale, 16), centered_x);
-  const int control_right = base_x + content_w;
-  const int plus_right = control_right - max_value_w - control_value_gap;
-  const int clear_button_x = plus_right - action_button_w;
-  const int lid_close_x = plus_right - lid_button_w;
+  const int base_x = gkd_profile ? deps.preview_rect.x + preview_left_padding_x
+                                 : std::max(deps.preview_rect.x + ScalePx(scale, 16), centered_x);
+  const int control_right = gkd_profile ? deps.preview_rect.x + deps.preview_rect.w - preview_right_padding_x
+                                        : base_x + content_w;
+  const int value_right = control_right;
+  const int plus_right = gkd_profile ? control_right : control_right - max_value_w - control_value_gap;
+  const int clear_button_x = control_right - action_button_w;
+  const int lid_close_x = control_right - lid_button_w;
   const int lid_open_x = lid_close_x - lid_button_gap - lid_button_w;
+  const int control_left_x = base_x + max_label_w + label_control_gap;
 
   const int row0_center_y = deps.first_row_y + deps.row_height / 2;
   const int row1_center_y = deps.first_row_y + deps.row_pitch + deps.row_height / 2;
@@ -300,8 +336,9 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
   const int row4_center_y = deps.first_row_y + deps.row_pitch * 4 + deps.row_height / 2;
   const int row5_center_y = deps.first_row_y + deps.row_pitch * 5 + deps.row_height / 2;
   const int row6_center_y = deps.first_row_y + deps.row_pitch * 6 + deps.row_height / 2;
+  const int divider_y = deps.first_row_y - ScalePx(scale, gkd_profile ? 18 : 12);
   deps.draw_rect(deps.preview_rect.x + top_divider_inset,
-                 deps.first_row_y - ScalePx(scale, 12),
+                 divider_y,
                  std::max(0, deps.preview_rect.w - top_divider_inset * 2),
                  ScalePx(scale, 1),
                  deps.light_theme ? SDL_Color{138, 154, 170, 255} : SDL_Color{66, 95, 124, 255},
@@ -317,10 +354,11 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
       SDL_RenderCopy(deps.renderer, label_entry->texture, nullptr, &label_dst);
     }
 
-    const int minus_x = base_x + max_label_w + label_control_gap;
-    const int meter_x = minus_x + button_size + control_side_gap;
-    const int plus_x = meter_x + meter_w + control_side_gap;
-    const int button_y = control_center_y - button_size / 2;
+    const int plus_x = plus_right - button_size;
+    const int meter_x = plus_x - control_side_gap - meter_w;
+    const int minus_x = gkd_profile ? std::max(control_left_x, meter_x - control_side_gap - button_size)
+                                    : base_x + max_label_w + label_control_gap;
+    const int button_y = control_center_y - button_h / 2;
     const int meter_y = control_center_y - meter_h / 2;
 
     const bool minus_selected =
@@ -328,11 +366,11 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
     const bool plus_selected =
         deps.state.panel_active && deps.state.selected_row == i && deps.state.selected_button == kButtonPlus;
 
-    deps.draw_rect(minus_x, button_y, button_size, button_size, minus_selected ? button_selected : button_fill, true);
-    deps.draw_rect(minus_x, button_y, button_size, button_size, minus_selected ? button_border : muted_color, false);
+    deps.draw_rect(minus_x, button_y, button_size, button_h, minus_selected ? button_selected : button_fill, true);
+    deps.draw_rect(minus_x, button_y, button_size, button_h, minus_selected ? button_border : muted_color, false);
     if (TextCacheEntry *minus_entry = get_emphasis_entry("-", text_color); minus_entry && minus_entry->texture) {
       SDL_Rect dst{minus_x + (button_size - minus_entry->w) / 2,
-                   button_y + (button_size - minus_entry->h) / 2 - ScalePx(scale, 2),
+                   button_y + (button_h - minus_entry->h) / 2 - ScalePx(scale, 2),
                    minus_entry->w,
                    minus_entry->h};
       SDL_RenderCopy(deps.renderer, minus_entry->texture, nullptr, &dst);
@@ -347,19 +385,19 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
     }
     deps.draw_rect(meter_x, meter_y, meter_w, meter_h, muted_color, false);
 
-    deps.draw_rect(plus_x, button_y, button_size, button_size, plus_selected ? button_selected : button_fill, true);
-    deps.draw_rect(plus_x, button_y, button_size, button_size, plus_selected ? button_border : muted_color, false);
+    deps.draw_rect(plus_x, button_y, button_size, button_h, plus_selected ? button_selected : button_fill, true);
+    deps.draw_rect(plus_x, button_y, button_size, button_h, plus_selected ? button_border : muted_color, false);
     if (TextCacheEntry *plus_entry = get_emphasis_entry("+", text_color); plus_entry && plus_entry->texture) {
       SDL_Rect dst{plus_x + (button_size - plus_entry->w) / 2,
-                   button_y + (button_size - plus_entry->h) / 2 - ScalePx(scale, 2),
+                   button_y + (button_h - plus_entry->h) / 2 - ScalePx(scale, 2),
                    plus_entry->w,
                    plus_entry->h};
       SDL_RenderCopy(deps.renderer, plus_entry->texture, nullptr, &dst);
     }
 
-    const bool show_percent = rows[static_cast<size_t>(i)].show_percent;
+    const bool show_percent = rows[static_cast<size_t>(i)].show_percent && !gkd_profile;
     const std::string value_text =
-        value.available
+        (value.available && !gkd_profile)
             ? (show_percent ? std::to_string((std::clamp(value.level, 0, std::max(1, value.max_level)) * 100 +
                                                std::max(1, value.max_level) / 2) /
                                               std::max(1, value.max_level))
@@ -368,7 +406,7 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
     if (!value_text.empty()) {
       if (TextCacheEntry *value_entry = get_text_entry(value_text, text_color);
         value_entry && value_entry->texture) {
-        const int value_box_x = plus_x + button_size + control_value_gap;
+        const int value_box_x = value_right - max_value_w;
         SDL_Rect dst{value_box_x + std::max(0, max_value_w - value_entry->w),
                      control_center_y - value_entry->h / 2,
                      value_entry->w,
@@ -385,38 +423,38 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
     SDL_RenderCopy(deps.renderer, lid_label->texture, nullptr, &dst);
   }
 
-  const int lid_button_y = row2_center_y - button_size / 2;
+  const int lid_button_y = row2_center_y - button_h / 2;
   const bool open_selected =
       deps.state.panel_active && deps.state.selected_row == 2 && deps.state.selected_button == kButtonMinus;
   const bool close_selected =
       deps.state.panel_active && deps.state.selected_row == 2 && deps.state.selected_button == kButtonPlus;
 
-  deps.draw_rect(lid_open_x, lid_button_y, lid_button_w, button_size,
+  deps.draw_rect(lid_open_x, lid_button_y, lid_button_w, button_h,
                  deps.state.lid_close_screen_off_enabled ? state_lit
                                                          : (open_selected ? button_selected : button_fill),
                  true);
-  deps.draw_rect(lid_open_x, lid_button_y, lid_button_w, button_size, open_selected ? button_border : muted_color, false);
+  deps.draw_rect(lid_open_x, lid_button_y, lid_button_w, button_h, open_selected ? button_border : muted_color, false);
   if (TextCacheEntry *open_text =
           get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemOn), text_color);
       open_text && open_text->texture) {
     SDL_Rect dst{lid_open_x + (lid_button_w - open_text->w) / 2,
-                 lid_button_y + (button_size - open_text->h) / 2,
+                 lid_button_y + (button_h - open_text->h) / 2,
                  open_text->w,
                  open_text->h};
     SDL_RenderCopy(deps.renderer, open_text->texture, nullptr, &dst);
   }
 
-  deps.draw_rect(lid_close_x, lid_button_y, lid_button_w, button_size,
+  deps.draw_rect(lid_close_x, lid_button_y, lid_button_w, button_h,
                  !deps.state.lid_close_screen_off_enabled ? state_lit
                                                           : (close_selected ? button_selected : button_fill),
                  true);
-  deps.draw_rect(lid_close_x, lid_button_y, lid_button_w, button_size, close_selected ? button_border : muted_color,
+  deps.draw_rect(lid_close_x, lid_button_y, lid_button_w, button_h, close_selected ? button_border : muted_color,
                  false);
   if (TextCacheEntry *close_text =
           get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemOff), text_color);
       close_text && close_text->texture) {
     SDL_Rect dst{lid_close_x + (lid_button_w - close_text->w) / 2,
-                 lid_button_y + (button_size - close_text->h) / 2,
+                 lid_button_y + (button_h - close_text->h) / 2,
                  close_text->w,
                  close_text->h};
     SDL_RenderCopy(deps.renderer, close_text->texture, nullptr, &dst);
@@ -429,10 +467,10 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
     SDL_RenderCopy(deps.renderer, interval_label->texture, nullptr, &dst);
   }
 
-  const int selector_left_x = plus_right - button_size - mid_gap - max_language_w - mid_gap - button_size;
-  const int selector_right_x = plus_right;
+  const int selector_left_x = control_right - button_size - mid_gap - selector_value_w - mid_gap - button_size;
+  const int selector_right_x = control_right;
   const int selector_center_x = selector_left_x + (selector_right_x - selector_left_x) / 2;
-  const int interval_button_y = row3_center_y - button_size / 2;
+  const int interval_button_y = row3_center_y - button_h / 2;
   const int interval_minus_x = selector_left_x;
   const int interval_plus_x = selector_right_x - button_size;
   const bool interval_minus_selected =
@@ -440,13 +478,13 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
   const bool interval_plus_selected =
       deps.state.panel_active && deps.state.selected_row == 3 && deps.state.selected_button == kButtonPlus;
 
-  deps.draw_rect(interval_minus_x, interval_button_y, button_size, button_size,
+  deps.draw_rect(interval_minus_x, interval_button_y, button_size, button_h,
                  interval_minus_selected ? button_selected : button_fill, true);
-  deps.draw_rect(interval_minus_x, interval_button_y, button_size, button_size,
+  deps.draw_rect(interval_minus_x, interval_button_y, button_size, button_h,
                  interval_minus_selected ? button_border : muted_color, false);
   if (TextCacheEntry *minus_entry = get_emphasis_entry("<", text_color); minus_entry && minus_entry->texture) {
     SDL_Rect dst{interval_minus_x + (button_size - minus_entry->w) / 2,
-                 interval_button_y + (button_size - minus_entry->h) / 2,
+                 interval_button_y + (button_h - minus_entry->h) / 2,
                  minus_entry->w,
                  minus_entry->h};
     SDL_RenderCopy(deps.renderer, minus_entry->texture, nullptr, &dst);
@@ -464,13 +502,13 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
     SDL_RenderCopy(deps.renderer, value_entry->texture, nullptr, &dst);
   }
 
-  deps.draw_rect(interval_plus_x, interval_button_y, button_size, button_size,
+  deps.draw_rect(interval_plus_x, interval_button_y, button_size, button_h,
                  interval_plus_selected ? button_selected : button_fill, true);
-  deps.draw_rect(interval_plus_x, interval_button_y, button_size, button_size,
+  deps.draw_rect(interval_plus_x, interval_button_y, button_size, button_h,
                  interval_plus_selected ? button_border : muted_color, false);
   if (TextCacheEntry *plus_entry = get_emphasis_entry(">", text_color); plus_entry && plus_entry->texture) {
     SDL_Rect dst{interval_plus_x + (button_size - plus_entry->w) / 2,
-                 interval_button_y + (button_size - plus_entry->h) / 2,
+                 interval_button_y + (button_h - plus_entry->h) / 2,
                  plus_entry->w,
                  plus_entry->h};
     SDL_RenderCopy(deps.renderer, plus_entry->texture, nullptr, &dst);
@@ -483,22 +521,22 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
     SDL_RenderCopy(deps.renderer, language_label->texture, nullptr, &dst);
   }
 
-  const int language_button_y = row4_center_y - button_size / 2;
+  const int language_button_y = row4_center_y - button_h / 2;
   const int language_minus_x = selector_left_x;
   const int language_value_x = language_minus_x + button_size + mid_gap;
-  const int language_plus_x = language_value_x + max_language_w + mid_gap;
+  const int language_plus_x = language_value_x + selector_value_w + mid_gap;
   const bool language_minus_selected =
       deps.state.panel_active && deps.state.selected_row == 4 && deps.state.selected_button == kButtonMinus;
   const bool language_plus_selected =
       deps.state.panel_active && deps.state.selected_row == 4 && deps.state.selected_button == kButtonPlus;
 
-  deps.draw_rect(language_minus_x, language_button_y, button_size, button_size,
+  deps.draw_rect(language_minus_x, language_button_y, button_size, button_h,
                  language_minus_selected ? button_selected : button_fill, true);
-  deps.draw_rect(language_minus_x, language_button_y, button_size, button_size,
+  deps.draw_rect(language_minus_x, language_button_y, button_size, button_h,
                  language_minus_selected ? button_border : muted_color, false);
   if (TextCacheEntry *minus_entry = get_emphasis_entry("<", text_color); minus_entry && minus_entry->texture) {
     SDL_Rect dst{language_minus_x + (button_size - minus_entry->w) / 2,
-                 language_button_y + (button_size - minus_entry->h) / 2,
+                 language_button_y + (button_h - minus_entry->h) / 2,
                  minus_entry->w,
                  minus_entry->h};
     SDL_RenderCopy(deps.renderer, minus_entry->texture, nullptr, &dst);
@@ -506,20 +544,20 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
 
   if (TextCacheEntry *value_entry = get_text_entry(SystemLanguageDisplayLabel(deps.state.system_language_index), text_color);
       value_entry && value_entry->texture) {
-    SDL_Rect dst{language_value_x + std::max(0, (max_language_w - value_entry->w) / 2),
+    SDL_Rect dst{language_value_x + std::max(0, (selector_value_w - value_entry->w) / 2),
                  row4_center_y - value_entry->h / 2,
                  value_entry->w,
                  value_entry->h};
     SDL_RenderCopy(deps.renderer, value_entry->texture, nullptr, &dst);
   }
 
-  deps.draw_rect(language_plus_x, language_button_y, button_size, button_size,
+  deps.draw_rect(language_plus_x, language_button_y, button_size, button_h,
                  language_plus_selected ? button_selected : button_fill, true);
-  deps.draw_rect(language_plus_x, language_button_y, button_size, button_size,
+  deps.draw_rect(language_plus_x, language_button_y, button_size, button_h,
                  language_plus_selected ? button_border : muted_color, false);
   if (TextCacheEntry *plus_entry = get_emphasis_entry(">", text_color); plus_entry && plus_entry->texture) {
     SDL_Rect dst{language_plus_x + (button_size - plus_entry->w) / 2,
-                 language_button_y + (button_size - plus_entry->h) / 2,
+                 language_button_y + (button_h - plus_entry->h) / 2,
                  plus_entry->w,
                  plus_entry->h};
     SDL_RenderCopy(deps.renderer, plus_entry->texture, nullptr, &dst);
@@ -532,14 +570,14 @@ void DrawSystemSettingsPreview(const SystemSettingsRenderDeps &deps) {
     }
     const bool selected =
         deps.state.panel_active && deps.state.selected_row == selected_row && deps.state.selected_button == kButtonSingle;
-    const int button_y = row_center_y - button_size / 2;
-    deps.draw_rect(clear_button_x, button_y, action_button_w, button_size, selected ? button_selected : button_fill, true);
-    deps.draw_rect(clear_button_x, button_y, action_button_w, button_size, selected ? button_border : muted_color, false);
+    const int button_y = row_center_y - button_h / 2;
+    deps.draw_rect(clear_button_x, button_y, action_button_w, button_h, selected ? button_selected : button_fill, true);
+    deps.draw_rect(clear_button_x, button_y, action_button_w, button_h, selected ? button_border : muted_color, false);
     if (TextCacheEntry *button_text =
             get_text_entry(LocalizedAppText(deps.state.system_language_index, AppTextId::SystemClear), text_color);
         button_text && button_text->texture) {
       SDL_Rect dst{clear_button_x + (action_button_w - button_text->w) / 2,
-                   button_y + (button_size - button_text->h) / 2,
+                   button_y + (button_h - button_text->h) / 2,
                    button_text->w,
                    button_text->h};
       SDL_RenderCopy(deps.renderer, button_text->texture, nullptr, &dst);

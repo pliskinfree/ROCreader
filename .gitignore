@@ -23,7 +23,8 @@ H700/logs/
 GKD350HUltra/sysroot_device/
 GKD350HUltra/dist_lowglibc/
 GKD350HUltra/logs/
-GKD350HUltra/Downloads/*.zip
+GKD350HUltra/captures/
+GKD350HUltra/*.tar
 GKD350HUltra/toolchain/*.tar*
 GKD350HUltra/toolchain/cache/
 TrimuiBrick/.build
@@ -53,3 +54,5 @@ RGDS/.rgds_*_files/
 !H700/toolchain/**
 !TrimuiBrick/Downloads/
 !TrimuiBrick/Downloads/**
+!GKD350HUltra/Downloads/
+!GKD350HUltra/Downloads/**

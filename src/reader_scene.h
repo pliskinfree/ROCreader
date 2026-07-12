@@ -74,6 +74,7 @@ struct ReaderSceneRenderServices {
   std::function<void()> clear_clip_rect;
   std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_text_texture;
   std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_reader_text_texture;
+  std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_chapter_sidebar_text_texture;
 };
 
 ReaderSceneInputServices MakeReaderSceneInputServices(
@@ -87,7 +88,8 @@ ReaderSceneRenderServices MakeReaderSceneRenderServices(
     std::function<void(int, int, int, int, SDL_Color, bool)> draw_rect,
     std::function<void()> clamp_text_scroll,
     std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_text_texture,
-    std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_reader_text_texture);
+    std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_reader_text_texture,
+    std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_chapter_sidebar_text_texture = {});
 
 struct ReaderSceneRenderDeps {
   SDL_Renderer *renderer = nullptr;

@@ -17,6 +17,7 @@ void SystemControlsPanel::Draw(const MenuPanelDrawContext &context) {
       context.sidebar_item_pitch,
       context.sidebar_item_h,
       context.scale,
+      deps.input_profile == InputProfile::GKD350HUltra,
       deps.services.draw_rect,
       deps.services.get_text_texture,
       deps.services.get_title_text_texture,

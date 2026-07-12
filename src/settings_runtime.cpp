@@ -80,6 +80,9 @@ void HandleSettingsInput(SettingsRuntimeInputDeps &deps) {
       current_id == SettingId::ContributorAvatars && deps.contributor_avatar_state.grid_active;
   const bool key_calibration_active =
       current_id == SettingId::KeyCalibration && deps.key_calibration_state.panel_active;
+  const bool key_calibration_capturing =
+      current_id == SettingId::KeyCalibration &&
+      deps.key_calibration_state.phase == KeyCalibrationPhase::Capturing;
   const bool version_update_active =
       current_id == SettingId::VersionUpdate && deps.version_update_state.panel_active;
   const bool online_source_active =
@@ -102,6 +105,7 @@ void HandleSettingsInput(SettingsRuntimeInputDeps &deps) {
 
   const SettingId id = current_id;
   if (HandleSelectedSettingsPanelInput(id, deps)) return;
+  if (key_calibration_capturing) return;
 
   if (deps.input.IsJustPressed(Button::Up) || deps.input.IsRepeated(Button::Up)) {
     menu.selected = (menu.selected - 1 + menu_count) % menu_count;
@@ -162,11 +166,11 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
   deps.services.draw_rect(x + menu_width - 1, menu_y, 1, menu_h, SDL_Color{82, 125, 158, 255}, true);
 
   const float scale = deps.layout.ui_scale;
-  const int sidebar_margin_x = ScalePx(scale, 12);
-  const int sidebar_text_pad_x = ScalePx(scale, 24);
-  const int sidebar_item_h = ScalePx(scale, 30);
-  const int sidebar_item_pitch = ScalePx(scale, 42);
-  const int sidebar_indicator_w = ScalePx(scale, 3);
+  const int sidebar_margin_x = ScalePx(scale, gkd_profile ? 18 : 12);
+  const int sidebar_text_pad_x = ScalePx(scale, gkd_profile ? 36 : 24);
+  int sidebar_item_h = ScalePx(scale, gkd_profile ? 42 : 30);
+  int sidebar_item_pitch = ScalePx(scale, gkd_profile ? 58 : 42);
+  const int sidebar_indicator_w = ScalePx(scale, gkd_profile ? 4 : 3);
   int text_left = x + sidebar_text_pad_x;
   int y = menu_y + ScalePx(scale, 84) + deps.layout.settings_content_offset_y;
   int first_menu_item_y = y;
@@ -180,21 +184,33 @@ void DrawSettingsRuntime(SettingsRuntimeRenderDeps &deps) {
   if (compact_sidebar && title_tex && title_tex->w > title_max_w && deps.services.get_text_texture) {
     title_tex = deps.services.get_text_texture(menu_title, title_color);
   }
+  int max_label_h = 0;
+  if (gkd_profile && deps.services.get_text_texture) {
+    for (SettingId item : deps.menu_items) {
+      const std::string label_text = SettingLabel(item, language_index);
+      if (TextCacheEntry *label_tex = deps.services.get_text_texture(label_text, item_color); label_tex) {
+        max_label_h = std::max(max_label_h, label_tex->h);
+      }
+    }
+    sidebar_item_h = std::max(sidebar_item_h, max_label_h + ScalePx(scale, 18));
+    sidebar_item_pitch = std::max(sidebar_item_pitch, sidebar_item_h + ScalePx(scale, 16));
+  }
   int divider_y = menu_y + ScalePx(scale, 68) + deps.layout.settings_content_offset_y;
   if (title_tex && title_tex->texture) {
     const int side_margin = std::max(0, (menu_width - title_tex->w) / 2);
     const int title_x = x + side_margin;
-    const int title_y = menu_y + ScalePx(scale, 8) + deps.layout.settings_content_offset_y;
-    const int title_gap = ScalePx(scale, 8);
+    const int title_y = menu_y + ScalePx(scale, gkd_profile ? 10 : 8) + deps.layout.settings_content_offset_y;
+    const int title_gap = ScalePx(scale, gkd_profile ? 12 : 8);
     divider_y = title_y + title_tex->h + title_gap;
     SDL_Rect td{title_x, title_y, title_tex->w, title_tex->h};
     if (title_tex->w > 0 && title_tex->h > 0) {
       SDL_RenderCopy(deps.renderer, title_tex->texture, nullptr, &td);
     }
   }
-  deps.services.draw_rect(x + ScalePx(scale, 8), divider_y, menu_width - ScalePx(scale, 16), ScalePx(scale, 1),
+  deps.services.draw_rect(x + ScalePx(scale, gkd_profile ? 12 : 8), divider_y,
+                 menu_width - ScalePx(scale, gkd_profile ? 24 : 16), ScalePx(scale, 1),
                  SDL_Color{66, 95, 124, 255}, true);
-  y = divider_y + ScalePx(scale, 12);
+  y = divider_y + ScalePx(scale, gkd_profile ? 18 : 12);
   text_left = x + sidebar_text_pad_x;
   first_menu_item_y = y;
 #else

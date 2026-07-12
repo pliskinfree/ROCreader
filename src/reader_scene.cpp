@@ -75,7 +75,8 @@ ReaderSceneRenderServices MakeReaderSceneRenderServices(
     std::function<void(int, int, int, int, SDL_Color, bool)> draw_rect,
     std::function<void()> clamp_text_scroll,
     std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_text_texture,
-    std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_reader_text_texture) {
+    std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_reader_text_texture,
+    std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_chapter_sidebar_text_texture) {
   return ReaderSceneRenderServices{
       std::move(scale_px),
       std::move(draw_rect),
@@ -88,6 +89,7 @@ ReaderSceneRenderServices MakeReaderSceneRenderServices(
       },
       std::move(get_text_texture),
       std::move(get_reader_text_texture),
+      std::move(get_chapter_sidebar_text_texture),
   };
 }
 
@@ -428,7 +430,8 @@ void ReaderScene::Draw(const ReaderSceneRenderDeps &deps) const {
       overlay_y,
       deps.services.scale_px,
       deps.services.draw_rect,
-      deps.services.get_text_texture,
+      deps.services.get_chapter_sidebar_text_texture ? deps.services.get_chapter_sidebar_text_texture
+                                                     : deps.services.get_text_texture,
   };
   DrawChapterSidebar(chapter_sidebar_deps);
 }

@@ -92,8 +92,10 @@ void DrawContactPanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect, in
   if (hint_text.empty()) return;
 
   const float scale = deps.layout.ui_scale;
+  const bool gkd_profile = deps.input_profile == InputProfile::GKD350HUltra;
   const int safe_x = preview_rect.x + ScalePx(scale, 8);
-  const int safe_y = std::max(preview_rect.y + ScalePx(scale, 12), ContactHintDangerTop(deps.layout));
+  const int safe_y = std::max(preview_rect.y + ScalePx(scale, gkd_profile ? 44 : 12),
+                              ContactHintDangerTop(deps.layout) + ScalePx(scale, gkd_profile ? 24 : 0));
   const int safe_w = std::max(0, preview_rect.w - ScalePx(scale, 16));
   const int safe_h = ScalePx(scale, 46);
   if (safe_w <= 0 || safe_h <= 0) return;

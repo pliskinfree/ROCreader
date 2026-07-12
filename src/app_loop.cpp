@@ -816,6 +816,7 @@ int RunApp(int argc, char **argv) {
   KeyCalibrationState key_calibration_state;
   InitializeKeyCalibrationState(key_calibration_state);
   VersionUpdateState version_update_state{};
+  ConfigureVersionUpdateProfile(version_update_state, input_profile);
   InitializeVersionUpdateState(version_update_state);
   OnlineShelfController online_shelf_controller;
   online_shelf_controller.InitializeFromRuntimeRoot();
@@ -826,6 +827,7 @@ int RunApp(int argc, char **argv) {
   ScreenOffMode screen_off_mode = ScreenOffMode::Awake;
   bool rgds_display_sleep_active = false;
   uint32_t power_key_ignore_until_tick = 0;
+  uint32_t gkd_power_wake_due_tick = 0;
   uint32_t input_wake_next_resync_tick = 0;
   auto resync_input_after_screen_wake = [&]() {
     runtime_log::Line("main: input resync after screen wake");
@@ -1229,6 +1231,10 @@ int RunApp(int argc, char **argv) {
 #ifdef HAVE_SDL2_TTF
   UiTextCacheState ui_text_cache{};
   ui_text_cache.max_text_cache_entries = kTextCacheMaxEntries;
+  UiTextCacheState status_text_cache{};
+  status_text_cache.max_text_cache_entries = kTextCacheMaxEntries;
+  UiTextCacheState menu_text_cache{};
+  menu_text_cache.max_text_cache_entries = kTextCacheMaxEntries;
   auto scaled_font_pt = [&](int pt) {
     return std::max(1, static_cast<int>(std::round(static_cast<float>(pt) * Layout().ui_scale)));
   };
@@ -1241,6 +1247,9 @@ int RunApp(int argc, char **argv) {
   };
   const int body_font_pt = gkd_font_profile ? gkd350h_ultra::kBodyFontPt : scaled_font_pt(16);
   const int title_font_pt = gkd_font_profile ? gkd350h_ultra::kTitleFontPt : scaled_font_pt(24);
+  const int status_font_pt = gkd_font_profile ? 32 : body_font_pt;
+  const int menu_body_font_pt = gkd_font_profile ? gkd350h_ultra::kMenuBodyFontPt : body_font_pt;
+  const int menu_title_font_pt = gkd_font_profile ? gkd350h_ultra::kMenuTitleFontPt : title_font_pt;
   int current_reader_font_pt = reader_font_pt_for_level(config.Get().txt_font_size_level);
   TxtTextServiceState txt_text_service{
       {},
@@ -1297,6 +1306,27 @@ int RunApp(int argc, char **argv) {
   auto get_reader_text_texture = [&](const std::string &text, SDL_Color color) -> TextCacheEntry * {
     open_ui_font();
     return GetUiTextTexture(ui_text_cache, renderer, text, color, UiTextRole::Reader);
+  };
+  auto open_status_font = [&]() {
+    OpenUiFonts(status_text_cache, exe_path, ui_path, status_font_pt, status_font_pt, current_reader_font_pt);
+  };
+  auto get_status_text_texture = [&](const std::string &text, SDL_Color color) -> TextCacheEntry * {
+    if (!gkd_font_profile) return get_text_texture(text, color);
+    open_status_font();
+    return GetUiTextTexture(status_text_cache, renderer, text, color, UiTextRole::Body);
+  };
+  auto open_menu_font = [&]() {
+    OpenUiFonts(menu_text_cache, exe_path, ui_path, menu_body_font_pt, menu_title_font_pt, current_reader_font_pt);
+  };
+  auto get_menu_text_texture = [&](const std::string &text, SDL_Color color) -> TextCacheEntry * {
+    if (!gkd_font_profile) return get_text_texture(text, color);
+    open_menu_font();
+    return GetUiTextTexture(menu_text_cache, renderer, text, color, UiTextRole::Body);
+  };
+  auto get_menu_title_text_texture = [&](const std::string &text, SDL_Color color) -> TextCacheEntry * {
+    if (!gkd_font_profile) return get_title_text_texture(text, color);
+    open_menu_font();
+    return GetUiTextTexture(menu_text_cache, renderer, text, color, UiTextRole::Title);
   };
   rgds::LoadRenderResources(rgds_render_resources, rgds::RenderResourceLoadDeps{
       rgds_runtime,
@@ -1591,7 +1621,8 @@ int RunApp(int argc, char **argv) {
         },
         clamp_text_scroll,
         get_text_texture,
-        get_reader_text_texture);
+        get_reader_text_texture,
+        get_menu_text_texture);
   };
   auto make_rgds_reader_render_deps = [&](SDL_Renderer *target_renderer, float frame_dt, bool tick_modules,
                                           const rgds::ReaderLayout &reader_layout) {
@@ -1660,10 +1691,29 @@ int RunApp(int argc, char **argv) {
           system_control_service.Refresh(levels);
         },
         [&](int delta, SystemControlLevels &levels) {
-          const bool ok = system_control_service.AdjustVolume(delta, levels);
-          if (levels.volume.available) {
-            const int saved_percent =
-                std::clamp((levels.volume.level * 100) / std::max(1, levels.volume.max_level), 0, 100);
+          int saved_percent = app_ui.volume_display_percent;
+          bool ok = false;
+          if (input_profile == InputProfile::GKD350HUltra && volume_controller.UsesSystemVolume()) {
+            ok = volume_controller.AdjustBySteps(delta, saved_percent);
+            if (ok) {
+              const int max_level = volume_controller.MaxLevel();
+              levels.volume.available = true;
+              levels.volume.max_level = max_level;
+              levels.volume.level = std::clamp((saved_percent * max_level + 50) / 100, 0, max_level);
+              runtime_sfx_volume = system_volume_sfx_follows_hardware
+                                       ? SDL_MIX_MAXVOLUME
+                                       : std::clamp((saved_percent * SDL_MIX_MAXVOLUME + 50) / 100,
+                                                    0, SDL_MIX_MAXVOLUME);
+              sfx.SetVolume(runtime_sfx_volume);
+            }
+          } else {
+            ok = system_control_service.AdjustVolume(delta, levels);
+            if (levels.volume.available) {
+              saved_percent =
+                  std::clamp((levels.volume.level * 100) / std::max(1, levels.volume.max_level), 0, 100);
+            }
+          }
+          if (ok) {
             app_ui.volume_display_percent = saved_percent;
             if (config.Mutable().system_volume_percent != saved_percent) {
               config.Mutable().system_volume_percent = saved_percent;
@@ -1826,8 +1876,8 @@ int RunApp(int argc, char **argv) {
           DrawRect(target_renderer ? target_renderer : renderer, x, y, w, h, c, filled);
         },
         get_texture_size,
-        get_text_texture,
-        get_title_text_texture,
+        get_menu_text_texture,
+        get_menu_title_text_texture,
         get_reader_text_texture,
         Utf8Ellipsize,
         draw_volume_overlay,
@@ -1941,7 +1991,7 @@ int RunApp(int argc, char **argv) {
         avatar_badge.BadgeTexture(),
         [](int value) { return ScalePx(value); },
         [&](int x, int y, int w, int h, SDL_Color c, bool filled) { DrawRect(renderer, x, y, w, h, c, filled); },
-        get_text_texture,
+        get_status_text_texture,
     };
   };
   auto make_rgds_bottom_render_deps = [&](uint32_t frame_now,
@@ -2234,17 +2284,26 @@ int RunApp(int argc, char **argv) {
       last_user_input_tick = SDL_GetTicks();
     };
     auto maybe_trigger_auto_sleep = [&]() {
-      if (screen_off_mode != ScreenOffMode::Awake || !use_h700_defaults || !config.Get().lid_close_screen_off) return;
+      const bool supports_auto_sleep =
+          use_h700_defaults || input_profile == InputProfile::GKD350HUltra;
+      if (screen_off_mode != ScreenOffMode::Awake || !supports_auto_sleep || !config.Get().lid_close_screen_off) return;
       const uint32_t now = SDL_GetTicks();
       const uint32_t idle_ms = AutoSleepIntervalMsFromIndex(system_settings_state.auto_sleep_interval_index);
       if (now - last_user_input_tick < idle_ms) return;
-      if (lid_power_controller.TriggerAutoIfEnabled()) {
+      const bool auto_sleep_triggered =
+          input_profile == InputProfile::GKD350HUltra
+              ? lid_power_controller.TriggerPowerKeyScreenOff(input_profile)
+              : lid_power_controller.TriggerAutoIfEnabled();
+      if (auto_sleep_triggered) {
         if (input_profile == InputProfile::RGDS) {
           rgds_display_sleep_active = true;
           last_user_input_tick = now;
           runtime_log::Line("main: RGDS auto sleep activated");
         } else {
           screen_off_mode = ScreenOffMode::Auto;
+          if (input_profile == InputProfile::GKD350HUltra) {
+            runtime_log::Line("main: GKD350HUltra auto sleep activated");
+          }
         }
       }
     };
@@ -2330,13 +2389,61 @@ int RunApp(int argc, char **argv) {
     }
 
     if (screen_off_mode != ScreenOffMode::Awake) {
+      if (input_profile == InputProfile::GKD350HUltra &&
+          gkd_power_wake_due_tick != 0 &&
+          SDL_TICKS_PASSED(power_now, gkd_power_wake_due_tick)) {
+        gkd_power_wake_due_tick = 0;
+        const bool wake_ok = lid_power_controller.TriggerScreenOn(input_profile);
+        runtime_log::Line(std::string("main: GKD350HUltra deferred power-key wake ") +
+                          (wake_ok ? "completed" : "failed"));
+        if (wake_ok) {
+          screen_off_mode = ScreenOffMode::Awake;
+          last_user_input_tick = SDL_GetTicks();
+          power_key_ignore_until_tick = last_user_input_tick + 900;
+          resync_input_after_screen_wake();
+        }
+        input.ResetAll();
+        app_shell.ResetFrameClock(prev_ticks);
+        continue;
+      }
+
       const bool h700_hardware_wake_seen =
           (input_profile == InputProfile::H700Default ||
            input_profile == InputProfile::H70034xxSp ||
            input_profile == InputProfile::H70035xxH) &&
           any_non_power_button_just_pressed();
-      if ((power_input_allowed && input.IsJustPressed(Button::Power)) || h700_hardware_wake_seen) {
-        lid_power_controller.TriggerScreenOn(input_profile);
+      const bool gkd_auto_sleep_wake_seen =
+          input_profile == InputProfile::GKD350HUltra &&
+          screen_off_mode == ScreenOffMode::Auto &&
+          any_non_power_button_just_pressed();
+      const bool power_wake_seen =
+          power_input_allowed && input.IsJustPressed(Button::Power);
+      if (input_profile == InputProfile::GKD350HUltra && power_wake_seen) {
+        // ROCKNIX also handles this physical key. Wait until its handler has
+        // observed the original display state, then force the compositor
+        // output on. Doing this immediately races ROCKNIX and turns the panel
+        // straight back off; doing nothing leaves the Sway output disabled.
+        gkd_power_wake_due_tick = power_now + 650;
+        power_key_ignore_until_tick = power_now + 1200;
+        input.SuppressPowerUntilRelease();
+        runtime_log::Line("main: GKD350HUltra deferred power-key wake scheduled");
+        input.ResetAll();
+        app_shell.ResetFrameClock(prev_ticks);
+        continue;
+      }
+      if (power_wake_seen ||
+          h700_hardware_wake_seen || gkd_auto_sleep_wake_seen) {
+        const bool wake_ok = lid_power_controller.TriggerScreenOn(input_profile);
+        if (input_profile == InputProfile::GKD350HUltra) {
+          runtime_log::Line(std::string("main: GKD350HUltra wake ") +
+                            (wake_ok ? "completed" : "failed"));
+          gkd_power_wake_due_tick = 0;
+          if (!wake_ok) {
+            input.ResetAll();
+            app_shell.ResetFrameClock(prev_ticks);
+            continue;
+          }
+        }
         screen_off_mode = ScreenOffMode::Awake;
         last_user_input_tick = SDL_GetTicks();
         power_key_ignore_until_tick = last_user_input_tick + 450;
@@ -2354,6 +2461,9 @@ int RunApp(int argc, char **argv) {
           runtime_log::Line("main: RGDS manual sleep activated");
         } else {
           screen_off_mode = ScreenOffMode::Manual;
+          if (input_profile == InputProfile::GKD350HUltra) {
+            gkd_power_wake_due_tick = 0;
+          }
         }
         last_user_input_tick = SDL_GetTicks();
         power_key_ignore_until_tick = last_user_input_tick + 450;
@@ -2400,8 +2510,16 @@ int RunApp(int argc, char **argv) {
       if (volume_controller.RefreshPercent(synced_volume_percent)) {
         app_ui.volume_display_percent = synced_volume_percent;
         config.Mutable().system_volume_percent = synced_volume_percent;
+        if (input_profile == InputProfile::GKD350HUltra) {
+          const int max_level = volume_controller.MaxLevel();
+          system_settings_state.levels.volume.available = true;
+          system_settings_state.levels.volume.max_level = max_level;
+          system_settings_state.levels.volume.level =
+              std::clamp((synced_volume_percent * max_level + 50) / 100, 0, max_level);
+        }
       }
-      if (system_control_service.RefreshVolumeOnly(system_settings_state.levels.volume) &&
+      if (input_profile != InputProfile::GKD350HUltra &&
+          system_control_service.RefreshVolumeOnly(system_settings_state.levels.volume) &&
           system_settings_state.levels.volume.available) {
         const int menu_volume_percent = std::clamp(
             (system_settings_state.levels.volume.level * 100) /
@@ -2774,6 +2892,8 @@ int RunApp(int argc, char **argv) {
   DestroyUiAssets(ui_assets, forget_texture_size);
 #ifdef HAVE_SDL2_TTF
   ShutdownUiTextCache(ui_text_cache, forget_texture_size);
+  ShutdownUiTextCache(status_text_cache, forget_texture_size);
+  ShutdownUiTextCache(menu_text_cache, forget_texture_size);
 #endif
   destroy_shelf_render_cache();
   pdf_runtime.Close();

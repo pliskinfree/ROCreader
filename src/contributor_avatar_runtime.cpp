@@ -506,23 +506,25 @@ void DrawContributorAvatarPreview(const ContributorAvatarRenderDeps &deps) {
   }
 
   const float scale = deps.ui_scale;
-  const int safe_top = deps.preview_rect.y + ScalePx(scale, 35);
-  const int safe_bottom = deps.preview_rect.y + deps.preview_rect.h - ScalePx(scale, 35);
-  const int safe_left = deps.preview_rect.x + ScalePx(scale, 28);
-  const int safe_right = deps.preview_rect.x + deps.preview_rect.w - ScalePx(scale, 28);
+  const bool gkd_profile = deps.gkd_profile;
+  const int safe_top = deps.preview_rect.y + ScalePx(scale, gkd_profile ? 50 : 35);
+  const int safe_bottom = deps.preview_rect.y + deps.preview_rect.h - ScalePx(scale, gkd_profile ? 48 : 35);
+  const int safe_left = deps.preview_rect.x + ScalePx(scale, gkd_profile ? 24 : 28);
+  const int safe_right = deps.preview_rect.x + deps.preview_rect.w - ScalePx(scale, gkd_profile ? 24 : 28);
   const int safe_w = std::max(0, safe_right - safe_left);
   const int safe_h = std::max(0, safe_bottom - safe_top);
   if (safe_w <= 0 || safe_h <= 0) return;
 
-  const int col_gap = ScalePx(scale, 22);
-  const int row_gap = ScalePx(scale, 16);
-  const int name_gap = ScalePx(scale, 8);
-  const int name_h = ScalePx(scale, 20);
+  const int col_gap = ScalePx(scale, gkd_profile ? 14 : 22);
+  const int row_gap = ScalePx(scale, gkd_profile ? 20 : 16);
+  const int name_gap = ScalePx(scale, gkd_profile ? 12 : 8);
+  const int name_h = ScalePx(scale, gkd_profile ? 34 : 20);
   const int tile_w = std::max(ScalePx(scale, 60), (safe_w - col_gap * 2) / 3);
   const int row_pitch =
       std::clamp(static_cast<int>(std::floor((safe_h - row_gap * 1.5f) / 2.5f)),
-                 ScalePx(scale, 88), ScalePx(scale, 154));
-  const int image_size = std::max(ScalePx(scale, 48), std::min(tile_w, row_pitch - name_gap - name_h - row_gap));
+                 ScalePx(scale, gkd_profile ? 150 : 88), ScalePx(scale, gkd_profile ? 212 : 154));
+  const int image_size = std::max(ScalePx(scale, gkd_profile ? 72 : 48),
+                                  std::min(tile_w, row_pitch - name_gap - name_h - row_gap));
   const int x_base = safe_left + std::max(0, (safe_w - (tile_w * 3 + col_gap * 2)) / 2);
   const int top_inner_gap = std::max(ScalePx(scale, 12), safe_h / 24);
   const int y_base = safe_top + top_inner_gap;

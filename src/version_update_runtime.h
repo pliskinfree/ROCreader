@@ -55,6 +55,7 @@ struct VersionUpdateState {
   std::shared_ptr<VersionUpdateDownloadThreadState> download_thread_state;
   std::atomic<bool> download_thread_done = false;
   std::atomic<bool> download_thread_success = false;
+  InputProfile input_profile = InputProfile::DesktopDefault;
 };
 
 struct VersionUpdateCallbacks {
@@ -68,6 +69,7 @@ struct VersionUpdateRenderDeps {
   bool light_theme = false;
   int language_index = 0;
   float ui_scale = 1.0f;
+  bool gkd_profile = false;
   std::function<void(int, int, int, int, SDL_Color, bool)> draw_rect;
   std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_text_texture;
   std::function<TextCacheEntry *(const std::string &, SDL_Color)> get_emphasis_text_texture;
@@ -75,6 +77,7 @@ struct VersionUpdateRenderDeps {
 
 bool HandleVersionUpdateInput(const InputManager &input, VersionUpdateState &state,
                               const VersionUpdateCallbacks &callbacks);
+void ConfigureVersionUpdateProfile(VersionUpdateState &state, InputProfile input_profile);
 bool BeginVersionUpdateDownload(VersionUpdateState &state);
 void InitializeVersionUpdateState(VersionUpdateState &state,
                                   const std::filesystem::path &runtime_root = {});

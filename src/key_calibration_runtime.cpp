@@ -1,6 +1,7 @@
 #include "key_calibration_runtime.h"
 
 #include "app_language.h"
+#include "gkd_menu_button_metrics.h"
 #include "ui_text_cache.h"
 
 #include <algorithm>
@@ -62,6 +63,20 @@ bool IsStableDirectionLinuxKey(Button button, int code) {
   }
 }
 
+bool IsGkdDirectionLinuxKey(Button button, int code) {
+  constexpr int kBtnDpadUp = 544;
+  constexpr int kBtnDpadDown = 545;
+  constexpr int kBtnDpadLeft = 546;
+  constexpr int kBtnDpadRight = 547;
+  switch (button) {
+  case Button::Up: return code == kBtnDpadUp;
+  case Button::Down: return code == kBtnDpadDown;
+  case Button::Left: return code == kBtnDpadLeft;
+  case Button::Right: return code == kBtnDpadRight;
+  default: return false;
+  }
+}
+
 bool IsCalibratableBinding(Button button, InputProfile input_profile, const RawInputBinding &binding) {
   if ((binding.source == RawInputSource::GameControllerAxis ||
        binding.source == RawInputSource::JoystickAxis ||
@@ -73,6 +88,10 @@ bool IsCalibratableBinding(Button button, InputProfile input_profile, const RawI
     return input_profile == InputProfile::RGDS || IsDirectionButton(button);
   }
   if (binding.source == RawInputSource::LinuxKey) {
+    if (input_profile == InputProfile::GKD350HUltra) {
+      return IsGkdDirectionLinuxKey(button, binding.code) ||
+             (!IsDirectionButton(button) && binding.pressed);
+    }
     return input_profile == InputProfile::RGDS || IsStableDirectionLinuxKey(button, binding.code);
   }
   return binding.source == RawInputSource::GameControllerButton ||
@@ -540,8 +559,8 @@ void DrawKeyCalibrationPreview(const KeyCalibrationRenderDeps &deps) {
   const SDL_Color danger_color{255, 184, 164, 255};
   const int center_x = deps.preview_rect.x + deps.preview_rect.w / 2;
   const int center_y = deps.preview_rect.y + deps.preview_rect.h / 2;
-  const int button_h = ScalePx(deps.scale, 38);
-  const int button_w = ScalePx(deps.scale, 154);
+  const int button_h = deps.gkd_profile ? gkd_menu::ControlH(deps.scale) : ScalePx(deps.scale, 38);
+  const int button_w = deps.gkd_profile ? gkd_menu::WideButtonW(deps.scale) : ScalePx(deps.scale, 154);
   const int title_y = deps.preview_rect.y + ScalePx(deps.scale, 74);
 
   if (deps.state.phase == KeyCalibrationPhase::Capturing) {

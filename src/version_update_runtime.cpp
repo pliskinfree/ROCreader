@@ -1,5 +1,6 @@
 #include "version_update_runtime.h"
 #include "app_language.h"
+#include "gkd_menu_button_metrics.h"
 #include "online_source_transport.h"
 
 #include <algorithm>
@@ -22,6 +23,8 @@ constexpr int kProgressBarWidth = 228;
 constexpr int kProgressBarHeight = 16;
 constexpr const char *kGithubContentsApi =
     "https://api.github.com/repos/LPF970915/ROCreader/contents/Downloads?ref=main";
+constexpr const char *kGkdGithubContentsApi =
+    "https://api.github.com/repos/LPF970915/ROCreader/contents/GKD350HUltra/Downloads?ref=main";
 constexpr const char *kUpdateContentsUrlEnv = "ROCREADER_UPDATE_CONTENTS_URL";
 constexpr const char *kPendingMarkerFilename = "ROCreader_update_pending.txt";
 constexpr const char *kUserAgent = "ROCreader-Updater";
@@ -77,9 +80,11 @@ std::string ToLowerAscii(std::string text) {
   return text;
 }
 
-std::string ResolveGithubContentsUrl() {
+std::string ResolveGithubContentsUrl(InputProfile input_profile) {
   const char *env_url = std::getenv(kUpdateContentsUrlEnv);
-  if (!env_url || !*env_url) return kGithubContentsApi;
+  if (!env_url || !*env_url) {
+    return input_profile == InputProfile::GKD350HUltra ? kGkdGithubContentsApi : kGithubContentsApi;
+  }
 
   const std::string url = env_url;
   const std::string tree_prefix = "https://github.com/";
@@ -496,8 +501,18 @@ struct RemoteArchiveInfo {
   uint64_t size_bytes = 0;
 };
 
-bool FetchLatestRemoteArchive(RemoteArchiveInfo &out_info) {
-  const std::string contents_url = ResolveGithubContentsUrl();
+bool IsPackageForProfile(const std::string &filename, InputProfile input_profile) {
+  const std::string lower = ToLowerAscii(filename);
+  if (input_profile == InputProfile::GKD350HUltra) {
+    return lower.find("gkd350h ultra") != std::string::npos ||
+           lower.find("gkd350hultra") != std::string::npos;
+  }
+  return lower.find("gkd350h ultra") == std::string::npos &&
+         lower.find("gkd350hultra") == std::string::npos;
+}
+
+bool FetchLatestRemoteArchive(RemoteArchiveInfo &out_info, InputProfile input_profile) {
+  const std::string contents_url = ResolveGithubContentsUrl(input_profile);
   const std::string json = HttpGetText(contents_url);
   AppendUpdateLog("Fetched GitHub contents metadata url=" + contents_url + " bytes=" + std::to_string(json.size()));
   if (json.empty()) return false;
@@ -521,6 +536,7 @@ bool FetchLatestRemoteArchive(RemoteArchiveInfo &out_info) {
     if (!ExtractJsonStringField(object_text, "name", candidate.filename)) continue;
     std::string lower_name = ToLowerAscii(candidate.filename);
     if (lower_name.size() < 4 || lower_name.substr(lower_name.size() - 4) != ".zip") continue;
+    if (!IsPackageForProfile(candidate.filename, input_profile)) continue;
     if (!TryExtractVersionToken(candidate.filename, candidate.version)) continue;
     if (!ExtractJsonStringField(object_text, "download_url", candidate.download_url)) continue;
     ExtractJsonStringField(object_text, "url", candidate.api_url);
@@ -620,7 +636,7 @@ void ClearInstalledPendingArtifacts(const std::filesystem::path &downloads_dir,
       continue;
     }
     const std::string filename = it->path().filename().string();
-    if (!IsTrimuiBrickPackageName(filename)) continue;
+    if (!IsTrimuiBrickPackageName(filename) && !IsPackageForProfile(filename, InputProfile::GKD350HUltra)) continue;
     std::string version;
     if (!TryExtractVersionToken(filename, version)) continue;
     if (!IsVersionNewer(version, installed_version)) {
@@ -739,7 +755,7 @@ bool BeginVersionUpdateDownloadInternal(VersionUpdateState &state) {
   }
 
   RemoteArchiveInfo remote_info{};
-  if (!FetchLatestRemoteArchive(remote_info)) {
+  if (!FetchLatestRemoteArchive(remote_info, state.input_profile)) {
     state.status = VersionUpdateStatus::NoNetwork;
     state.download_in_progress = false;
     return false;
@@ -847,6 +863,10 @@ bool BeginVersionUpdateDownloadInternal(VersionUpdateState &state) {
   return true;
 }
 } // namespace
+
+void ConfigureVersionUpdateProfile(VersionUpdateState &state, InputProfile input_profile) {
+  state.input_profile = input_profile;
+}
 
 bool BeginVersionUpdateDownload(VersionUpdateState &state) {
   return BeginVersionUpdateDownloadInternal(state);
@@ -989,8 +1009,7 @@ void DrawVersionUpdatePreview(const VersionUpdateRenderDeps &deps) {
   const SDL_Color success_color = deps.light_theme ? SDL_Color{54, 132, 94, 255} : SDL_Color{116, 224, 165, 255};
 
   const float scale = std::max(0.1f, deps.ui_scale);
-  const int button_base_w = ScalePx(scale, kButtonWidth);
-  const int button_h = ScalePx(scale, kButtonHeight + 4);
+  const int button_base_w = deps.gkd_profile ? gkd_menu::WideButtonW(scale) : ScalePx(scale, kButtonWidth);
   const int button_pad_x = ScalePx(scale, 24);
   const int progress_bar_w = ScalePx(scale, kProgressBarWidth);
   const int progress_bar_h = ScalePx(scale, kProgressBarHeight);
@@ -1015,8 +1034,14 @@ void DrawVersionUpdatePreview(const VersionUpdateRenderDeps &deps) {
                                                 std::string(LocalizedAppText(deps.language_index, AppTextId::VersionCheckAndUpdate)),
                                                 text_color)
                                           : nullptr;
+  const int button_h = deps.gkd_profile
+                           ? gkd_menu::ControlH(scale)
+                           : std::max(ScalePx(scale, kButtonHeight + 4),
+                                      (button_text_entry ? button_text_entry->h : 0) + ScalePx(scale, 8));
   const int button_width =
-      std::max(button_base_w, (button_text_entry ? button_text_entry->w : 0) + button_pad_x * 2);
+      deps.gkd_profile
+          ? button_base_w
+          : std::max(button_base_w, (button_text_entry ? button_text_entry->w : 0) + button_pad_x * 2);
   const bool button_selected = deps.state.panel_active && !deps.state.download_in_progress;
   const int button_x = center_x - button_width / 2;
   const int button_y = line2_y - button_h / 2;

@@ -1,6 +1,7 @@
 #include "online_source_panel.h"
 
 #include "app_language.h"
+#include "gkd_menu_button_metrics.h"
 
 #include <algorithm>
 #include <cmath>
@@ -184,6 +185,7 @@ void DrawOnlineSourcePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rec
                            int language_index, int first_menu_item_y,
                            int sidebar_item_pitch, int sidebar_item_h, float scale) {
   const OnlineSourceState &state = deps.online_source_state;
+  const bool gkd_profile = deps.input_profile == InputProfile::GKD350HUltra;
   const bool light = deps.cfg.theme != 0;
   const SDL_Color divider_color{66, 95, 124, 255};
   const SDL_Color border = light ? SDL_Color{130, 145, 160, 255} : SDL_Color{73, 111, 146, 255};
@@ -205,7 +207,7 @@ void DrawOnlineSourcePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rec
 
   const int left = preview_rect.x + ScalePx(scale, 22);
   const int right = preview_rect.x + preview_rect.w - ScalePx(scale, 20);
-  const int divider_y = first_menu_item_y - ScalePx(scale, 12);
+  const int divider_y = first_menu_item_y - ScalePx(scale, gkd_profile ? 18 : 12);
   if (TextCacheEntry *title = deps.services.get_title_text_texture
                                  ? deps.services.get_title_text_texture(OnlineText(language_index, 0), text)
                                  : nullptr;
@@ -223,10 +225,11 @@ void DrawOnlineSourcePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rec
 
   const int row_h = ScalePx(scale, 31);
   const int row_gap = ScalePx(scale, 7);
-  // Keep the URL action buttons at their 2.37-era row after inserting Key Calibration.
+  // On GKD the action row visually continues the left-side Exit row.
   int button_anchor_row_index = 0;
   for (size_t i = 0; i < deps.menu_items.size(); ++i) {
-    if (deps.menu_items[i] == SettingId::UrlEntry) {
+    const SettingId anchor = gkd_profile ? SettingId::ExitApp : SettingId::UrlEntry;
+    if (deps.menu_items[i] == anchor) {
       button_anchor_row_index = static_cast<int>(i);
       break;
     }
@@ -271,33 +274,53 @@ void DrawOnlineSourcePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rec
 
   const char *labels[3] = {OnlineText(language_index, 1), OnlineText(language_index, 2),
                            OnlineText(language_index, 3)};
-  const int button_gap = ScalePx(scale, 12);
+  const int button_gap = gkd_profile ? gkd_menu::ButtonGap(scale) : ScalePx(scale, 12);
   const int button_area_w = std::max(1, right - left);
-  const int button_w = std::max(ScalePx(scale, 92), (button_area_w - button_gap * 2) / 3);
+  const int button_w = gkd_profile
+                           ? std::min(gkd_menu::WideButtonW(scale),
+                                      std::max(ScalePx(scale, 92), (button_area_w - button_gap * 2) / 3))
+                           : std::max(ScalePx(scale, 92), (button_area_w - button_gap * 2) / 3);
+  int action_text_h = 0;
+  for (const char *label : labels) {
+    if (TextCacheEntry *entry = GetTextEntry(deps, label, text); entry) {
+      action_text_h = std::max(action_text_h, entry->h);
+    }
+  }
+  const int effective_button_h = gkd_profile ? gkd_menu::ControlH(scale)
+                                             : std::max(button_h, action_text_h + ScalePx(scale, 8));
+  const int effective_button_y = button_y + (button_h - effective_button_h) / 2;
+  const int buttons_total_w = button_w * 3 + button_gap * 2;
+  const int buttons_left = gkd_profile ? std::clamp(right - buttons_total_w - ScalePx(scale, 10), left,
+                                                    std::max(left, right - buttons_total_w))
+                                       : left;
   for (int i = 0; i < 3; ++i) {
-    const int bx = left + i * (button_w + button_gap);
+    const int bx = buttons_left + i * (button_w + button_gap);
     const bool selected = state.panel_active && state.selected_row == ButtonRowStart(state) && state.selected_button == i;
-    deps.services.draw_rect(bx, button_y, button_w, button_h,
+    deps.services.draw_rect(bx, effective_button_y, button_w, effective_button_h,
                             selected ? SDL_Color{70, 126, 164, 238}
                                      : (light ? SDL_Color{218, 224, 230, 238}
                                               : SDL_Color{45, 61, 78, 238}),
                             true);
-    deps.services.draw_rect(bx, button_y, button_w, button_h, selected ? accent : border, false);
+    deps.services.draw_rect(bx, effective_button_y, button_w, effective_button_h, selected ? accent : border, false);
     if (TextCacheEntry *label = deps.services.get_text_texture(labels[i], text); label && label->texture) {
       SDL_Rect dst{bx + std::max(0, (button_w - label->w) / 2),
-                   button_y + std::max(0, (button_h - label->h) / 2),
+                   effective_button_y + std::max(0, (effective_button_h - label->h) / 2),
                    label->w,
                    label->h};
       SDL_RenderCopy(deps.renderer, label->texture, nullptr, &dst);
     }
   }
 
-  const int status_y = button_y - ScalePx(scale, 28);
+  const int status_h = std::max(ScalePx(scale, 22),
+                                (GetTextEntry(deps, LocalizedStatus(state, language_index), accent)
+                                     ? GetTextEntry(deps, LocalizedStatus(state, language_index), accent)->h
+                                     : 0) + ScalePx(scale, 4));
+  const int status_y = effective_button_y - status_h - ScalePx(scale, 6);
   const int bar_w = (state.connecting || state.connect_pending) ? std::max(ScalePx(scale, 76), (right - left) / 4) : 0;
   const int gap = ScalePx(scale, 10);
   const int status_w = std::max(1, right - left - (bar_w > 0 ? bar_w + gap : 0));
   DrawClippedMarqueeText(deps, LocalizedStatus(state, language_index),
-                         SDL_Rect{left, status_y, status_w, ScalePx(scale, 22)}, accent);
+                         SDL_Rect{left, status_y, status_w, status_h}, accent);
   if (state.connecting || state.connect_pending) {
     const int bar_x = left + status_w + gap;
     const int bar_y = status_y + ScalePx(scale, 9);

@@ -37,6 +37,24 @@ constexpr std::array<KeyGuideLine, 9> kKeyGuideLines = {{
     {"Vol+ / Vol-", AppTextId::KeyGuideActionVolume},
 }};
 
+const char *GkdKeyGuideTitle(int language_index) {
+  static constexpr std::array<const char *, 12> kTitles = {{
+      u8"GKD350HUltra \u4e13\u5c5e\u6620\u5c04",
+      u8"GKD350HUltra \u5c08\u5c6c\u6620\u5c04",
+      "GKD350HUltra Mapping",
+      "Mapa GKD350HUltra",
+      "Mappage GKD350HUltra",
+      "GKD350HUltra-Belegung",
+      u8"GKD350HUltra \u5c02\u7528\u30de\u30c3\u30d7",
+      u8"GKD350HUltra \uc804\uc6a9 \ub9e4\ud551",
+      u8"\u062a\u062e\u0637\u064a\u0637 GKD350HUltra",
+      u8"\u0420\u0430\u0441\u043a\u043b\u0430\u0434\u043a\u0430 GKD350HUltra",
+      "Mapa GKD350HUltra",
+      u8"S\u01a1 \u0111\u1ed3 GKD350HUltra",
+  }};
+  return kTitles[static_cast<size_t>(ClampSystemLanguageIndex(language_index))];
+}
+
 struct StaticKeyGuide {
   const char *title;
   std::array<StaticKeyGuideLine, 10> lines;
@@ -283,10 +301,11 @@ void DrawKeyGuidePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect,
   };
 
   const bool rgds_profile = deps.input_profile == InputProfile::RGDS;
+  const bool gkd_profile = deps.input_profile == InputProfile::GKD350HUltra;
   const float scale = deps.layout.ui_scale;
-  const int left = preview_rect.x + ScalePx(scale, rgds_profile ? 12 : 22);
-  const int right = preview_rect.x + preview_rect.w - ScalePx(scale, rgds_profile ? 12 : 20);
-  const int divider_y = first_row_y - ScalePx(scale, 12);
+  const int left = preview_rect.x + ScalePx(scale, rgds_profile ? 12 : (gkd_profile ? 32 : 22));
+  const int right = preview_rect.x + preview_rect.w - ScalePx(scale, rgds_profile ? 12 : (gkd_profile ? 32 : 20));
+  const int divider_y = first_row_y - ScalePx(scale, gkd_profile ? 18 : 12);
   const StaticKeyGuide *rgds_guide = nullptr;
   if (rgds_profile) {
     rgds_guide = &kRgdsKeyGuides[static_cast<size_t>(std::clamp(language_index, 0,
@@ -300,23 +319,24 @@ void DrawKeyGuidePanel(SettingsRuntimeRenderDeps &deps, SDL_Rect preview_rect,
   }
   const std::string profile_title =
       rgds_guide ? rgds_guide->title
-                 : (deps.has_calibrated_keymap ? CalibratedKeyGuideTitle(language_index)
+                 : (gkd_profile ? GkdKeyGuideTitle(language_index)
+                    : deps.has_calibrated_keymap ? CalibratedKeyGuideTitle(language_index)
                                                 : LocalizedAppText(language_index, profile_text_id));
   const int max_text_w = std::max(0, right - left);
   if (TextCacheEntry *profile = get_text(profile_title, title_color, true); profile && profile->texture) {
-    SDL_Rect dst{left, divider_y - profile->h - ScalePx(scale, 8), profile->w, profile->h};
+    SDL_Rect dst{left, divider_y - profile->h - ScalePx(scale, gkd_profile ? 12 : 8), profile->w, profile->h};
     SDL_RenderCopy(deps.renderer, profile->texture, nullptr, &dst);
   }
-  deps.services.draw_rect(preview_rect.x + ScalePx(scale, 10),
+  deps.services.draw_rect(preview_rect.x + ScalePx(scale, gkd_profile ? 18 : 10),
                  divider_y,
-                 std::max(0, preview_rect.w - ScalePx(scale, 20)),
+                 std::max(0, preview_rect.w - ScalePx(scale, gkd_profile ? 36 : 20)),
                  ScalePx(scale, 1),
                  divider_color,
                  true);
 
-  const int line_gap = ScalePx(scale, 4);
-  const int row_gap = ScalePx(scale, 10);
-  const int start_y = divider_y + ScalePx(scale, 16);
+  const int line_gap = ScalePx(scale, gkd_profile ? 8 : 4);
+  const int row_gap = ScalePx(scale, gkd_profile ? 16 : 10);
+  const int start_y = divider_y + ScalePx(scale, gkd_profile ? 24 : 16);
   int cursor_y = start_y;
   const size_t line_count = rgds_guide ? rgds_guide->lines.size() : kKeyGuideLines.size();
   for (size_t i = 0; i < line_count; ++i) {

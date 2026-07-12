@@ -16,12 +16,11 @@ public:
   bool UsesSystemVolume() const;
   bool AdjustUp();
   bool AdjustDown();
+  bool AdjustBySteps(int delta_steps, int &out_percent);
   bool RefreshPercent(int &out_percent);
   int MaxLevel() const;
 
 private:
-  bool AdjustBySteps(int delta_steps, int &out_percent);
-
   bool prefer_system_ = false;
   SystemControlService service_;
   SystemControlLevels levels_;

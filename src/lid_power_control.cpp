@@ -116,6 +116,33 @@ bool IsH700InputProfile(InputProfile input_profile) {
          input_profile == InputProfile::H70035xxH;
 }
 
+bool SetGkd350HUltraDisplayPower(bool on) {
+  const char *env_name = on ? "ROCREADER_GKD350H_SCREEN_ON_COMMAND"
+                            : "ROCREADER_GKD350H_SCREEN_OFF_COMMAND";
+  if (const char *command = std::getenv(env_name); command && *command) {
+    const bool ok = RunCommandQuiet(command);
+    runtime_log::Line(std::string("lid_power: GKD350HUltra display ") +
+                      (on ? "on" : "off") + " via env command rc=" +
+                      (ok ? "0" : "nonzero"));
+    return ok;
+  }
+
+  // ROCKNIX drives the built-in DSI panel through Sway/DRM. fb0/blank is
+  // present for compatibility but does not power down this panel. Use the
+  // compositor's idempotent output power command so a hardware power-key
+  // wake cannot accidentally toggle the display off again.
+  const std::string output = EnvOrDefault("ROCREADER_GKD350H_OUTPUT", "DSI-1");
+  const std::string command =
+      "env XDG_RUNTIME_DIR=/var/run/0-runtime-dir WAYLAND_DISPLAY=wayland-1 "
+      "SWAYSOCK=/var/run/0-runtime-dir/sway-ipc.0.sock swaymsg output " +
+      EscapeShellArg(output) + " power " + (on ? "on" : "off");
+  const bool ok = RunCommandQuiet(command);
+  runtime_log::Line(std::string("lid_power: GKD350HUltra display ") +
+                    (on ? "on" : "off") + " via sway output=" + output +
+                    " rc=" + (ok ? "0" : "nonzero"));
+  return ok;
+}
+
 LidPowerController::LidPowerController(std::filesystem::path power_script_path)
     : power_script_path_(std::move(power_script_path)) {}
 
@@ -145,6 +172,10 @@ bool LidPowerController::TriggerAutoIfEnabled() const {
 }
 
 bool LidPowerController::TriggerPowerKeyScreenOff(InputProfile input_profile) const {
+  if (input_profile == InputProfile::GKD350HUltra) {
+    return SetGkd350HUltraDisplayPower(false);
+  }
+
   if (input_profile == InputProfile::TrimuiBrick) {
     if (const char *command = std::getenv("ROCREADER_TRIMUI_POWER_KEY_SCREEN_OFF_COMMAND");
         command && *command) {
@@ -169,6 +200,10 @@ bool LidPowerController::TriggerPowerKeyScreenOff(InputProfile input_profile) co
 }
 
 bool LidPowerController::TriggerScreenOn(InputProfile input_profile) const {
+  if (input_profile == InputProfile::GKD350HUltra) {
+    return SetGkd350HUltraDisplayPower(true);
+  }
+
   if (input_profile == InputProfile::TrimuiBrick) {
     if (const char *command = std::getenv("ROCREADER_TRIMUI_SCREEN_ON_COMMAND"); command && *command) {
       return RunCommandQuiet(command);

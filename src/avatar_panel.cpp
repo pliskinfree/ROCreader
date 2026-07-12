@@ -18,6 +18,7 @@ void AvatarPanel::Draw(const MenuPanelDrawContext &context) {
       deps.contributor_avatar_state,
       context.language_index,
       context.scale,
+      deps.input_profile == InputProfile::GKD350HUltra,
       deps.services.draw_rect,
       deps.services.get_text_texture,
   });
