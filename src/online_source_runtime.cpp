@@ -274,12 +274,13 @@ std::vector<OnlineSourceEntry> LoadSources(const std::filesystem::path &config_p
 
 void InitializeOnlineSourceState(OnlineSourceState &state,
                                  const std::filesystem::path &config_path,
-                                 const std::filesystem::path &download_root) {
+                                 const std::filesystem::path &download_root,
+                                 bool create_default_config) {
   state.config_path = config_path;
   state.download_root = download_root;
   std::error_code ec;
   std::filesystem::create_directories(state.download_root, ec);
-  EnsureDefaultConfigExists(state.config_path);
+  if (create_default_config) EnsureDefaultConfigExists(state.config_path);
   ReloadOnlineSourceConfig(state);
 }
 

@@ -45,8 +45,19 @@ void OnlineShelfController::Initialize(const std::filesystem::path &config_path,
 void OnlineShelfController::InitializeFromRuntimeRoot(const std::filesystem::path &runtime_root) {
   const std::filesystem::path resolved_root = ResolveOnlineRuntimeRoot(runtime_root);
   std::filesystem::path online_sources_path = resolved_root / "online_sources.ini";
+  bool explicit_online_sources = false;
   if (const char *override_path = std::getenv(kOnlineSourcesPathEnv); override_path && *override_path) {
     online_sources_path = std::filesystem::path(override_path);
+    explicit_online_sources = true;
+  }
+  if (explicit_online_sources) {
+    std::error_code ec;
+    if (!std::filesystem::exists(online_sources_path, ec) || ec) {
+      runtime_log::Line("online: configured URL sources file is not installed");
+      InitializeOnlineSourceState(state_, online_sources_path, resolved_root / "Downloads", false);
+      last_connected_ = state_.connected;
+      return;
+    }
   }
   Initialize(online_sources_path, resolved_root / "Downloads");
 }

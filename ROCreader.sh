@@ -23,14 +23,28 @@ export ROCREADER_FULL_INPUT_LOG="${ROCREADER_FULL_INPUT_LOG:-0}"
 export ROCREADER_RUNTIME_LOG="${ROCREADER_RUNTIME_LOG:-1}"
 export ROCREADER_LOG_MAX_BYTES="${ROCREADER_LOG_MAX_BYTES:-524288}"
 export ROCREADER_UPDATE_CONTENTS_URL="${ROCREADER_UPDATE_CONTENTS_URL:-https://github.com/LPF970915/ROCreader/tree/main/H700/Downloads}"
-if [ -x "$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch" ]; then
-  export ROCREADER_MANUAL_WEB_FETCH="${ROCREADER_MANUAL_WEB_FETCH:-$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch}"
-  if [ -x "$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch_zip" ]; then
-    export ROCREADER_MANUAL_WEB_ZIP_FETCH="${ROCREADER_MANUAL_WEB_ZIP_FETCH:-$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch_zip}"
+export ROCREADER_ONLINE_SOURCES="${ROCREADER_ONLINE_SOURCES:-$APP_DIR/online_sources.ini}"
+if [ -f "$APP_DIR/online_sources.ini" ]; then
+  if [ -z "${SSL_CERT_FILE:-}" ] && [ -r /etc/ssl/cert.pem ]; then
+    export SSL_CERT_FILE="/etc/ssl/cert.pem"
   fi
-  export ROCREADER_MANUAL_WEB_CURL="${ROCREADER_MANUAL_WEB_CURL:-$MANUAL_WEB_TRANSPORT_DIR/bin/curl-impersonate}"
-  export ROCREADER_MANUAL_WEB_TRANSPORT="${ROCREADER_MANUAL_WEB_TRANSPORT:-1}"
-  export ROCREADER_MANUAL_WEB_CATALOG_ONLY="${ROCREADER_MANUAL_WEB_CATALOG_ONLY:-0}"
+  if [ -z "${CURL_CA_BUNDLE:-}" ] && [ -r /etc/ssl/cert.pem ]; then
+    export CURL_CA_BUNDLE="/etc/ssl/cert.pem"
+  fi
+  if [ -x "$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch" ]; then
+    export ROCREADER_MANUAL_WEB_FETCH="${ROCREADER_MANUAL_WEB_FETCH:-$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch}"
+    if [ -x "$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch_zip" ]; then
+      export ROCREADER_MANUAL_WEB_ZIP_FETCH="${ROCREADER_MANUAL_WEB_ZIP_FETCH:-$MANUAL_WEB_TRANSPORT_DIR/bin/wn04_fetch_zip}"
+    fi
+    if [ -x "$MANUAL_WEB_TRANSPORT_DIR/bin/curl-impersonate" ]; then
+      export ROCREADER_MANUAL_WEB_CURL="${ROCREADER_MANUAL_WEB_CURL:-$MANUAL_WEB_TRANSPORT_DIR/bin/curl-impersonate}"
+    fi
+    export ROCREADER_MANUAL_WEB_TRANSPORT="${ROCREADER_MANUAL_WEB_TRANSPORT:-1}"
+    export ROCREADER_MANUAL_WEB_CATALOG_ONLY="${ROCREADER_MANUAL_WEB_CATALOG_ONLY:-0}"
+  else
+    export ROCREADER_MANUAL_WEB_TRANSPORT="${ROCREADER_MANUAL_WEB_TRANSPORT:-0}"
+    export ROCREADER_MANUAL_WEB_CATALOG_ONLY="${ROCREADER_MANUAL_WEB_CATALOG_ONLY:-0}"
+  fi
 else
   export ROCREADER_MANUAL_WEB_TRANSPORT="${ROCREADER_MANUAL_WEB_TRANSPORT:-0}"
   export ROCREADER_MANUAL_WEB_CATALOG_ONLY="${ROCREADER_MANUAL_WEB_CATALOG_ONLY:-0}"
@@ -49,7 +63,11 @@ set_runtime_libs() {
   else
     LIB_DIR="$LIB_FULL_DIR"
   fi
-  export LD_LIBRARY_PATH="$LIB_DIR:$MANUAL_WEB_TRANSPORT_DIR/lib:$LIB_DIR/pulseaudio:/usr/lib32:/usr/lib:/lib:/mnt/vendor/lib:${LD_LIBRARY_PATH_BASE:-}"
+  if [ -d "$MANUAL_WEB_TRANSPORT_DIR/lib" ]; then
+    export LD_LIBRARY_PATH="$LIB_DIR:$MANUAL_WEB_TRANSPORT_DIR/lib:$LIB_DIR/pulseaudio:/usr/lib32:/usr/lib:/lib:/mnt/vendor/lib:${LD_LIBRARY_PATH_BASE:-}"
+  else
+    export LD_LIBRARY_PATH="$LIB_DIR:$LIB_DIR/pulseaudio:/usr/lib32:/usr/lib:/lib:/mnt/vendor/lib:${LD_LIBRARY_PATH_BASE:-}"
+  fi
 }
 
 log_line() {
@@ -534,7 +552,7 @@ perform_pending_update_if_any
 ensure_screen_override_if_needed
 configure_cache_root_for_profile
 if [ ! -f "$APP_DIR/online_sources.ini" ]; then
-  log_line "[launcher] online_sources missing"
+  log_line "[launcher] URL sources not installed"
 fi
 
 if [ -n "${SDL_VIDEODRIVER:-}" ]; then

@@ -48,6 +48,7 @@ TARBALL="$DIST_ROOT/ROCreader_APPS_lowglibc.tar.gz"
 DOWNLOADS_ROOT="${DOWNLOADS_ROOT:-$DEFAULT_DOWNLOADS_ROOT}"
 RELEASE_PARENT_DIR="${ROCREADER_RELEASE_PARENT_DIR:-Roms/APPS}"
 RELEASE_INCLUDE_IMGS="${ROCREADER_RELEASE_INCLUDE_IMGS:-1}"
+PACKAGE_ONLINE_SOURCES="${ROCREADER_PACKAGE_ONLINE_SOURCES:-1}"
 ZIP_STAGE_ROOT="$DIST_ROOT/release_stage"
 if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
   ZIP_STAGE_APPS="$ZIP_STAGE_ROOT/Apps"
@@ -670,10 +671,12 @@ find_so_in_libdir() {
     cp "$SELF_DIR/native_config.ini" "$RUNTIME_DIR/native_config.ini"
     [ "$TRIMUI_BRICK_LAYOUT" = "1" ] && cp "$SELF_DIR/native_config.ini" "$RUNTIME_DIR/reader.cfg"
   fi
-  if [ -f "$SELF_DIR/online_sources.release.ini" ]; then
-    cp "$SELF_DIR/online_sources.release.ini" "$RUNTIME_DIR/online_sources.ini"
-  elif [ -f "$SELF_DIR/online_sources.ini" ]; then
-    cp "$SELF_DIR/online_sources.ini" "$RUNTIME_DIR/online_sources.ini"
+  if [ "$PACKAGE_ONLINE_SOURCES" = "1" ]; then
+    if [ -f "$SELF_DIR/online_sources.release.ini" ]; then
+      cp "$SELF_DIR/online_sources.release.ini" "$RUNTIME_DIR/online_sources.ini"
+    elif [ -f "$SELF_DIR/online_sources.ini" ]; then
+      cp "$SELF_DIR/online_sources.ini" "$RUNTIME_DIR/online_sources.ini"
+    fi
   fi
   if [ -n "$RELEASE_VERSION" ]; then
     printf '%s\n' "$RELEASE_VERSION" >"$RUNTIME_DIR/version.txt"
@@ -1148,6 +1151,8 @@ perform_pending_update_if_any() {
   replace_runtime_entry "lib_system_sdl" "$staged_runtime"
   replace_runtime_entry "fonts" "$staged_runtime"
   replace_runtime_entry "sounds" "$staged_runtime"
+  # URL sources and helpers are user-provided optional content.
+  # Never install or overwrite them from an update package.
   chmod +x "$APP_DIR/reader" "$APP_DIR/launch.sh" 2>/dev/null || true
   chmod +x "$APP_DIR/rocreader_sdl" 2>/dev/null || true
   [ -n "$package_version" ] && printf '%s\n' "$package_version" >"$APP_DIR/version.txt"
@@ -1374,7 +1379,10 @@ PY
     mkdir -p "$ZIP_STAGE_IMGS"
   fi
   cp -a "$RUNTIME_DIR/." "$ZIP_STAGE_RUNTIME/"
-  if [ -f "$SELF_DIR/online_sources.release.ini" ]; then
+  if [ "$PACKAGE_ONLINE_SOURCES" != "1" ]; then
+    rm -f "$ZIP_STAGE_RUNTIME/online_sources.ini" 2>/dev/null || true
+    rm -rf "$ZIP_STAGE_RUNTIME/URL" "$ZIP_STAGE_RUNTIME/manual_web_transport" "$ZIP_STAGE_RUNTIME/manual_web_transport_brick" 2>/dev/null || true
+  elif [ -f "$SELF_DIR/online_sources.release.ini" ]; then
     cp "$SELF_DIR/online_sources.release.ini" "$ZIP_STAGE_RUNTIME/online_sources.ini"
   fi
   if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then

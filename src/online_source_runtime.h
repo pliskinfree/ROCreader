@@ -6,7 +6,8 @@
 
 void InitializeOnlineSourceState(OnlineSourceState &state,
                                  const std::filesystem::path &config_path,
-                                 const std::filesystem::path &download_root);
+                                 const std::filesystem::path &download_root,
+                                 bool create_default_config = true);
 void ReloadOnlineSourceConfig(OnlineSourceState &state);
 void ConnectOnlineSource(OnlineSourceState &state);
 void DisconnectOnlineSource(OnlineSourceState &state);
