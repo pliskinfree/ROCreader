@@ -119,7 +119,13 @@ bool TryExtractVersionToken(const std::string &filename, std::string &out_versio
   const size_t ver_pos = lower_name.rfind("ver");
   const size_t zip_pos = lower_name.rfind(".zip");
   if (ver_pos == std::string::npos || zip_pos == std::string::npos || ver_pos >= zip_pos) return false;
-  out_version = filename.substr(ver_pos, zip_pos - ver_pos);
+  size_t version_end = ver_pos + 3;
+  while (version_end < zip_pos) {
+    const unsigned char ch = static_cast<unsigned char>(filename[version_end]);
+    if (!std::isdigit(ch) && filename[version_end] != '.') break;
+    ++version_end;
+  }
+  out_version = filename.substr(ver_pos, version_end - ver_pos);
   return !out_version.empty();
 }
 

@@ -298,8 +298,8 @@ configure_cache_root_for_profile() {
 }
 
 find_pending_marker() {
-  for root in /mnt/mmc /mnt/sdcard; do
-    marker="$root/Downloads/ROCreader_update_pending.txt"
+  for downloads_dir in "$APP_DIR/Downloads" /mnt/mmc/Downloads /mnt/sdcard/Downloads /mnt/SDCARD/Downloads; do
+    marker="$downloads_dir/ROCreader_update_pending.txt"
     [ -f "$marker" ] && { printf '%s' "$marker"; return 0; }
   done
   return 1
@@ -313,7 +313,7 @@ extract_marker_value() {
 
 extract_version_from_name() {
   file_name="$(basename "$1")"
-  printf '%s\n' "$file_name" | sed -n 's/.*\(ver[0-9][0-9.]*\)\.zip$/\1/p'
+  printf '%s\n' "$file_name" | sed -n 's/.*\(ver[0-9][0-9.]*\).*\.zip$/\1/p'
 }
 
 version_sort_key() {
@@ -343,8 +343,7 @@ version_is_newer() {
 find_latest_download_zip() {
   best_path=""
   best_version=""
-  for root in /mnt/mmc /mnt/sdcard; do
-    downloads_dir="$root/Downloads"
+  for downloads_dir in "$APP_DIR/Downloads" /mnt/mmc/Downloads /mnt/sdcard/Downloads /mnt/SDCARD/Downloads; do
     [ -d "$downloads_dir" ] || continue
     for zip_file in "$downloads_dir"/*.zip; do
       [ -f "$zip_file" ] || continue
@@ -461,6 +460,9 @@ perform_pending_update_if_any() {
     rm -rf "$UPDATE_STAGE_DIR"
     return 0
   fi
+  if [ -f "$staged_runtime/version.txt" ]; then
+    package_version="$(sed -n '1p' "$staged_runtime/version.txt")"
+  fi
 
   replace_runtime_entry "rocreader_sdl" "$staged_runtime"
   replace_runtime_entry "ui.pack" "$staged_runtime"
@@ -482,7 +484,7 @@ perform_pending_update_if_any() {
   chmod +x "$SELF_DIR/ROCreader.sh" 2>/dev/null || true
 
   write_installed_version "$package_version"
-  rm -f /mnt/mmc/Downloads/ROCreader_update_pending.txt /mnt/sdcard/Downloads/ROCreader_update_pending.txt
+  rm -f "$APP_DIR/Downloads/ROCreader_update_pending.txt" /mnt/mmc/Downloads/ROCreader_update_pending.txt /mnt/sdcard/Downloads/ROCreader_update_pending.txt /mnt/SDCARD/Downloads/ROCreader_update_pending.txt
   rm -rf "$UPDATE_STAGE_DIR"
   write_update_status "success" "$package_version"
   log_line "[update] install success version=${package_version:-unknown}"
@@ -510,6 +512,11 @@ run_default() {
   log_line "[launcher] exit rc=$rc default mode=$mode"
   return "$rc"
 }
+
+if [ "${1:-}" = "--install-pending-update" ]; then
+  perform_pending_update_if_any
+  exit $?
+fi
 
 LD_LIBRARY_PATH_BASE="${LD_LIBRARY_PATH:-}"
 set_runtime_libs "$LIB_SYSTEM_SDL_DIR"
