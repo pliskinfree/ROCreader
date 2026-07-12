@@ -149,8 +149,8 @@ std::string HashText(const std::string &text) {
 std::string DefaultOnlineSourceConfigText() {
   return
       "# ROCreader online source configuration\n"
-      "# Path: Roms/APPS/ROCreader/online_sources.ini\n"
-      "# Downloads directory: Roms/APPS/ROCreader/Downloads\n"
+      "# Path: ROCreader/online_sources.ini inside the release package runtime folder\n"
+      "# Downloads directory: ROCreader/Downloads inside the runtime folder\n"
       "# Release packages ship only this template file.\n"
       "# To add a new connection source:\n"
       "# 1. Copy the whole [source.template] block below.\n"

@@ -978,14 +978,20 @@ struct EpubFlowReader::Impl {
         "resources/fonts/default.ttf", "default.ttf",
         "/Roms/APPS/ROCreader/fonts/ui_font_02.ttf",
         "/Roms/APPS/ROCreader/fonts/ui_font.ttf",
+        "/Roms/ports/ROCreader/fonts/ui_font_02.ttf",
+        "/Roms/ports/ROCreader/fonts/ui_font.ttf",
         "/mnt/mmc/ROCreader/fonts/ui_font_02.ttf",
         "/mnt/mmc/ROCreader/fonts/ui_font.ttf",
         "/mnt/mmc/Roms/ROCreader/fonts/ui_font_02.ttf",
         "/mnt/mmc/Roms/ROCreader/fonts/ui_font.ttf",
+        "/mnt/mmc/Roms/ports/ROCreader/fonts/ui_font_02.ttf",
+        "/mnt/mmc/Roms/ports/ROCreader/fonts/ui_font.ttf",
         "/mnt/mmc2/ROCreader/fonts/ui_font_02.ttf",
         "/mnt/mmc2/ROCreader/fonts/ui_font.ttf",
         "/mnt/mmc2/Roms/ROCreader/fonts/ui_font_02.ttf",
         "/mnt/mmc2/Roms/ROCreader/fonts/ui_font.ttf",
+        "/mnt/mmc2/Roms/ports/ROCreader/fonts/ui_font_02.ttf",
+        "/mnt/mmc2/Roms/ports/ROCreader/fonts/ui_font.ttf",
     };
     std::string fallback;
     for (const auto &candidate : candidates) {

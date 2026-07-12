@@ -375,6 +375,30 @@ extract_zip_to_stage() {
   return 127
 }
 
+find_staged_runtime_dir() {
+  stage_dir="$1"
+  for candidate in \
+    "$stage_dir/Roms/ports/ROCreader" \
+    "$stage_dir/Roms/APPS/ROCreader" \
+    "$stage_dir/APPS/ROCreader" \
+    "$stage_dir/Apps/ROCreader" \
+    "$stage_dir/ROCreader"; do
+    [ -d "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
+
+find_staged_launcher_file() {
+  stage_dir="$1"
+  for candidate in \
+    "$stage_dir/Roms/ports/ROCreader.sh" \
+    "$stage_dir/Roms/APPS/ROCreader.sh" \
+    "$stage_dir/APPS/ROCreader.sh"; do
+    [ -f "$candidate" ] && { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
+
 replace_runtime_entry() {
   name="$1"
   src="$2/$name"
@@ -411,9 +435,6 @@ perform_pending_update_if_any() {
   fi
   [ -n "$package_path" ] || return 0
 
-  staged_runtime="$UPDATE_STAGE_DIR/Roms/APPS/ROCreader"
-  staged_launcher="$UPDATE_STAGE_DIR/Roms/APPS/ROCreader.sh"
-
   log_line "[update] pending marker: $marker"
   log_line "[update] installed version: ${installed_version:-unknown}"
   log_line "[update] latest zip: ${latest_zip:-none}"
@@ -432,8 +453,10 @@ perform_pending_update_if_any() {
     return 0
   fi
 
+  staged_runtime="$(find_staged_runtime_dir "$UPDATE_STAGE_DIR" || true)"
+  staged_launcher="$(find_staged_launcher_file "$UPDATE_STAGE_DIR" || true)"
   if [ ! -d "$staged_runtime" ]; then
-    log_line "[update] staged runtime missing: $staged_runtime"
+    log_line "[update] staged runtime missing under: $UPDATE_STAGE_DIR"
     write_update_status "failed" "$package_version"
     rm -rf "$UPDATE_STAGE_DIR"
     return 0

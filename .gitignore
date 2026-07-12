@@ -25,6 +25,8 @@ GKD350HUltra/dist_lowglibc/
 GKD350HUltra/logs/
 GKD350HUltra/captures/
 GKD350HUltra/*.tar
+GKD350HUltra/deploy_extract*/
+GKD350HUltra/extract*/
 GKD350HUltra/toolchain/*.tar*
 GKD350HUltra/toolchain/cache/
 TrimuiBrick/.build

@@ -43,17 +43,18 @@ fi
 TARBALL="$DIST_ROOT/ROCreader_APPS_lowglibc.tar.gz"
 # Release rule: Downloads only keeps final versioned zip files.
 # The zip is assembled from dist_lowglibc/release_stage and contains:
-# - Roms/APPS/Imgs/ROCreader.png
-# - Roms/APPS/ROCreader.sh
-# - Roms/APPS/ROCreader/ (with fonts/sounds/lib/lib_system_sdl plus empty books/book_covers/cache)
+# - Roms/APPS/ROCreader.sh by default, or the configured release parent path.
+# - Roms/APPS/ROCreader/ by default, or the configured release parent path.
 DOWNLOADS_ROOT="${DOWNLOADS_ROOT:-$DEFAULT_DOWNLOADS_ROOT}"
+RELEASE_PARENT_DIR="${ROCREADER_RELEASE_PARENT_DIR:-Roms/APPS}"
+RELEASE_INCLUDE_IMGS="${ROCREADER_RELEASE_INCLUDE_IMGS:-1}"
 ZIP_STAGE_ROOT="$DIST_ROOT/release_stage"
 if [ "$TRIMUI_BRICK_LAYOUT" = "1" ]; then
   ZIP_STAGE_APPS="$ZIP_STAGE_ROOT/Apps"
   ZIP_STAGE_RUNTIME="$ZIP_STAGE_APPS/ROCreader"
   ZIP_STAGE_IMGS="$ZIP_STAGE_RUNTIME"
 else
-  ZIP_STAGE_APPS="$ZIP_STAGE_ROOT/Roms/APPS"
+  ZIP_STAGE_APPS="$ZIP_STAGE_ROOT/$RELEASE_PARENT_DIR"
   ZIP_STAGE_RUNTIME="$ZIP_STAGE_APPS/ROCreader"
   ZIP_STAGE_IMGS="$ZIP_STAGE_APPS/Imgs"
 fi
@@ -1064,6 +1065,7 @@ replace_runtime_entry() {
 find_staged_runtime_dir() {
   stage_dir="$1"
   for candidate in \
+    "$stage_dir/Roms/ports/ROCreader" \
     "$stage_dir/Apps/ROCreader" \
     "$stage_dir/Roms/APPS/ROCreader" \
     "$stage_dir/APPS/ROCreader" \
@@ -1368,7 +1370,9 @@ PY
   mkdir -p "$DOWNLOADS_ROOT"
   rm -rf "$ZIP_STAGE_ROOT"
   mkdir -p "$ZIP_STAGE_RUNTIME"
-  [ "$TRIMUI_BRICK_LAYOUT" != "1" ] && mkdir -p "$ZIP_STAGE_IMGS"
+  if [ "$TRIMUI_BRICK_LAYOUT" != "1" ] && [ "$RELEASE_INCLUDE_IMGS" = "1" ]; then
+    mkdir -p "$ZIP_STAGE_IMGS"
+  fi
   cp -a "$RUNTIME_DIR/." "$ZIP_STAGE_RUNTIME/"
   if [ -f "$SELF_DIR/online_sources.release.ini" ]; then
     cp "$SELF_DIR/online_sources.release.ini" "$ZIP_STAGE_RUNTIME/online_sources.ini"
@@ -1395,11 +1399,13 @@ PY
     exit 1
   fi
   if [ "$TRIMUI_BRICK_LAYOUT" != "1" ]; then
-    mkdir -p "$ZIP_STAGE_IMGS"
+    if [ "$RELEASE_INCLUDE_IMGS" = "1" ]; then
+      mkdir -p "$ZIP_STAGE_IMGS"
+    fi
     cp "$LAUNCHER" "$ZIP_STAGE_APPS/ROCreader.sh"
-    if [ -f "$SELF_DIR/ui/ROCreader.png" ]; then
+    if [ "$RELEASE_INCLUDE_IMGS" = "1" ] && [ -f "$SELF_DIR/ui/ROCreader.png" ]; then
       cp "$SELF_DIR/ui/ROCreader.png" "$ZIP_STAGE_IMGS/ROCreader.png"
-    elif [ -f "$SELF_DIR/ui/common/ROCreader.png" ]; then
+    elif [ "$RELEASE_INCLUDE_IMGS" = "1" ] && [ -f "$SELF_DIR/ui/common/ROCreader.png" ]; then
       cp "$SELF_DIR/ui/common/ROCreader.png" "$ZIP_STAGE_IMGS/ROCreader.png"
     fi
   fi

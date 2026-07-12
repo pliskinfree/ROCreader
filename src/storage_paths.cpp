@@ -67,6 +67,7 @@ void AddRocreaderCandidates(std::vector<std::string> &out, const std::vector<fs:
     AddIfDirExists(out, root / "Roms" / "ROCreader");
     AddIfDirExists(out, root / "APPS" / "ROCreader");
     AddIfDirExists(out, root / "Roms" / "APPS" / "ROCreader");
+    AddIfDirExists(out, root / "Roms" / "ports" / "ROCreader");
   }
 }
 
@@ -80,6 +81,7 @@ void AddRocreaderNamedDirCandidates(std::vector<std::string> &out,
     AddIfDirExists(out, root / "Roms" / "ROCreader" / dir_name);
     AddIfDirExists(out, root / "APPS" / "ROCreader" / dir_name);
     AddIfDirExists(out, root / "Roms" / "APPS" / "ROCreader" / dir_name);
+    AddIfDirExists(out, root / "Roms" / "ports" / "ROCreader" / dir_name);
   }
 }
 
@@ -129,14 +131,19 @@ void AddRuntimeCandidates(std::vector<std::string> &out) {
 
   // Common hardcoded locations observed on handheld firmwares.
   AddIfDirExists(out, fs::path("/Roms/APPS/ROCreader"));
+  AddIfDirExists(out, fs::path("/Roms/ports/ROCreader"));
   AddIfDirExists(out, fs::path("/Apps/ROCreader"));
   AddIfDirExists(out, fs::path("/mnt/mmc/Roms/APPS/ROCreader"));
+  AddIfDirExists(out, fs::path("/mnt/mmc/Roms/ports/ROCreader"));
   AddIfDirExists(out, fs::path("/mnt/mmc/Apps/ROCreader"));
   AddIfDirExists(out, fs::path("/mnt/SDCARD/Apps/ROCreader"));
   AddIfDirExists(out, fs::path("/mnt/mmc2/Roms/APPS/ROCreader"));
+  AddIfDirExists(out, fs::path("/mnt/mmc2/Roms/ports/ROCreader"));
   AddIfDirExists(out, fs::path("/media/mmc/Roms/APPS/ROCreader"));
+  AddIfDirExists(out, fs::path("/media/mmc/Roms/ports/ROCreader"));
   AddIfDirExists(out, fs::path("/media/mmc/Apps/ROCreader"));
   AddIfDirExists(out, fs::path("/media/mmc2/Roms/APPS/ROCreader"));
+  AddIfDirExists(out, fs::path("/media/mmc2/Roms/ports/ROCreader"));
 
   // Current working directory can be ROCreader or APPS.
   std::error_code ec;
@@ -180,13 +187,16 @@ std::string DetectPrimaryRocreaderRoot() {
   }
 
   // Primary runtime data stays on the system card (card1).
+  AddIfDirExists(candidates, fs::path("/mnt/mmc/Roms/ports/ROCreader"));
   AddIfDirExists(candidates, fs::path("/mnt/mmc/Roms/APPS/ROCreader"));
   AddIfDirExists(candidates, fs::path("/mnt/mmc/Apps/ROCreader"));
   AddIfDirExists(candidates, fs::path("/mnt/SDCARD/Apps/ROCreader"));
+  AddIfDirExists(candidates, fs::path("/media/mmc/Roms/ports/ROCreader"));
   AddIfDirExists(candidates, fs::path("/media/mmc/Roms/APPS/ROCreader"));
   AddIfDirExists(candidates, fs::path("/media/mmc/Apps/ROCreader"));
   AddIfDirExists(candidates, fs::path("/mnt/mmc/ROCreader"));
   AddIfDirExists(candidates, fs::path("/media/mmc/ROCreader"));
+  AddIfDirExists(candidates, fs::path("/Roms/ports/ROCreader"));
   AddIfDirExists(candidates, fs::path("/Roms/APPS/ROCreader"));
 
   // Last resort: runtime-derived paths (still single-root selection).
